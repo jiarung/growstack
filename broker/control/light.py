@@ -25,7 +25,7 @@ from kasa import Credentials, Discover
 LUX_ON_BELOW = 2500      # after ON_START, under this → ON
 LUX_OFF_ABOVE = 15000    # over this → OFF (e.g. direct sun); else hold last state
 ON_START = dtime(8, 0)   # only turn ON within [ON_START, HARD_OFF)
-HARD_OFF = dtime(18, 0)  # at/after 18:00 → force OFF regardless of lux
+HARD_OFF = dtime(18, 30)  # at/after 18:30 → force OFF regardless of lux
 MIN_HOLD = 5 * 60        # after a switch, hold ≥ this (matches MANUAL_HOLD; lamp may raise own lux)
 STALE = 5 * 60           # lux older than this → fail safe OFF (dead sensor)
 TICK = 60                # decision cadence, seconds
@@ -174,8 +174,9 @@ def selftest():
     assert at(12, 0, 2000) == "ON", "lux 2000 (<2500) in window → ON"
     assert at(12, 0, 20000) == "OFF", "very bright@noon (>15000) → OFF"
     assert at(7, 0, 50) == "OFF", "before 08:00 → OFF"
-    assert at(18, 30, 50) == "OFF", "after 18:00 → OFF"
-    assert at(18, 10, 50, "ON") == "OFF", "18:00 hard-off forces OFF even if was ON"
+    assert at(18, 10, 50) == "ON", "18:10 now inside window (<18:30) → ON"
+    assert at(18, 45, 50) == "OFF", "after 18:30 → OFF"
+    assert at(18, 45, 50, "ON") == "OFF", "18:30 hard-off forces OFF even if was ON"
     assert at(12, 0, 5000, "ON") == "ON", "hold band (2500-15000) keeps ON"
     assert at(12, 0, 5000, "OFF") == "OFF", "hold band keeps OFF"
     noon = datetime(2026, 6, 25, 12, 0, tzinfo=TZ)
@@ -187,8 +188,8 @@ def selftest():
     assert decide(None, night.timestamp(), night, "ON") == "OFF", "dropout+ON outside window → OFF"
     open_t = datetime(2026, 6, 25, 8, 0, tzinfo=TZ)
     assert decide(None, open_t.timestamp(), open_t, "ON") == "ON", "dropout+ON at 08:00 (incl.) → hold ON"
-    close_t = datetime(2026, 6, 25, 18, 0, tzinfo=TZ)
-    assert decide(None, close_t.timestamp(), close_t, "ON") == "OFF", "dropout+ON at 18:00 (excl.) → OFF"
+    close_t = datetime(2026, 6, 25, 18, 30, tzinfo=TZ)
+    assert decide(None, close_t.timestamp(), close_t, "ON") == "OFF", "dropout+ON at 18:30 (excl.) → OFF"
     print("selftest OK")
 
 
