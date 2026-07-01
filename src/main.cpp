@@ -49,6 +49,7 @@ void setup() {
 void loop() {
     wifiEnsure();  // non-blocking reconnect
     mqttLoop();    // pump client + rate-limited MQTT reconnect
+    reflectLoop(); // drain reflect/cmd + advance the reflectance state machine
 
     uint32_t now = millis();
     bool due = (lastPublish == 0) || (now - lastPublish >= PUBLISH_INTERVAL_MS);

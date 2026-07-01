@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <ArduinoJson.h>
 
 #include "secrets.h"
 #include "log.h"
@@ -29,6 +30,29 @@ char clientId[48] = {0};
 bool configValid = false;
 uint32_t lastReconnectAttempt = 0;
 
+// --- Reflectance command/state protocol (Phase 4a) -------------------------------
+// reflect/cmd     : device subscribes QoS1; publisher sends non-retained.
+// reflect/state   : QoS0 RETAINED — current device state ONLY (idle|measuring).
+// reflect/result  : QoS0 non-retained — one ack/result per cmd.
+// reflect/availability : retained + LWT (broker-sent online/offline).
+char reflectCmdTopic[96]    = {0};
+char reflectStateTopic[96]  = {0};
+char reflectResultTopic[96] = {0};
+char reflectAvailTopic[96]  = {0};
+
+enum ReflectState { REFLECT_IDLE, REFLECT_MEASURING };
+ReflectState reflectState = REFLECT_IDLE;
+
+volatile bool cmdPending = false;
+char pendRaw[200] = {0};     // raw cmd payload, bounded-copied in the callback
+
+char curReqId[48] = {0};     // in-flight request during MEASURING
+char curPlant[40] = {0};
+uint32_t measureStart = 0;
+
+char lastReqId[48] = {0};    // last handled request + its result (for dedup)
+char lastStatus[16] = {0};
+
 // Device id must be a single safe topic segment: server-side topic_parsing splits
 // on '/', and '+'/'#' are MQTT wildcards — any of those would break the contract.
 bool isValidDeviceId(const char* s) {
@@ -44,15 +68,90 @@ bool isValidDeviceId(const char* s) {
     return true;
 }
 
+// MQTT callback — runs inside client.loop(). Stays tiny: bounded-copy the raw payload
+// out of PubSubClient's reused internal buffer, set a flag, return. No parse, no publish,
+// no measurement, no pointer kept. (PubSubClient exposes no retained flag to the callback.)
+void onReflectCmd(char* t, uint8_t* payload, unsigned int len) {
+    if (strcmp(t, reflectCmdTopic) != 0) return;
+    if (cmdPending) return;  // one already queued; reflectLoop() drains it within a tick
+    size_t n = len < sizeof(pendRaw) - 1 ? len : sizeof(pendRaw) - 1;
+    memcpy(pendRaw, payload, n);
+    pendRaw[n] = '\0';
+    cmdPending = true;
+}
+
+// reflect/state: QoS0 RETAINED, current device state only (idle|measuring).
+void publishReflectState() {
+    char p[80];
+    if (reflectState == REFLECT_MEASURING) {
+        snprintf(p, sizeof(p), "{\"state\":\"measuring\",\"request_id\":\"%s\"}", curReqId);
+    } else {
+        snprintf(p, sizeof(p), "{\"state\":\"idle\",\"request_id\":null}");
+    }
+    client.publish(reflectStateTopic, p, true);
+    logf("[reflect] state %s\n", p);
+}
+
+// reflect/result: QoS0 non-retained, one per cmd. Caches (id,status) for dedup.
+void publishReflectResult(const char* reqId, const char* plant, const char* status,
+                          const char* code) {
+    char p[160];
+    snprintf(p, sizeof(p), "{\"request_id\":\"%s\",\"status\":\"%s\",\"plant\":\"%s\",\"code\":\"%s\"}",
+             reqId, status, plant, code);
+    client.publish(reflectResultTopic, p, false);
+    logf("[reflect] result %s\n", p);
+    strncpy(lastReqId, reqId, sizeof(lastReqId) - 1);   lastReqId[sizeof(lastReqId) - 1] = '\0';
+    strncpy(lastStatus, status, sizeof(lastStatus) - 1); lastStatus[sizeof(lastStatus) - 1] = '\0';
+}
+
+// Parse + dispatch one queued cmd. Single-flight: a 2nd cmd while measuring -> busy;
+// a resend of an already-answered request_id -> re-publish its result, never re-measure.
+void handleReflectCmd(const char* raw) {
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, raw);
+    const char* reqId  = doc["request_id"] | "";
+    const char* plant  = doc["plant"]      | "";
+    const char* action = doc["action"]     | "";
+
+    if (err || reqId[0] == '\0' || plant[0] == '\0' || strcmp(action, "measure") != 0) {
+        publishReflectResult(reqId, plant, "malformed", "bad_cmd");  // state stays idle
+        return;
+    }
+    if (strcmp(reqId, lastReqId) == 0) {              // dedup
+        publishReflectResult(reqId, plant, lastStatus, "dedup");
+        return;
+    }
+    if (reflectState == REFLECT_MEASURING) {          // single-flight reject
+        publishReflectResult(reqId, plant, "busy", "measuring");
+        return;
+    }
+    strncpy(curReqId, reqId, sizeof(curReqId) - 1); curReqId[sizeof(curReqId) - 1] = '\0';
+    strncpy(curPlant, plant, sizeof(curPlant) - 1); curPlant[sizeof(curPlant) - 1] = '\0';
+    reflectState = REFLECT_MEASURING;
+    measureStart = millis();
+    publishReflectState();                            // measuring
+}
+
+// Run on EVERY successful (re)connect: subscribe, announce online, and republish the
+// CURRENT retained state (not only on transitions) so a broker restart can't leave it stale.
+void onConnected() {
+    client.subscribe(reflectCmdTopic, 1);
+    client.publish(reflectAvailTopic, "online", true);  // retained
+    publishReflectState();                              // current state (idle on boot)
+}
+
 bool tryConnect() {
+    // LWT via connect() will-params (broker publishes "offline" if we drop). will QoS pinned
+    // to 1 — broker-sent, so not bound by PubSubClient's QoS0-only publish.
     bool ok;
     if (MQTT_USER != nullptr && MQTT_USER[0] != '\0') {
-        ok = client.connect(clientId, MQTT_USER, MQTT_PASS);
+        ok = client.connect(clientId, MQTT_USER, MQTT_PASS, reflectAvailTopic, 1, true, "offline");
     } else {
-        ok = client.connect(clientId);
+        ok = client.connect(clientId, reflectAvailTopic, 1, true, "offline");
     }
     if (ok) {
         logf("[mqtt] connected as %s -> %s:%u\n", clientId, MQTT_HOST, MQTT_PORT);
+        onConnected();
     } else {
         logf("[mqtt] connect failed, state=%d (retry in %us)\n",
                       client.state(), (unsigned)(RECONNECT_EVERY_MS / 1000));
@@ -79,6 +178,10 @@ void mqttSetup() {
     }
     snprintf(topic, sizeof(topic), "monitor-air/%s/telemetry", MQTT_DEVICE_ID);
     snprintf(spectrumTopic, sizeof(spectrumTopic), "monitor-air/%s/spectrum", MQTT_DEVICE_ID);
+    snprintf(reflectCmdTopic,    sizeof(reflectCmdTopic),    "monitor-air/%s/reflect/cmd", MQTT_DEVICE_ID);
+    snprintf(reflectStateTopic,  sizeof(reflectStateTopic),  "monitor-air/%s/reflect/state", MQTT_DEVICE_ID);
+    snprintf(reflectResultTopic, sizeof(reflectResultTopic), "monitor-air/%s/reflect/result", MQTT_DEVICE_ID);
+    snprintf(reflectAvailTopic,  sizeof(reflectAvailTopic),  "monitor-air/%s/reflect/availability", MQTT_DEVICE_ID);
     snprintf(clientId, sizeof(clientId), "monitor-air-%s", MQTT_DEVICE_ID);
     configValid = true;
 
@@ -86,6 +189,7 @@ void mqttSetup() {
     client.setBufferSize(MQTT_BUFFER_SIZE);
     client.setKeepAlive(MQTT_KEEPALIVE_S);
     client.setSocketTimeout(MQTT_SOCKET_TMO_S);
+    client.setCallback(onReflectCmd);
     logf("[mqtt] topic=%s\n", topic);
 }
 
@@ -188,4 +292,21 @@ bool mqttPublishSpectrum(const SpectrumReading& s) {
         logf("[mqtt] spectrum publish FAILED: state=%d\n", client.state());
     }
     return ok;
+}
+
+void reflectLoop() {
+    if (!mqttConnected()) return;
+
+    if (cmdPending) {            // drain one queued command per tick
+        cmdPending = false;
+        handleReflectCmd(pendRaw);
+    }
+
+    // Phase 4a: STUB measurement — finish after ~1 s with a 'done'. Phase 4b1 replaces
+    // this body with the real dark/LED/lit non-blocking read + timeout.
+    if (reflectState == REFLECT_MEASURING && millis() - measureStart >= 1000) {
+        reflectState = REFLECT_IDLE;
+        publishReflectResult(curReqId, curPlant, "done", "stub");
+        publishReflectState();  // back to idle
+    }
 }

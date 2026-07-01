@@ -9,6 +9,10 @@ void mqttSetup();
 // loop iteration so keepalive/PINGREQ stays alive between publishes.
 void mqttLoop();
 
+// Drive the reflectance command/state machine (drain a queued reflect/cmd, advance a
+// measurement). Call every loop iteration, after mqttLoop().
+void reflectLoop();
+
 // True when the client currently has a live broker connection.
 bool mqttConnected();
 
