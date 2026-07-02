@@ -183,16 +183,27 @@ offline. This catches per-field dropouts that the time-series panels hide.
 
 ### Deadman alert (Telegram)
 
-A provisioned Grafana alert rule (`provisioning/alerting/rules.yaml`, folder
-**Device health**) fires per `(device, field)` when that series has been silent
-for **>15 min** — one rule covers all current and future devices/fields
-automatically. 15 min sits above the BH1750's transient gaps, so it pages only
-on a genuine sustained outage; the 5-min table is the fine-grained view.
+A provisioned Grafana alert rule (folder **Device health**) fires per
+`(device, field)` when that series has been silent for **>15 min** — one rule
+covers all current and future devices/fields automatically. 15 min sits above
+the BH1750's transient gaps, so it pages only on a genuine sustained outage;
+the 5-min table is the fine-grained view.
 
 Two exclusions in the rule's query: the `sim` test device is ignored, and the
-`lux` field is only watched during **08:00–18:00** (local) — the BH1750 stops
-reporting lux in darkness, which is normal, so alerting on it at night would be
-pure noise. All other fields are watched 24/7.
+light fields (`lux`, `lux_ref`) are only watched **inside the plant-light
+operating window** — the BH1750 stops reporting lux in darkness, which is
+normal, so alerting on it at night would be pure noise. All other fields are
+watched 24/7.
+
+**The window is a single shared parameter**: `LIGHT_WINDOW_START_MIN` /
+`LIGHT_WINDOW_END_MIN` in `.env` (minutes since midnight; 480=08:00,
+1110=18:30) drive **both** the light controller's ON/HARD_OFF window and this
+alert gate. Grafana's alerting provisioning can't interpolate env vars, so the
+rule lives in git as `provisioning/alerting/rules.yaml.tmpl` and **`start.sh`
+renders** the actual (gitignored) `rules.yaml` from it. After changing the
+window in `.env`: run `bash start.sh`, then restart the consumers
+(`docker compose up -d --force-recreate light grafana`). On a fresh clone,
+Grafana has no alert rule until `start.sh` has rendered it once.
 
 Telegram delivery is configured via Grafana's API (not file provisioning, which
 mis-types a numeric chat id). One-time setup:

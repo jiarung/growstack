@@ -14,6 +14,21 @@ if [ ! -f .env ]; then
 fi
 mkdir -p /data/influx-backups   # HDD backup target (no-op if it already exists)
 
+# --- render alert rules from template (Grafana's alerting provisioning does NOT
+#     interpolate env vars, so we bake the shared LIGHT_WINDOW_* values from .env
+#     in here; envsubst is restricted to exactly these vars because the template
+#     also contains Grafana {{ $labels.* }} syntax that must survive verbatim) ---
+ALERT_DIR="grafana/provisioning/alerting"
+# grep the two values instead of sourcing .env — it holds passwords whose
+# special characters must never hit the shell
+LIGHT_WINDOW_START_MIN="$(sed -nE 's/^LIGHT_WINDOW_START_MIN=([0-9]+).*/\1/p' .env | head -1)"
+LIGHT_WINDOW_END_MIN="$(sed -nE 's/^LIGHT_WINDOW_END_MIN=([0-9]+).*/\1/p' .env | head -1)"
+export LIGHT_WINDOW_START_MIN="${LIGHT_WINDOW_START_MIN:-480}"
+export LIGHT_WINDOW_END_MIN="${LIGHT_WINDOW_END_MIN:-1110}"
+envsubst '$LIGHT_WINDOW_START_MIN $LIGHT_WINDOW_END_MIN' \
+  < "$ALERT_DIR/rules.yaml.tmpl" > "$ALERT_DIR/rules.yaml"
+echo "Rendered alert rules (lux gate window $LIGHT_WINDOW_START_MIN–$LIGHT_WINDOW_END_MIN min)"
+
 # --- start core services ---
 echo "Starting stack..."
 docker compose up -d

@@ -24,8 +24,12 @@ from kasa import Credentials, Discover
 # ---- calibration knobs (tune in place) ----
 LUX_ON_BELOW = 2500      # after ON_START, under this → ON
 LUX_OFF_ABOVE = 15000    # over this → OFF (e.g. direct sun); else hold last state
-ON_START = dtime(8, 0)   # only turn ON within [ON_START, HARD_OFF)
-HARD_OFF = dtime(18, 30)  # at/after 18:30 → force OFF regardless of lux
+# Operating window comes from .env (minutes since midnight) — the SAME vars gate
+# the Grafana lux deadman alert, so window changes stay in one place.
+_start_min = int(os.getenv("LIGHT_WINDOW_START_MIN", "480"))    # 08:00
+_end_min = int(os.getenv("LIGHT_WINDOW_END_MIN", "1110"))       # 18:30
+ON_START = dtime(_start_min // 60, _start_min % 60)  # only turn ON within [ON_START, HARD_OFF)
+HARD_OFF = dtime(_end_min // 60, _end_min % 60)      # at/after this → force OFF regardless of lux
 MIN_HOLD = 5 * 60        # after a switch, hold ≥ this (matches MANUAL_HOLD; lamp may raise own lux)
 STALE = 5 * 60           # lux older than this → fail safe OFF (dead sensor)
 TICK = 60                # decision cadence, seconds

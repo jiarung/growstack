@@ -37,14 +37,16 @@ groups:
                 import "date"
                 import "timezone"
                 option location = timezone.location(name: "Asia/Taipei")
-                hour = date.hour(t: now())
+                minofday = date.hour(t: now()) * 60 + date.minute(t: now())
                 from(bucket: "sensors")
                   |> range(start: -30d)
                   |> filter(fn: (r) => r._measurement == "air" and r.device != "sim")
                   // BH1750 light fields (lux, lux_ref) drop out in darkness, which is
-                  // normal — only alert on them during the 08:00-18:00 window; other
-                  // fields 24/7.
-                  |> filter(fn: (r) => (r._field != "lux" and r._field != "lux_ref") or (hour >= 8 and hour < 18))
+                  // normal — only alert on them inside the plant-light operating
+                  // window; other fields 24/7. The window comes from broker/.env
+                  // (LIGHT_WINDOW_*_MIN, minutes since midnight) — the SAME vars the
+                  // light controller uses, so it stays in sync automatically.
+                  |> filter(fn: (r) => (r._field != "lux" and r._field != "lux_ref") or (minofday >= $LIGHT_WINDOW_START_MIN and minofday < $LIGHT_WINDOW_END_MIN))
                   |> group(columns: ["device", "_field"])
                   |> last()
                   |> map(fn: (r) => ({ r with _value: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0 }))
