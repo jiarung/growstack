@@ -12,9 +12,10 @@
 
 namespace {
 
-// PubSubClient's buffer holds the whole MQTT packet (CONNECT included: client id
-// + user + pass + headers), not just the publish payload — keep it roomy.
-constexpr uint16_t MQTT_BUFFER_SIZE   = 512;
+// PubSubClient's buffer holds the whole MQTT packet (topic + payload + header), not
+// just the payload. Sized for the largest publish — the reflect result (~700B of
+// dark/lit/net for 10 channels) — plus the CONNECT packet (client id + LWT + creds).
+constexpr uint16_t MQTT_BUFFER_SIZE   = 1024;
 constexpr uint16_t MQTT_KEEPALIVE_S   = 60;
 constexpr uint16_t MQTT_SOCKET_TMO_S  = 5;   // bound how long a blocking connect() can stall
 constexpr uint32_t RECONNECT_EVERY_MS = 5000;
@@ -296,6 +297,43 @@ bool mqttPublishSpectrum(const SpectrumReading& s) {
     return ok;
 }
 
+// Publish one reflectance measurement to the spectrum topic: mode=reflect + plant +
+// request_id + status + raw dark_*/lit_*/net_* (10 channels) + quality flags. QoS0,
+// not retained. Internal (called from reflectLoop). Returns true if accepted.
+static bool mqttPublishReflect(const ReflectReading& r, const char* reqId, const char* plant) {
+    if (!mqttConnected() || !r.valid) return false;
+    const char* status = r.saturated ? "saturated" : (r.ambient_leak ? "ambient_leak" : "ok");
+    static const char* const NAMES[10] =
+        {"f415", "f445", "f480", "f515", "f555", "f590", "f630", "f680", "clear", "nir"};
+
+    char payload[1024];
+    size_t n = 0;
+    int w = snprintf(payload, sizeof(payload),
+        "{\"mode\":\"reflect\",\"plant\":\"%s\",\"request_id\":\"%s\",\"status\":\"%s\"",
+        plant, reqId, status);
+    if (w < 0 || (size_t)w >= sizeof(payload)) { logln("[mqtt] reflect aborted: overflow"); return false; }
+    n = (size_t)w;
+
+    for (int i = 0; i < 10; i++) {
+        w = snprintf(payload + n, sizeof(payload) - n,
+            ",\"dark_%s\":%.1f,\"lit_%s\":%.1f,\"net_%s\":%.1f",
+            NAMES[i], r.dark[i], NAMES[i], r.lit[i], NAMES[i], r.net[i]);
+        if (w < 0 || (size_t)w >= sizeof(payload) - n) { logln("[mqtt] reflect aborted: overflow"); return false; }
+        n += (size_t)w;
+    }
+
+    w = snprintf(payload + n, sizeof(payload) - n,
+        ",\"saturated\":%.1f,\"ambient_leak\":%.1f,\"spectrum_read_ms\":%.1f}",
+        r.saturated ? 1.0 : 0.0, r.ambient_leak ? 1.0 : 0.0, r.read_ms);
+    if (w < 0 || (size_t)w >= sizeof(payload) - n) { logln("[mqtt] reflect aborted: overflow"); return false; }
+    n += (size_t)w;
+
+    bool ok = client.publish(spectrumTopic, payload, false);
+    if (ok) logf("[mqtt] published %s (reflect, %uB)\n", spectrumTopic, (unsigned)n);
+    else    logf("[mqtt] reflect publish FAILED: state=%d len=%u\n", client.state(), (unsigned)n);
+    return ok;
+}
+
 bool reflectBusy() { return reflectState == REFLECT_MEASURING; }
 
 void reflectLoop() {
@@ -314,6 +352,7 @@ void reflectLoop() {
         if (st == REFLECT_DONE) {
             logf("[reflect] done read_ms=%.0f clear(dark=%.0f lit=%.0f net=%.0f) sat=%d leak=%d\n",
                  rr.read_ms, rr.dark[8], rr.lit[8], rr.net[8], (int)rr.saturated, (int)rr.ambient_leak);
+            mqttPublishReflect(rr, curReqId, curPlant);  // full dark/lit/net -> spectrum topic
             reflectState = REFLECT_IDLE;
             publishReflectResult(curReqId, curPlant, "done", "measured");
             publishReflectState();
