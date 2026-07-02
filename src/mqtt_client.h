@@ -13,6 +13,10 @@ void mqttLoop();
 // measurement). Call every loop iteration, after mqttLoop().
 void reflectLoop();
 
+// True while a reflectance measurement is in progress — the caller must NOT read the
+// AS7341 (ambient spectrum) meanwhile, since both use the same sensor.
+bool reflectBusy();
+
 // True when the client currently has a live broker connection.
 bool mqttConnected();
 

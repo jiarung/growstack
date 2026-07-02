@@ -53,7 +53,8 @@ void loop() {
 
     uint32_t now = millis();
     bool due = (lastPublish == 0) || (now - lastPublish >= PUBLISH_INTERVAL_MS);
-    if (due && mqttConnected()) {
+    // Skip the ambient tick while a reflectance measurement holds the AS7341.
+    if (due && mqttConnected() && !reflectBusy()) {
         // Claim this slot unconditionally: advancing only on success would hot-loop
         // (re-reading sensors every iteration) whenever a read yields no valid
         // fields or a publish fails. A failed/empty cycle just waits for the next.

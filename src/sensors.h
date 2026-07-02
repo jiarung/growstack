@@ -41,3 +41,25 @@ SensorReading sensorsRead();
 
 // Take a fresh ambient spectral reading (AS7341, LED off). valid=false if no AS7341.
 SpectrumReading spectrumRead();
+
+// --- Reflectance (AS7341 LED) — Phase 4b1, non-blocking dark→LED→lit read --------
+enum ReflectStatus { REFLECT_NA, REFLECT_BUSY, REFLECT_DONE, REFLECT_TIMEOUT };
+
+// One reflectance measurement: raw dark (LED off) + lit (LED on) + net (lit-dark),
+// 10 channels each (f415..f680, clear, nir order). Raw values kept for recompute/debug.
+struct ReflectReading {
+    float dark[10] = {0};
+    float lit[10]  = {0};
+    float net[10]  = {0};
+    float read_ms  = NAN;
+    bool saturated    = false;
+    bool ambient_leak = false;
+    bool valid = false;
+};
+
+// Begin a dark→LED→lit read. Returns false if no AS7341 (nothing started).
+bool reflectStart();
+
+// Advance the read (call each loop iteration). DONE fills `out`; TIMEOUT if a bank read
+// didn't become ready in time; BUSY while in progress; NA when idle/no sensor.
+ReflectStatus reflectPoll(ReflectReading* out);

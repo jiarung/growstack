@@ -48,7 +48,6 @@ char pendRaw[200] = {0};     // raw cmd payload, bounded-copied in the callback
 
 char curReqId[48] = {0};     // in-flight request during MEASURING
 char curPlant[40] = {0};
-uint32_t measureStart = 0;
 
 char lastReqId[48] = {0};    // last handled request + its result (for dedup)
 char lastStatus[16] = {0};
@@ -127,8 +126,11 @@ void handleReflectCmd(const char* raw) {
     }
     strncpy(curReqId, reqId, sizeof(curReqId) - 1); curReqId[sizeof(curReqId) - 1] = '\0';
     strncpy(curPlant, plant, sizeof(curPlant) - 1); curPlant[sizeof(curPlant) - 1] = '\0';
+    if (!reflectStart()) {                            // no AS7341 -> can't measure
+        publishReflectResult(reqId, plant, "error", "no_sensor");  // state stays idle
+        return;
+    }
     reflectState = REFLECT_MEASURING;
-    measureStart = millis();
     publishReflectState();                            // measuring
 }
 
@@ -294,6 +296,8 @@ bool mqttPublishSpectrum(const SpectrumReading& s) {
     return ok;
 }
 
+bool reflectBusy() { return reflectState == REFLECT_MEASURING; }
+
 void reflectLoop() {
     if (!mqttConnected()) return;
 
@@ -302,11 +306,26 @@ void reflectLoop() {
         handleReflectCmd(pendRaw);
     }
 
-    // Phase 4a: STUB measurement — finish after ~1 s with a 'done'. Phase 4b1 replaces
-    // this body with the real dark/LED/lit non-blocking read + timeout.
-    if (reflectState == REFLECT_MEASURING && millis() - measureStart >= 1000) {
-        reflectState = REFLECT_IDLE;
-        publishReflectResult(curReqId, curPlant, "done", "stub");
-        publishReflectState();  // back to idle
+    // Phase 4b1: advance the non-blocking dark→LED→lit read. (4b2 will publish the full
+    // dark/lit/net to the spectrum topic here; for now we log it and ack via reflect/result.)
+    if (reflectState == REFLECT_MEASURING) {
+        ReflectReading rr;
+        ReflectStatus st = reflectPoll(&rr);
+        if (st == REFLECT_DONE) {
+            logf("[reflect] done read_ms=%.0f clear(dark=%.0f lit=%.0f net=%.0f) sat=%d leak=%d\n",
+                 rr.read_ms, rr.dark[8], rr.lit[8], rr.net[8], (int)rr.saturated, (int)rr.ambient_leak);
+            reflectState = REFLECT_IDLE;
+            publishReflectResult(curReqId, curPlant, "done", "measured");
+            publishReflectState();
+        } else if (st == REFLECT_TIMEOUT) {
+            reflectState = REFLECT_IDLE;
+            publishReflectResult(curReqId, curPlant, "error", "timeout");
+            publishReflectState();
+        } else if (st == REFLECT_NA) {
+            reflectState = REFLECT_IDLE;
+            publishReflectResult(curReqId, curPlant, "error", "no_sensor");
+            publishReflectState();
+        }
+        // REFLECT_BUSY: keep polling next iteration
     }
 }

@@ -117,6 +117,77 @@ SensorReading sensorsRead() {
     return r;
 }
 
+namespace {
+
+// AS7341 readAllChannels/getAllChannels fill 12 slots; [4] and [5] are duplicate ADCs.
+// These are the 10 real channels in f415..f680, clear, nir order.
+constexpr uint8_t CH10[10] = {0, 1, 2, 3, 6, 7, 8, 9, 10, 11};
+constexpr uint8_t CLEAR_SLOT = 10;
+
+constexpr uint16_t REFLECT_LED_MA         = 10;    // LED drive during the lit read
+constexpr uint32_t REFLECT_STEP_TIMEOUT_MS = 2000; // per-bank data-ready bound
+constexpr uint16_t SAT_LEVEL              = 65000; // near the 16-bit ADC ceiling
+constexpr uint16_t AMBIENT_LEAK_CLEAR     = 2000;  // dark clear above this = ambient leaking in
+
+enum RPhase { RP_IDLE, RP_DARK_WAIT, RP_LIT_WAIT };
+RPhase rphase = RP_IDLE;
+uint16_t darkRaw[12] = {0};
+uint16_t litRaw[12]  = {0};
+uint32_t rPhaseStart = 0;
+uint32_t rStart      = 0;
+
+}  // namespace
+
+bool reflectStart() {
+    if (!as7341Ok) { rphase = RP_IDLE; return false; }
+    rStart = millis();
+    as7341.enableLED(false);   // dark read: LED off
+    as7341.startReading();
+    rphase = RP_DARK_WAIT;
+    rPhaseStart = millis();
+    return true;
+}
+
+ReflectStatus reflectPoll(ReflectReading* out) {
+    if (!as7341Ok || rphase == RP_IDLE) return REFLECT_NA;
+
+    if (rphase == RP_DARK_WAIT) {
+        if (as7341.checkReadingProgress()) {
+            as7341.getAllChannels(darkRaw);
+            as7341.setLEDCurrent(REFLECT_LED_MA);  // now the lit read: LED on
+            as7341.enableLED(true);
+            as7341.startReading();
+            rphase = RP_LIT_WAIT;
+            rPhaseStart = millis();
+            return REFLECT_BUSY;
+        }
+    } else if (rphase == RP_LIT_WAIT) {
+        if (as7341.checkReadingProgress()) {
+            as7341.getAllChannels(litRaw);
+            as7341.enableLED(false);  // done — LED off
+            for (int i = 0; i < 10; i++) {
+                out->dark[i] = darkRaw[CH10[i]];
+                out->lit[i]  = litRaw[CH10[i]];
+                out->net[i]  = (float)litRaw[CH10[i]] - (float)darkRaw[CH10[i]];
+                if (litRaw[CH10[i]] >= SAT_LEVEL) out->saturated = true;
+            }
+            out->ambient_leak = darkRaw[CLEAR_SLOT] > AMBIENT_LEAK_CLEAR;
+            out->read_ms = (float)(millis() - rStart);
+            out->valid = true;
+            rphase = RP_IDLE;
+            return REFLECT_DONE;
+        }
+    }
+
+    // timeout guard so a wedged bus can't hang the measurement forever
+    if (millis() - rPhaseStart > REFLECT_STEP_TIMEOUT_MS) {
+        as7341.enableLED(false);
+        rphase = RP_IDLE;
+        return REFLECT_TIMEOUT;
+    }
+    return REFLECT_BUSY;
+}
+
 SpectrumReading spectrumRead() {
     SpectrumReading s;
     if (!as7341Ok) return s;  // fail-open: valid stays false
