@@ -22,7 +22,7 @@ import aiomqtt
 from kasa import Credentials, Discover
 
 # ---- calibration knobs (tune in place) ----
-LUX_ON_BELOW = 2500      # after ON_START, under this → ON
+LUX_ON_BELOW = 5000      # after ON_START, under this → ON
 LUX_OFF_ABOVE = 15000    # over this → OFF (e.g. direct sun); else hold last state
 # Operating window comes from .env (minutes since midnight) — the SAME vars gate
 # the Grafana lux deadman alert, so window changes stay in one place.
@@ -177,15 +177,17 @@ def selftest():
         now = datetime(2026, 6, 25, h, m, tzinfo=TZ)
         return decide(lux, now.timestamp() - age, now, cur)
 
-    assert at(12, 0, 50) == "ON", "dark@noon (<2500) → ON"
-    assert at(12, 0, 2000) == "ON", "lux 2000 (<2500) in window → ON"
+    assert at(12, 0, 50) == "ON", "dark@noon (<5000) → ON"
+    assert at(12, 0, 4300) == "ON", "lux 4300 (<5000) in window → ON (post-sun re-on)"
     assert at(12, 0, 20000) == "OFF", "very bright@noon (>15000) → OFF"
     assert at(7, 0, 50) == "OFF", "before 08:00 → OFF"
     assert at(18, 10, 50) == "ON", "18:10 now inside window (<18:30) → ON"
     assert at(18, 45, 50) == "OFF", "after 18:30 → OFF"
     assert at(18, 45, 50, "ON") == "OFF", "18:30 hard-off forces OFF even if was ON"
-    assert at(12, 0, 5000, "ON") == "ON", "hold band (2500-15000) keeps ON"
-    assert at(12, 0, 5000, "OFF") == "OFF", "hold band keeps OFF"
+    assert at(12, 0, 8000, "ON") == "ON", "hold band (5000-15000) keeps ON"
+    assert at(12, 0, 8000, "OFF") == "OFF", "hold band keeps OFF"
+    assert at(12, 0, 5000, "ON") == "ON", "boundary: exactly 5000 holds ON (not <)"
+    assert at(12, 0, 5000, "OFF") == "OFF", "boundary: exactly 5000 holds OFF"
     noon = datetime(2026, 6, 25, 12, 0, tzinfo=TZ)
     # sensor dropout inside the window holds an already-ON light (light-deficient env)
     assert decide(50, noon.timestamp() - STALE - 1, noon, "ON") == "ON", "stale+ON in window → hold ON"
