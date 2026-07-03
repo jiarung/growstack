@@ -145,8 +145,13 @@ auto-provisioned (uid `influxdb-monitor-air`).
 The **AS7341 spectrum** panel shows the latest 8-channel ambient spectrum
 (f415 violet → f680 red, raw counts) from the `spectrum` measurement. Telegraf
 ingests `monitor-air/+/spectrum` (separate from the `air` telemetry contract):
-the 8 channels + `clear`/`nir`/`spectrum_read_ms` become fields, with `device`
-and `mode` (ambient/reflectance) tags.
+numeric fields, with `device`, `mode` (ambient/reflect) and `plant` tags.
+
+The **Leaf reflectance** panel shows each plant's most recent reflectance
+measurement (triggered from the Node-RED `/ui` on your phone): `net_*` =
+LED-lit counts minus ambient leak, grouped by wavelength with one colour per
+plant. Raw counts — compare spectral *shapes* between plants or over time for
+the same plant, not absolute values.
 
 The **DLI** panel estimates the Daily Light Integral (mol/m²/day) over the last
 7 local days by integrating `PPFD ≈ lux / 54` per day. This is a daylight-spectrum
