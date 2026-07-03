@@ -71,6 +71,24 @@ services:
       mosquitto:
         condition: service_started
 
+  # Node-RED: phone-friendly control surface for on-demand reflectance measurements.
+  # Generates a fresh request_id per measure (the firmware dedups by it) and publishes
+  # a NON-retained reflect/cmd. Bound to localhost only — reach it over Tailscale/SSH,
+  # never expose the editor to the LAN/WAN (the broker is still anonymous-open).
+  node-red:
+    build: ./node-red
+    container_name: monitor-air-nodered
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Taipei
+    ports:
+      - "127.0.0.1:1880:1880"   # editor + /ui dashboard — localhost only
+    volumes:
+      - nodered-data:/data
+    depends_on:
+      mosquitto:
+        condition: service_started
+
   # Synthetic publisher — off by default. Start with:
   #   docker compose --profile sim up -d sim
   sim:
@@ -90,3 +108,4 @@ volumes:
   influxdb-data:
   influxdb-config:
   grafana-data:
+  nodered-data:

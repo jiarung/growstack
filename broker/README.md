@@ -37,6 +37,7 @@ flowchart LR
 | telegraf   | MQTT → InfluxDB bridge (no code)       | internal                        |
 | grafana    | charts / dashboards                    | `http://<host>:3001`            |
 | light      | plant-light controller (lux → P110M)   | internal                        |
+| node-red   | phone reflectance control (`/ui` + HTTP) | `127.0.0.1:1880` (localhost)  |
 | sim        | synthetic publisher (optional)         | internal, `--profile sim`       |
 
 > **Note:** Grafana is mapped to host port **3001** (host `3000` was already
