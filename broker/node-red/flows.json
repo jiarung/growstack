@@ -177,8 +177,8 @@
   "type": "function",
   "z": "reflect-flow",
   "name": "build cmd (ui)",
-  "func": "const plant = flow.get('plant');\nif (!plant || !/^[A-Za-z0-9_-]{1,40}$/.test(plant)) {\n    node.status({ fill: 'red', shape: 'ring', text: 'pick a plant first' });\n    return null;\n}\nconst rid = 'r-' + Date.now().toString(36) + '-' + Math.floor(Math.random()*1e6).toString(36);\nmsg.topic = 'monitor-air/staging-01/reflect/cmd';\nmsg.payload = { request_id: rid, plant: plant, action: 'measure' };\nmsg.qos = 0;\nmsg.retain = false;\nnode.status({ fill: 'green', shape: 'dot', text: plant + ' ' + rid });\nreturn msg;",
-  "outputs": 1,
+  "func": "const plant = flow.get('plant');\nif (!plant || !/^[A-Za-z0-9_-]{1,40}$/.test(plant)) {\n    node.status({ fill: 'red', shape: 'ring', text: 'pick a plant first' });\n    return [ null, { payload: '(!) pick a plant first' } ];\n}\nconst rid = 'r-' + Date.now().toString(36) + '-' + Math.floor(Math.random()*1e6).toString(36);\nmsg.topic = 'monitor-air/staging-01/reflect/cmd';\nmsg.payload = { request_id: rid, plant: plant, action: 'measure' };\nmsg.qos = 0;\nmsg.retain = false;\nnode.status({ fill: 'green', shape: 'dot', text: plant + ' ' + rid });\nreturn [ msg, null ];",
+  "outputs": 2,
   "noerr": 0,
   "initialize": "",
   "finalize": "",
@@ -188,6 +188,9 @@
   "wires": [
    [
     "n-mqtt-cmd"
+   ],
+   [
+    "n-txt-result"
    ]
   ]
  },
@@ -266,7 +269,7 @@
   "name": "reflect/state",
   "topic": "monitor-air/staging-01/reflect/state",
   "qos": "0",
-  "datatype": "auto",
+  "datatype": "json",
   "broker": "mqtt-mosquitto",
   "nl": false,
   "rap": true,
@@ -304,7 +307,7 @@
   "name": "reflect/result",
   "topic": "monitor-air/staging-01/reflect/result",
   "qos": "0",
-  "datatype": "auto",
+  "datatype": "json",
   "broker": "mqtt-mosquitto",
   "nl": false,
   "rap": true,
