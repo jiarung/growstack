@@ -159,10 +159,17 @@ Plant ids are permanent (they live forever as InfluxDB tags): `cactus-NN`
 zero-padded, sub-numbered `cactus-NN-M` when one pot holds several plants.
 **Never reuse a retired id** — a dead plant's history must not mix with its
 successor's. `white-ref` is the white-reference target, not a plant. Pots are
-physically labelled with their id. To add a plant: append an option to the
-Plant dropdown in `node-red/flows.json`, then rebuild + reset the volume
-(see Dockerfile note); everything downstream (firmware echo, Telegraf `plant`
-tag, Grafana panel) adapts automatically.
+physically labelled with their id. To add a plant:
+
+```bash
+./add-plant.sh cactus-14            # or several: ./add-plant.sh cactus-14 cactus-15-1
+git add node-red/flows.json && git commit
+```
+
+The script validates the id (firmware rule `[A-Za-z0-9_-]{1,40}`), skips
+duplicates, keeps `*-ref` entries last, and does the full redeploy dance
+(rebuild + volume reset — see Dockerfile note). Everything downstream
+(firmware echo, Telegraf `plant` tag, Grafana panel) adapts automatically.
 
 Current: `cactus-01` … `cactus-12` (one per pot), `cactus-13-1/-2/-3`
 (pot 13 holds three), `white-ref`. Species/location notes can be filled in
