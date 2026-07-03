@@ -107,9 +107,12 @@ async def run():
         if target == st["current"]:
             return                         # idempotent (QoS1 dups, repeats)
         try:
-            await set_plug(dev, target)
+            # hard timeout: a plug mid-firmware/protocol-flip can accept TCP and
+            # then never finish the handshake, which would wedge the tick loop
+            # forever (observed 2026-07-03 during the KLAP→TPAP→KLAP toggle)
+            await asyncio.wait_for(set_plug(dev, target), timeout=30)
         except Exception as e:
-            print(f"plug drive failed ({target}): {e}", flush=True)
+            print(f"plug drive failed ({target}): {e!r}", flush=True)
             await client.publish(AVAIL_TOPIC, "offline", qos=1, retain=True)
             return
         st["current"] = target
@@ -125,7 +128,7 @@ async def run():
     will = aiomqtt.Will(AVAIL_TOPIC, "offline", qos=1, retain=True)
     async with aiomqtt.Client(MQTT_HOST, will=will) as client:
         try:                               # seed from the plug's real state
-            st["current"] = "ON" if await plug_is_on(dev) else "OFF"
+            st["current"] = "ON" if await asyncio.wait_for(plug_is_on(dev), timeout=30) else "OFF"
             await client.publish(AVAIL_TOPIC, "online", qos=1, retain=True)
             await client.publish(STATE_TOPIC, json.dumps(  # refresh retained state
                 {"state": st["current"], "on": 1 if st["current"] == "ON" else 0,
