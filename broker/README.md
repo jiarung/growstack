@@ -153,6 +153,21 @@ LED-lit counts minus ambient leak, grouped by wavelength with one colour per
 plant. Raw counts — compare spectral *shapes* between plants or over time for
 the same plant, not absolute values.
 
+### Plant registry
+
+Plant ids are permanent (they live forever as InfluxDB tags): `cactus-NN`
+zero-padded, sub-numbered `cactus-NN-M` when one pot holds several plants.
+**Never reuse a retired id** — a dead plant's history must not mix with its
+successor's. `white-ref` is the white-reference target, not a plant. Pots are
+physically labelled with their id. To add a plant: append an option to the
+Plant dropdown in `node-red/flows.json`, then rebuild + reset the volume
+(see Dockerfile note); everything downstream (firmware echo, Telegraf `plant`
+tag, Grafana panel) adapts automatically.
+
+Current: `cactus-01` … `cactus-12` (one per pot), `cactus-13-1/-2/-3`
+(pot 13 holds three), `white-ref`. Species/location notes can be filled in
+here as needed.
+
 The **DLI** panel estimates the Daily Light Integral (mol/m²/day) over the last
 7 local days by integrating `PPFD ≈ lux / 54` per day. This is a daylight-spectrum
 approximation, **not** a true PAR measurement; lux dropouts undercount, and
