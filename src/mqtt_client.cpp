@@ -13,9 +13,9 @@
 namespace {
 
 // PubSubClient's buffer holds the whole MQTT packet (topic + payload + header), not
-// just the payload. Sized for the largest publish — the reflect result (~700B of
-// dark/lit/net for 10 channels) — plus the CONNECT packet (client id + LWT + creds).
-constexpr uint16_t MQTT_BUFFER_SIZE   = 1024;
+// just the payload. Sized for the largest publish — the reflect result: dark/lit/net for
+// 10 visible + 6 NIR channels + flags (~1.2 kB worst case) — plus the CONNECT packet.
+constexpr uint16_t MQTT_BUFFER_SIZE   = 1792;
 constexpr uint16_t MQTT_KEEPALIVE_S   = 60;
 constexpr uint16_t MQTT_SOCKET_TMO_S  = 5;   // bound how long a blocking connect() can stall
 constexpr uint32_t RECONNECT_EVERY_MS = 5000;
@@ -306,7 +306,7 @@ static bool mqttPublishReflect(const ReflectReading& r, const char* reqId, const
     static const char* const NAMES[10] =
         {"f415", "f445", "f480", "f515", "f555", "f590", "f630", "f680", "clear", "nir"};
 
-    char payload[1024];
+    char payload[1600];
     size_t n = 0;
     int w = snprintf(payload, sizeof(payload),
         "{\"mode\":\"reflect\",\"plant\":\"%s\",\"request_id\":\"%s\",\"status\":\"%s\"",
@@ -322,9 +322,24 @@ static bool mqttPublishReflect(const ReflectReading& r, const char* reqId, const
         n += (size_t)w;
     }
 
+    // NIR (AS7263) — channels only when valid; the nir_* flags always ride along.
+    if (r.nir_valid) {
+        static const char* const NIR[6] = {"n610", "n680", "n730", "n760", "n810", "n860"};
+        for (int i = 0; i < 6; i++) {
+            w = snprintf(payload + n, sizeof(payload) - n,
+                ",\"dark_%s\":%.1f,\"lit_%s\":%.1f,\"net_%s\":%.1f",
+                NIR[i], r.nir_dark[i], NIR[i], r.nir_lit[i], NIR[i], r.nir_net[i]);
+            if (w < 0 || (size_t)w >= sizeof(payload) - n) { logln("[mqtt] reflect aborted: overflow"); return false; }
+            n += (size_t)w;
+        }
+    }
+
     w = snprintf(payload + n, sizeof(payload) - n,
-        ",\"saturated\":%.1f,\"ambient_leak\":%.1f,\"spectrum_read_ms\":%.1f}",
-        r.saturated ? 1.0 : 0.0, r.ambient_leak ? 1.0 : 0.0, r.read_ms);
+        ",\"saturated\":%.1f,\"ambient_leak\":%.1f,\"spectrum_read_ms\":%.1f,"
+        "\"nir_valid\":%.1f,\"nir_saturated\":%.1f,\"nir_status\":\"%s\",\"nir_read_ms\":%.1f}",
+        r.saturated ? 1.0 : 0.0, r.ambient_leak ? 1.0 : 0.0, r.read_ms,
+        r.nir_valid ? 1.0 : 0.0, r.nir_saturated ? 1.0 : 0.0, r.nir_status,
+        r.nir_valid ? r.nir_read_ms : 0.0);
     if (w < 0 || (size_t)w >= sizeof(payload) - n) { logln("[mqtt] reflect aborted: overflow"); return false; }
     n += (size_t)w;
 
@@ -350,8 +365,10 @@ void reflectLoop() {
         ReflectReading rr;
         ReflectStatus st = reflectPoll(&rr);
         if (st == REFLECT_DONE) {
-            logf("[reflect] done read_ms=%.0f clear(dark=%.0f lit=%.0f net=%.0f) sat=%d leak=%d\n",
-                 rr.read_ms, rr.dark[8], rr.lit[8], rr.net[8], (int)rr.saturated, (int)rr.ambient_leak);
+            logf("[reflect] done read_ms=%.0f vis_clear(d=%.0f l=%.0f net=%.0f) sat=%d leak=%d "
+                 "| nir=%s n810(d=%.0f l=%.0f net=%.0f)\n",
+                 rr.read_ms, rr.dark[8], rr.lit[8], rr.net[8], (int)rr.saturated, (int)rr.ambient_leak,
+                 rr.nir_status, rr.nir_dark[4], rr.nir_lit[4], rr.nir_net[4]);
             mqttPublishReflect(rr, curReqId, curPlant);  // full dark/lit/net -> spectrum topic
             reflectState = REFLECT_IDLE;
             publishReflectResult(curReqId, curPlant, "done", "measured");

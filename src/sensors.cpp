@@ -13,6 +13,7 @@ static inline bool finiteF(float v) {
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
 #include <Adafruit_AS7341.h>
+#include <AS726X.h>
 
 namespace {
 
@@ -29,12 +30,14 @@ constexpr uint8_t BH1750_ADDR_REF  = 0x5C;
 Adafruit_BME680 bme;
 BH1750 lightMeter;     // primary    @ 0x23 -> lux
 BH1750 lightMeterRef;  // reference  @ 0x5C -> lux_ref
-Adafruit_AS7341 as7341;  // spectral @ 0x39 (fixed addr) -> spectrum topic
+Adafruit_AS7341 as7341;  // visible spectral @ 0x39 -> spectrum topic
+AS726X as7263;           // NIR spectral @ 0x49 -> joins the reflect read (red-edge/NIR)
 
 bool bmeOk = false;
 bool bh1750Ok = false;     // primary present
 bool bh1750RefOk = false;  // reference present
-bool as7341Ok = false;     // spectral present
+bool as7341Ok = false;     // visible spectral present
+bool as7263Ok = false;     // NIR spectral present
 
 // BME680 sits at 0x77 on most Adafruit-style modules, 0x76 on some clones.
 bool beginBme() {
@@ -85,7 +88,18 @@ bool sensorsBegin() {
         logln("[sensors] AS7341 NOT found @ 0x39");
     }
 
-    return bmeOk || bh1750Ok || bh1750RefOk || as7341Ok;
+    // AS7263 NIR spectral @ 0x49 — joins the reflect read (red-edge/NIR). Gate begin() on an
+    // I2C probe first: its virtual-register begin() would otherwise hang if the sensor is absent.
+    Wire.beginTransmission(0x49);
+    if (Wire.endTransmission() == 0) {
+        as7263Ok = as7263.begin(Wire);  // default gain 3, one-shot mode 3
+        logf("[sensors] AS7263 %s @ 0x49\n", as7263Ok ? "ok" : "begin FAILED");
+    } else {
+        as7263Ok = false;
+        logln("[sensors] AS7263 NOT found @ 0x49");
+    }
+
+    return bmeOk || bh1750Ok || bh1750RefOk || as7341Ok || as7263Ok;
 }
 
 SensorReading sensorsRead() {
@@ -119,72 +133,109 @@ SensorReading sensorsRead() {
 
 namespace {
 
-// AS7341 readAllChannels/getAllChannels fill 12 slots; [4] and [5] are duplicate ADCs.
-// These are the 10 real channels in f415..f680, clear, nir order.
+// AS7341 getAllChannels fills 12 slots; [4]/[5] are duplicate ADCs. The 10 real channels
+// in f415..f680, clear, nir order.
 constexpr uint8_t CH10[10] = {0, 1, 2, 3, 6, 7, 8, 9, 10, 11};
 constexpr uint8_t CLEAR_SLOT = 10;
 
-constexpr uint16_t REFLECT_LED_MA         = 10;    // LED drive during the lit read
-constexpr uint32_t REFLECT_STEP_TIMEOUT_MS = 2000; // per-bank data-ready bound
-constexpr uint16_t SAT_LEVEL              = 65000; // near the 16-bit ADC ceiling
-constexpr uint16_t AMBIENT_LEAK_CLEAR     = 2000;  // dark clear above this = ambient leaking in
+constexpr uint16_t REFLECT_LED_MA           = 10;   // AS7341 LED drive during the lit read
+constexpr uint32_t REFLECT_PHASE_TIMEOUT_MS = 2500; // deadline for BOTH sensors to finish a phase
+constexpr uint16_t SAT_LEVEL                = 65000;// near the 16-bit ADC ceiling
+constexpr uint16_t AMBIENT_LEAK_CLEAR       = 2000; // dark clear above this = ambient leaking in
 
-enum RPhase { RP_IDLE, RP_DARK_WAIT, RP_LIT_WAIT };
+// Dual-sensor reflect: a dark phase then a lit phase. The AS7341 (visible, primary) is read
+// NON-blocking (start/poll/get). The AS7263 (NIR, best-effort) is read with the library's
+// BLOCKING takeMeasurements() at the correct LED state — its non-blocking mode returned stale
+// (dark==lit) or garbage (all-0xFFFF) data when interleaved, so we take the bounded block.
+enum RPhase { RP_IDLE, RP_DARK, RP_LIT };
 RPhase rphase = RP_IDLE;
-uint16_t darkRaw[12] = {0};
+uint16_t darkRaw[12] = {0};    // AS7341
 uint16_t litRaw[12]  = {0};
+uint16_t nirDark[6]  = {0};    // AS7263: R610 S680 T730 U760 V810 W860
+uint16_t nirLit[6]   = {0};
+bool nirDarkOk = false;        // AS7263 dark read succeeded
+bool nirLitOk  = false;        // AS7263 lit read succeeded
 uint32_t rPhaseStart = 0;
 uint32_t rStart      = 0;
+
+// Blocking AS7263 read (bounded by the library's internal timeout). Rejects the all-0xFFFF
+// garbage read (an I2C error) as a failure so it doesn't reach the wire as a real value.
+bool readNirBlocking(uint16_t* buf) {
+    if (!as7263Ok) return false;
+    for (int attempt = 0; attempt < 2; attempt++) {   // retry once on a garbage read
+        as7263.takeMeasurements();
+        buf[0] = (uint16_t)as7263.getR();  buf[1] = (uint16_t)as7263.getS();
+        buf[2] = (uint16_t)as7263.getT();  buf[3] = (uint16_t)as7263.getU();
+        buf[4] = (uint16_t)as7263.getV();  buf[5] = (uint16_t)as7263.getW();
+        for (int i = 0; i < 6; i++) if (buf[i] != 0xFFFF) return true;  // at least one real value
+    }
+    return false;  // still all 0xFFFF -> garbage / NACK
+}
 
 }  // namespace
 
 bool reflectStart() {
-    if (!as7341Ok) { rphase = RP_IDLE; return false; }
+    if (!as7341Ok) { rphase = RP_IDLE; return false; }  // no visible sensor -> can't measure
     rStart = millis();
-    as7341.enableLED(false);   // dark read: LED off
-    as7341.startReading();
-    rphase = RP_DARK_WAIT;
+    as7341.enableLED(false);              // dark: LED off (both sensors)
+    nirDarkOk = readNirBlocking(nirDark); // AS7263 dark (blocking, LED off)
+    as7341.startReading();                // AS7341 dark (non-blocking)
+    rphase = RP_DARK;
     rPhaseStart = millis();
     return true;
 }
 
 ReflectStatus reflectPoll(ReflectReading* out) {
     if (!as7341Ok || rphase == RP_IDLE) return REFLECT_NA;
+    bool timeout = (millis() - rPhaseStart > REFLECT_PHASE_TIMEOUT_MS);
 
-    if (rphase == RP_DARK_WAIT) {
+    if (rphase == RP_DARK) {
         if (as7341.checkReadingProgress()) {
             as7341.getAllChannels(darkRaw);
-            as7341.setLEDCurrent(REFLECT_LED_MA);  // now the lit read: LED on
-            as7341.enableLED(true);
-            as7341.startReading();
-            rphase = RP_LIT_WAIT;
+            as7341.setLEDCurrent(REFLECT_LED_MA);
+            as7341.enableLED(true);              // lit: LED on (both sensors)
+            nirLitOk = readNirBlocking(nirLit);  // AS7263 lit (blocking, LED on)
+            as7341.startReading();               // AS7341 lit (non-blocking)
+            rphase = RP_LIT;
             rPhaseStart = millis();
             return REFLECT_BUSY;
         }
-    } else if (rphase == RP_LIT_WAIT) {
-        if (as7341.checkReadingProgress()) {
-            as7341.getAllChannels(litRaw);
-            as7341.enableLED(false);  // done — LED off
-            for (int i = 0; i < 10; i++) {
-                out->dark[i] = darkRaw[CH10[i]];
-                out->lit[i]  = litRaw[CH10[i]];
-                out->net[i]  = (float)litRaw[CH10[i]] - (float)darkRaw[CH10[i]];
-                if (litRaw[CH10[i]] >= SAT_LEVEL) out->saturated = true;
-            }
-            out->ambient_leak = darkRaw[CLEAR_SLOT] > AMBIENT_LEAK_CLEAR;
-            out->read_ms = (float)(millis() - rStart);
-            out->valid = true;
-            rphase = RP_IDLE;
-            return REFLECT_DONE;
-        }
+        if (timeout) { as7341.enableLED(false); rphase = RP_IDLE; return REFLECT_TIMEOUT; }
+        return REFLECT_BUSY;
     }
 
-    // timeout guard so a wedged bus can't hang the measurement forever
-    if (millis() - rPhaseStart > REFLECT_STEP_TIMEOUT_MS) {
+    // RP_LIT
+    if (as7341.checkReadingProgress()) {
+        as7341.getAllChannels(litRaw);
         as7341.enableLED(false);
+        for (int i = 0; i < 10; i++) {
+            out->dark[i] = darkRaw[CH10[i]];
+            out->lit[i]  = litRaw[CH10[i]];
+            out->net[i]  = (float)litRaw[CH10[i]] - (float)darkRaw[CH10[i]];
+            if (litRaw[CH10[i]] >= SAT_LEVEL) out->saturated = true;
+        }
+        out->ambient_leak = darkRaw[CLEAR_SLOT] > AMBIENT_LEAK_CLEAR;
+        out->read_ms = (float)(millis() - rStart);
+        out->valid = true;  // visible success gates the publish
+
+        if (as7263Ok && nirDarkOk && nirLitOk) {
+            for (int i = 0; i < 6; i++) {
+                out->nir_dark[i] = nirDark[i];
+                out->nir_lit[i]  = nirLit[i];
+                out->nir_net[i]  = (float)nirLit[i] - (float)nirDark[i];
+                if (nirLit[i] >= SAT_LEVEL) out->nir_saturated = true;
+            }
+            out->nir_read_ms = out->read_ms;
+            out->nir_valid = true;
+            snprintf(out->nir_status, sizeof(out->nir_status), "ok");
+        } else {
+            out->nir_valid = false;
+            snprintf(out->nir_status, sizeof(out->nir_status), "%s", as7263Ok ? "nack" : "absent");
+        }
         rphase = RP_IDLE;
-        return REFLECT_TIMEOUT;
+        return REFLECT_DONE;
     }
+    if (timeout) { as7341.enableLED(false); rphase = RP_IDLE; return REFLECT_TIMEOUT; }
     return REFLECT_BUSY;
 }
 

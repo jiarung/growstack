@@ -48,6 +48,8 @@ enum ReflectStatus { REFLECT_NA, REFLECT_BUSY, REFLECT_DONE, REFLECT_TIMEOUT };
 // One reflectance measurement: raw dark (LED off) + lit (LED on) + net (lit-dark),
 // 10 channels each (f415..f680, clear, nir order). Raw values kept for recompute/debug.
 struct ReflectReading {
+    // Visible (AS7341) — 10 channels f415..f680, clear, nir. `valid` = the AS7341 read
+    // succeeded; it gates the whole publish (the primary sensor). dark/lit/net raw counts.
     float dark[10] = {0};
     float lit[10]  = {0};
     float net[10]  = {0};
@@ -55,6 +57,16 @@ struct ReflectReading {
     bool saturated    = false;
     bool ambient_leak = false;
     bool valid = false;
+
+    // NIR (AS7263) — 6 channels n610 n680 n730 n760 n810 n860. Best-effort: a missing/timed-out
+    // AS7263 leaves nir_valid=false (+ nir_status) but the visible reflect is still published.
+    float nir_dark[6] = {0};
+    float nir_lit[6]  = {0};
+    float nir_net[6]  = {0};
+    float nir_read_ms = NAN;
+    bool nir_saturated = false;
+    bool nir_valid = false;
+    char nir_status[12] = "absent";   // "ok" | "timeout" | "nack" | "absent"
 };
 
 // Begin a dark→LED→lit read. Returns false if no AS7341 (nothing started).
