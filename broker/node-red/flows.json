@@ -168,6 +168,11 @@
     "type": "str"
    },
    {
+    "label": "test-01",
+    "value": "test-01",
+    "type": "str"
+   },
+   {
     "label": "white-ref",
     "value": "white-ref",
     "type": "str"
