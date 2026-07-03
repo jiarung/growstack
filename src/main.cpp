@@ -6,6 +6,12 @@
 #include "mqtt_client.h"
 #include "log.h"
 
+// A fixed AS7341 node streams ambient spectrum; a roving reflectance-only probe sets
+// PUBLISH_AMBIENT_SPECTRUM to 0 in its secrets.h to suppress the mode:"ambient" stream.
+#ifndef PUBLISH_AMBIENT_SPECTRUM
+#define PUBLISH_AMBIENT_SPECTRUM 1
+#endif
+
 // Publish cadence — change this one line to retune.
 static const uint32_t PUBLISH_INTERVAL_MS = 15000;  // 15 seconds
 static const uint32_t WIFI_RETRY_MS       = 10000;
@@ -62,7 +68,9 @@ void loop() {
         SensorReading r = sensorsRead();
         mqttPublish(r);  // logs success / failure / empty-skip internally
 
+#if PUBLISH_AMBIENT_SPECTRUM
         SpectrumReading sp = spectrumRead();
         mqttPublishSpectrum(sp);  // own topic; no-op + no log when AS7341 absent
+#endif
     }
 }
