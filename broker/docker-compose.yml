@@ -73,8 +73,9 @@ services:
 
   # Node-RED: phone-friendly control surface for on-demand reflectance measurements.
   # Generates a fresh request_id per measure (the firmware dedups by it) and publishes
-  # a NON-retained reflect/cmd. Bound to localhost only — reach it over Tailscale/SSH,
-  # never expose the editor to the LAN/WAN (the broker is still anonymous-open).
+  # a NON-retained reflect/cmd. Bound to localhost by default — set NODERED_BIND in
+  # .env (e.g. the host's Tailscale IP) to reach it by IP from the tailnet. Never
+  # bind 0.0.0.0: the editor is unauthenticated and the broker is anonymous-open.
   node-red:
     build: ./node-red
     container_name: monitor-air-nodered
@@ -82,7 +83,7 @@ services:
     environment:
       TZ: Asia/Taipei
     ports:
-      - "127.0.0.1:1880:1880"   # editor + /ui dashboard — localhost only
+      - "${NODERED_BIND:-127.0.0.1}:1880:1880"   # editor + /ui dashboard
     volumes:
       - nodered-data:/data
     depends_on:

@@ -1,34 +1,395 @@
 [
-  { "id": "reflect-flow", "type": "tab", "label": "Reflectance control", "disabled": false, "info": "Phone control for on-demand AS7341 leaf-reflectance measurements.\n\nCHANGE the device id 'staging-01' in the two function nodes and three mqtt-in topics to target the balcony node.\n\n- Dashboard at /ui : pick a plant, press Measure.\n- HTTP for shortcuts : POST /reflect/measure?plant=<id> (or JSON body {\"plant\":\"...\"}) -> 202 {request_id}.\nA fresh request_id is generated server-side each time (the firmware dedups by it). reflect/cmd is published NON-retained." },
-
-  { "id": "mqtt-mosquitto", "type": "mqtt-broker", "name": "mosquitto", "broker": "mosquitto", "port": "1883", "clientid": "node-red-reflect", "autoConnect": true, "usetls": false, "protocolVersion": "4", "keepalive": "60", "cleansession": true, "birthTopic": "", "birthQos": "0", "birthPayload": "", "closeTopic": "", "closeQos": "0", "closePayload": "", "willTopic": "", "willQos": "0", "willPayload": "" },
-
-  { "id": "ui-tab-reflect", "type": "ui_tab", "name": "Reflect", "icon": "dashboard", "order": 1, "disabled": false, "hidden": false },
-  { "id": "ui-grp-reflect", "type": "ui_group", "name": "Leaf reflectance", "tab": "ui-tab-reflect", "order": 1, "disp": true, "width": "6", "collapse": false },
-
-  { "id": "n-plant", "type": "ui_dropdown", "z": "reflect-flow", "name": "Plant", "label": "Plant", "tooltip": "", "place": "Select plant", "group": "ui-grp-reflect", "order": 1, "width": "6", "height": "1", "passthru": true, "multiple": false, "options": [ { "label": "cactus-01", "value": "cactus-01", "type": "str" }, { "label": "cactus-02", "value": "cactus-02", "type": "str" }, { "label": "cactus-03", "value": "cactus-03", "type": "str" }, { "label": "white-ref", "value": "white-ref", "type": "str" } ], "payload": "", "topic": "", "topicType": "str", "x": 130, "y": 80, "wires": [ [ "n-plant-store" ] ] },
-
-  { "id": "n-plant-store", "type": "change", "z": "reflect-flow", "name": "store flow.plant", "rules": [ { "t": "set", "p": "plant", "pt": "flow", "to": "payload", "tot": "msg" } ], "action": "", "property": "", "from": "", "to": "", "reg": false, "x": 360, "y": 80, "wires": [ [] ] },
-
-  { "id": "n-measure", "type": "ui_button", "z": "reflect-flow", "name": "Measure", "group": "ui-grp-reflect", "order": 2, "width": "6", "height": "1", "passthru": false, "label": "Measure", "tooltip": "", "color": "", "bgcolor": "", "className": "", "icon": "", "payload": "measure", "payloadType": "str", "topic": "", "topicType": "str", "x": 130, "y": 140, "wires": [ [ "n-build-ui" ] ] },
-
-  { "id": "n-build-ui", "type": "function", "z": "reflect-flow", "name": "build cmd (ui)", "func": "const plant = flow.get('plant');\nif (!plant || !/^[A-Za-z0-9_-]{1,40}$/.test(plant)) {\n    node.status({ fill: 'red', shape: 'ring', text: 'pick a plant first' });\n    return null;\n}\nconst rid = 'r-' + Date.now().toString(36) + '-' + Math.floor(Math.random()*1e6).toString(36);\nmsg.topic = 'monitor-air/staging-01/reflect/cmd';\nmsg.payload = { request_id: rid, plant: plant, action: 'measure' };\nmsg.qos = 0;\nmsg.retain = false;\nnode.status({ fill: 'green', shape: 'dot', text: plant + ' ' + rid });\nreturn msg;", "outputs": 1, "noerr": 0, "initialize": "", "finalize": "", "libs": [], "x": 350, "y": 140, "wires": [ [ "n-mqtt-cmd" ] ] },
-
-  { "id": "n-mqtt-cmd", "type": "mqtt out", "z": "reflect-flow", "name": "reflect/cmd (non-retained)", "topic": "", "qos": "0", "retain": "false", "respTopic": "", "contentType": "", "userProps": "", "correl": "", "expiry": "", "broker": "mqtt-mosquitto", "x": 620, "y": 140, "wires": [] },
-
-  { "id": "n-http-in", "type": "http in", "z": "reflect-flow", "name": "POST /reflect/measure", "url": "/reflect/measure", "method": "post", "upload": false, "swaggerDoc": "", "x": 150, "y": 240, "wires": [ [ "n-build-http" ] ] },
-
-  { "id": "n-build-http", "type": "function", "z": "reflect-flow", "name": "build cmd (http)", "func": "const plant = (msg.payload && msg.payload.plant) || (msg.req && msg.req.query && msg.req.query.plant) || '';\nif (!/^[A-Za-z0-9_-]{1,40}$/.test(plant)) {\n    msg.statusCode = 400;\n    msg.payload = { error: 'plant required: ?plant=<id> or JSON body, [A-Za-z0-9_-] 1-40 chars' };\n    return [ null, msg ];\n}\nconst rid = 'r-' + Date.now().toString(36) + '-' + Math.floor(Math.random()*1e6).toString(36);\nconst cmd = { topic: 'monitor-air/staging-01/reflect/cmd', payload: { request_id: rid, plant: plant, action: 'measure' }, qos: 0, retain: false };\nmsg.payload = { status: 'accepted', request_id: rid, plant: plant };\nmsg.statusCode = 202;\nreturn [ cmd, msg ];", "outputs": 2, "noerr": 0, "initialize": "", "finalize": "", "libs": [], "x": 400, "y": 240, "wires": [ [ "n-mqtt-cmd" ], [ "n-http-res" ] ] },
-
-  { "id": "n-http-res", "type": "http response", "z": "reflect-flow", "name": "202 accepted", "statusCode": "", "headers": {}, "x": 650, "y": 260, "wires": [] },
-
-  { "id": "n-mqtt-state", "type": "mqtt in", "z": "reflect-flow", "name": "reflect/state", "topic": "monitor-air/staging-01/reflect/state", "qos": "0", "datatype": "auto", "broker": "mqtt-mosquitto", "nl": false, "rap": true, "rh": 0, "inputs": 0, "x": 150, "y": 360, "wires": [ [ "n-txt-state" ] ] },
-  { "id": "n-txt-state", "type": "ui_text", "z": "reflect-flow", "group": "ui-grp-reflect", "order": 3, "width": "6", "height": "1", "name": "State", "label": "State", "format": "{{msg.payload.state}}", "layout": "row-spread", "className": "", "x": 420, "y": 360, "wires": [] },
-
-  { "id": "n-mqtt-result", "type": "mqtt in", "z": "reflect-flow", "name": "reflect/result", "topic": "monitor-air/staging-01/reflect/result", "qos": "0", "datatype": "auto", "broker": "mqtt-mosquitto", "nl": false, "rap": true, "rh": 0, "inputs": 0, "x": 150, "y": 420, "wires": [ [ "n-fmt-result" ] ] },
-  { "id": "n-fmt-result", "type": "function", "z": "reflect-flow", "name": "format result", "func": "const p = msg.payload || {};\nmsg.payload = (p.status || '?') + '  plant=' + (p.plant || '') + '  id=' + (p.request_id || '');\nreturn msg;", "outputs": 1, "noerr": 0, "initialize": "", "finalize": "", "libs": [], "x": 360, "y": 420, "wires": [ [ "n-txt-result" ] ] },
-  { "id": "n-txt-result", "type": "ui_text", "z": "reflect-flow", "group": "ui-grp-reflect", "order": 4, "width": "6", "height": "1", "name": "Last result", "label": "Last result", "format": "{{msg.payload}}", "layout": "col-center", "className": "", "x": 590, "y": 420, "wires": [] },
-
-  { "id": "n-mqtt-avail", "type": "mqtt in", "z": "reflect-flow", "name": "reflect/availability", "topic": "monitor-air/staging-01/reflect/availability", "qos": "0", "datatype": "auto", "broker": "mqtt-mosquitto", "nl": false, "rap": true, "rh": 0, "inputs": 0, "x": 165, "y": 480, "wires": [ [ "n-txt-avail" ] ] },
-  { "id": "n-txt-avail", "type": "ui_text", "z": "reflect-flow", "group": "ui-grp-reflect", "order": 5, "width": "6", "height": "1", "name": "Device", "label": "Device", "format": "{{msg.payload}}", "layout": "row-spread", "className": "", "x": 430, "y": 480, "wires": [] }
+ {
+  "id": "ui-base",
+  "type": "ui_base",
+  "theme": {
+   "name": "theme-dark"
+  },
+  "site": {
+   "name": "monitor-air",
+   "hideToolbar": "false",
+   "allowSwipe": "true",
+   "lockMenu": "false",
+   "allowTempTheme": "true",
+   "dateFormat": "HH:mm:ss",
+   "sizes": {
+    "sx": 48,
+    "sy": 48,
+    "gx": 6,
+    "gy": 6,
+    "cx": 6,
+    "cy": 6,
+    "px": 0,
+    "py": 0
+   }
+  }
+ },
+ {
+  "id": "reflect-flow",
+  "type": "tab",
+  "label": "Reflectance control",
+  "disabled": false,
+  "info": "Phone control for on-demand AS7341 leaf-reflectance measurements.\n\nCHANGE the device id 'staging-01' in the two function nodes and three mqtt-in topics to target the balcony node.\n\n- Dashboard at /ui : pick a plant, press Measure.\n- HTTP for shortcuts : POST /reflect/measure?plant=<id> (or JSON body {\"plant\":\"...\"}) -> 202 {request_id}.\nA fresh request_id is generated server-side each time (the firmware dedups by it). reflect/cmd is published NON-retained."
+ },
+ {
+  "id": "mqtt-mosquitto",
+  "type": "mqtt-broker",
+  "name": "mosquitto",
+  "broker": "mosquitto",
+  "port": "1883",
+  "clientid": "node-red-reflect",
+  "autoConnect": true,
+  "usetls": false,
+  "protocolVersion": "4",
+  "keepalive": "60",
+  "cleansession": true,
+  "birthTopic": "",
+  "birthQos": "0",
+  "birthPayload": "",
+  "closeTopic": "",
+  "closeQos": "0",
+  "closePayload": "",
+  "willTopic": "",
+  "willQos": "0",
+  "willPayload": ""
+ },
+ {
+  "id": "ui-tab-reflect",
+  "type": "ui_tab",
+  "name": "Reflect",
+  "icon": "dashboard",
+  "order": 1,
+  "disabled": false,
+  "hidden": false
+ },
+ {
+  "id": "ui-grp-reflect",
+  "type": "ui_group",
+  "name": "Leaf reflectance",
+  "tab": "ui-tab-reflect",
+  "order": 1,
+  "disp": true,
+  "width": "6",
+  "collapse": false
+ },
+ {
+  "id": "n-plant",
+  "type": "ui_dropdown",
+  "z": "reflect-flow",
+  "name": "Plant",
+  "label": "Plant",
+  "tooltip": "",
+  "place": "Select plant",
+  "group": "ui-grp-reflect",
+  "order": 1,
+  "width": "6",
+  "height": "1",
+  "passthru": true,
+  "multiple": false,
+  "options": [
+   {
+    "label": "cactus-01",
+    "value": "cactus-01",
+    "type": "str"
+   },
+   {
+    "label": "cactus-02",
+    "value": "cactus-02",
+    "type": "str"
+   },
+   {
+    "label": "cactus-03",
+    "value": "cactus-03",
+    "type": "str"
+   },
+   {
+    "label": "white-ref",
+    "value": "white-ref",
+    "type": "str"
+   }
+  ],
+  "payload": "",
+  "topic": "",
+  "topicType": "str",
+  "x": 130,
+  "y": 80,
+  "wires": [
+   [
+    "n-plant-store"
+   ]
+  ]
+ },
+ {
+  "id": "n-plant-store",
+  "type": "change",
+  "z": "reflect-flow",
+  "name": "store flow.plant",
+  "rules": [
+   {
+    "t": "set",
+    "p": "plant",
+    "pt": "flow",
+    "to": "payload",
+    "tot": "msg"
+   }
+  ],
+  "action": "",
+  "property": "",
+  "from": "",
+  "to": "",
+  "reg": false,
+  "x": 360,
+  "y": 80,
+  "wires": [
+   []
+  ]
+ },
+ {
+  "id": "n-measure",
+  "type": "ui_button",
+  "z": "reflect-flow",
+  "name": "Measure",
+  "group": "ui-grp-reflect",
+  "order": 2,
+  "width": "6",
+  "height": "1",
+  "passthru": false,
+  "label": "Measure",
+  "tooltip": "",
+  "color": "",
+  "bgcolor": "",
+  "className": "",
+  "icon": "",
+  "payload": "measure",
+  "payloadType": "str",
+  "topic": "",
+  "topicType": "str",
+  "x": 130,
+  "y": 140,
+  "wires": [
+   [
+    "n-build-ui"
+   ]
+  ]
+ },
+ {
+  "id": "n-build-ui",
+  "type": "function",
+  "z": "reflect-flow",
+  "name": "build cmd (ui)",
+  "func": "const plant = flow.get('plant');\nif (!plant || !/^[A-Za-z0-9_-]{1,40}$/.test(plant)) {\n    node.status({ fill: 'red', shape: 'ring', text: 'pick a plant first' });\n    return null;\n}\nconst rid = 'r-' + Date.now().toString(36) + '-' + Math.floor(Math.random()*1e6).toString(36);\nmsg.topic = 'monitor-air/staging-01/reflect/cmd';\nmsg.payload = { request_id: rid, plant: plant, action: 'measure' };\nmsg.qos = 0;\nmsg.retain = false;\nnode.status({ fill: 'green', shape: 'dot', text: plant + ' ' + rid });\nreturn msg;",
+  "outputs": 1,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 350,
+  "y": 140,
+  "wires": [
+   [
+    "n-mqtt-cmd"
+   ]
+  ]
+ },
+ {
+  "id": "n-mqtt-cmd",
+  "type": "mqtt out",
+  "z": "reflect-flow",
+  "name": "reflect/cmd (non-retained)",
+  "topic": "",
+  "qos": "0",
+  "retain": "false",
+  "respTopic": "",
+  "contentType": "",
+  "userProps": "",
+  "correl": "",
+  "expiry": "",
+  "broker": "mqtt-mosquitto",
+  "x": 620,
+  "y": 140,
+  "wires": []
+ },
+ {
+  "id": "n-http-in",
+  "type": "http in",
+  "z": "reflect-flow",
+  "name": "POST /reflect/measure",
+  "url": "/reflect/measure",
+  "method": "post",
+  "upload": false,
+  "swaggerDoc": "",
+  "x": 150,
+  "y": 240,
+  "wires": [
+   [
+    "n-build-http"
+   ]
+  ]
+ },
+ {
+  "id": "n-build-http",
+  "type": "function",
+  "z": "reflect-flow",
+  "name": "build cmd (http)",
+  "func": "const plant = (msg.payload && msg.payload.plant) || (msg.req && msg.req.query && msg.req.query.plant) || '';\nif (!/^[A-Za-z0-9_-]{1,40}$/.test(plant)) {\n    msg.statusCode = 400;\n    msg.payload = { error: 'plant required: ?plant=<id> or JSON body, [A-Za-z0-9_-] 1-40 chars' };\n    return [ null, msg ];\n}\nconst rid = 'r-' + Date.now().toString(36) + '-' + Math.floor(Math.random()*1e6).toString(36);\nconst cmd = { topic: 'monitor-air/staging-01/reflect/cmd', payload: { request_id: rid, plant: plant, action: 'measure' }, qos: 0, retain: false };\nmsg.payload = { status: 'accepted', request_id: rid, plant: plant };\nmsg.statusCode = 202;\nreturn [ cmd, msg ];",
+  "outputs": 2,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 400,
+  "y": 240,
+  "wires": [
+   [
+    "n-mqtt-cmd"
+   ],
+   [
+    "n-http-res"
+   ]
+  ]
+ },
+ {
+  "id": "n-http-res",
+  "type": "http response",
+  "z": "reflect-flow",
+  "name": "202 accepted",
+  "statusCode": "",
+  "headers": {},
+  "x": 650,
+  "y": 260,
+  "wires": []
+ },
+ {
+  "id": "n-mqtt-state",
+  "type": "mqtt in",
+  "z": "reflect-flow",
+  "name": "reflect/state",
+  "topic": "monitor-air/staging-01/reflect/state",
+  "qos": "0",
+  "datatype": "auto",
+  "broker": "mqtt-mosquitto",
+  "nl": false,
+  "rap": true,
+  "rh": 0,
+  "inputs": 0,
+  "x": 150,
+  "y": 360,
+  "wires": [
+   [
+    "n-txt-state"
+   ]
+  ]
+ },
+ {
+  "id": "n-txt-state",
+  "type": "ui_text",
+  "z": "reflect-flow",
+  "group": "ui-grp-reflect",
+  "order": 3,
+  "width": "6",
+  "height": "1",
+  "name": "State",
+  "label": "State",
+  "format": "{{msg.payload.state}}",
+  "layout": "row-spread",
+  "className": "",
+  "x": 420,
+  "y": 360,
+  "wires": []
+ },
+ {
+  "id": "n-mqtt-result",
+  "type": "mqtt in",
+  "z": "reflect-flow",
+  "name": "reflect/result",
+  "topic": "monitor-air/staging-01/reflect/result",
+  "qos": "0",
+  "datatype": "auto",
+  "broker": "mqtt-mosquitto",
+  "nl": false,
+  "rap": true,
+  "rh": 0,
+  "inputs": 0,
+  "x": 150,
+  "y": 420,
+  "wires": [
+   [
+    "n-fmt-result"
+   ]
+  ]
+ },
+ {
+  "id": "n-fmt-result",
+  "type": "function",
+  "z": "reflect-flow",
+  "name": "format result",
+  "func": "const p = msg.payload || {};\nmsg.payload = (p.status || '?') + '  plant=' + (p.plant || '') + '  id=' + (p.request_id || '');\nreturn msg;",
+  "outputs": 1,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 360,
+  "y": 420,
+  "wires": [
+   [
+    "n-txt-result"
+   ]
+  ]
+ },
+ {
+  "id": "n-txt-result",
+  "type": "ui_text",
+  "z": "reflect-flow",
+  "group": "ui-grp-reflect",
+  "order": 4,
+  "width": "6",
+  "height": "1",
+  "name": "Last result",
+  "label": "Last result",
+  "format": "{{msg.payload}}",
+  "layout": "col-center",
+  "className": "",
+  "x": 590,
+  "y": 420,
+  "wires": []
+ },
+ {
+  "id": "n-mqtt-avail",
+  "type": "mqtt in",
+  "z": "reflect-flow",
+  "name": "reflect/availability",
+  "topic": "monitor-air/staging-01/reflect/availability",
+  "qos": "0",
+  "datatype": "auto",
+  "broker": "mqtt-mosquitto",
+  "nl": false,
+  "rap": true,
+  "rh": 0,
+  "inputs": 0,
+  "x": 165,
+  "y": 480,
+  "wires": [
+   [
+    "n-txt-avail"
+   ]
+  ]
+ },
+ {
+  "id": "n-txt-avail",
+  "type": "ui_text",
+  "z": "reflect-flow",
+  "group": "ui-grp-reflect",
+  "order": 5,
+  "width": "6",
+  "height": "1",
+  "name": "Device",
+  "label": "Device",
+  "format": "{{msg.payload}}",
+  "layout": "row-spread",
+  "className": "",
+  "x": 430,
+  "y": 480,
+  "wires": []
+ }
 ]
