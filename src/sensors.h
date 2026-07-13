@@ -75,3 +75,15 @@ bool reflectStart();
 // Advance the read (call each loop iteration). DONE fills `out`; TIMEOUT if a bank read
 // didn't become ready in time; BUSY while in progress; NA when idle/no sensor.
 ReflectStatus reflectPoll(ReflectReading* out);
+
+// --- Burst reflect (visible-only, streaming lit) ---------------------------------
+// One dark0 baseline (LED off) then repeated non-blocking AS7341 lit reads with the LED
+// held on; net = lit - dark0. Skips the AS7263 (nir_valid=0, nir_status="skip"). Drive:
+// Start -> Poll (returns DONE once per sample) -> Next -> ... (until done) -> End.
+bool reflectBurstStart();
+ReflectStatus reflectBurstPoll(ReflectReading* out);
+void reflectBurstNext();
+void reflectBurstEnd();
+
+// Abort any in-progress one-shot/burst measurement (LED off) — for disconnect cleanup.
+void reflectAbort();

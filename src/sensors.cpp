@@ -239,6 +239,82 @@ ReflectStatus reflectPoll(ReflectReading* out) {
     return REFLECT_BUSY;
 }
 
+// --- Burst reflect: one dark0 (LED off), then stream lit (LED on), visible-only -----
+namespace {
+enum BPhase { BURST_IDLE, BURST_DARK0, BURST_LIT };
+BPhase bphase = BURST_IDLE;
+uint16_t dark0Raw[12] = {0};
+uint32_t bPhaseStart  = 0;   // per-read deadline base
+uint32_t bSampleStart = 0;   // current lit read start (for read_ms)
+}  // namespace
+
+bool reflectBurstStart() {
+    if (!as7341Ok) { bphase = BURST_IDLE; return false; }
+    as7341.enableLED(false);   // dark0: LED off
+    as7341.startReading();
+    bphase = BURST_DARK0;
+    bPhaseStart = millis();
+    return true;
+}
+
+ReflectStatus reflectBurstPoll(ReflectReading* out) {
+    if (!as7341Ok || bphase == BURST_IDLE) return REFLECT_NA;
+
+    if (bphase == BURST_DARK0) {
+        if (as7341.checkReadingProgress()) {
+            as7341.getAllChannels(dark0Raw);
+            as7341.setLEDCurrent(REFLECT_LED_MA);
+            as7341.enableLED(true);          // lit: LED on for the whole burst
+            as7341.startReading();
+            bphase = BURST_LIT;
+            bPhaseStart = millis();
+            bSampleStart = millis();
+            return REFLECT_BUSY;
+        }
+    } else {  // BURST_LIT
+        if (as7341.checkReadingProgress()) {
+            uint16_t lit[12];
+            as7341.getAllChannels(lit);
+            for (int i = 0; i < 10; i++) {
+                out->dark[i] = dark0Raw[CH10[i]];
+                out->lit[i]  = lit[CH10[i]];
+                out->net[i]  = (float)lit[CH10[i]] - (float)dark0Raw[CH10[i]];
+                if (lit[CH10[i]] >= SAT_LEVEL) out->saturated = true;
+            }
+            out->ambient_leak = dark0Raw[CLEAR_SLOT] > AMBIENT_LEAK_CLEAR;
+            out->read_ms = (float)(millis() - bSampleStart);
+            out->valid = true;
+            out->nir_valid = false;
+            snprintf(out->nir_status, sizeof(out->nir_status), "skip");
+            return REFLECT_DONE;   // one sample; caller calls Next to continue, or End
+        }
+    }
+
+    if (millis() - bPhaseStart > REFLECT_PHASE_TIMEOUT_MS) {
+        as7341.enableLED(false);
+        bphase = BURST_IDLE;
+        return REFLECT_TIMEOUT;
+    }
+    return REFLECT_BUSY;
+}
+
+void reflectBurstNext() {
+    as7341.startReading();   // next lit read; LED stays on
+    bPhaseStart  = millis();
+    bSampleStart = millis();
+}
+
+void reflectBurstEnd() {
+    as7341.enableLED(false);
+    bphase = BURST_IDLE;
+}
+
+void reflectAbort() {
+    as7341.enableLED(false);
+    rphase = RP_IDLE;
+    bphase = BURST_IDLE;
+}
+
 SpectrumReading spectrumRead() {
     SpectrumReading s;
     if (!as7341Ok) return s;  // fail-open: valid stays false

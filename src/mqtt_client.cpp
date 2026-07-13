@@ -50,8 +50,17 @@ char pendRaw[200] = {0};     // raw cmd payload, bounded-copied in the callback
 char curReqId[48] = {0};     // in-flight request during MEASURING
 char curPlant[40] = {0};
 
-char lastReqId[48] = {0};    // last handled request + its result (for dedup)
-char lastStatus[16] = {0};
+// Burst session (reflect/cmd with duration_s>0). One-shot leaves burstActive false.
+constexpr uint32_t BURST_MAX_DURATION_S = 120;
+constexpr int32_t  BURST_MAX_SAMPLES    = 400;   // hard cap so a burst can't run away
+bool burstActive = false;
+uint32_t burstStartMs  = 0;
+uint32_t burstDeadline = 0;
+int32_t  burstSeq       = 0;
+int32_t  burstFailCount = 0;
+
+char lastReqId[48] = {0};        // last FINISHED request id (for dedup replay)
+char lastResultJson[200] = {0};  // its exact reflect/result payload, replayed verbatim
 
 // Device id must be a single safe topic segment: server-side topic_parsing splits
 // on '/', and '+'/'#' are MQTT wildcards — any of those would break the contract.
@@ -92,16 +101,29 @@ void publishReflectState() {
     logf("[reflect] state %s\n", p);
 }
 
-// reflect/result: QoS0 non-retained, one per cmd. Caches (id,status) for dedup.
+// reflect/result: QoS0 non-retained, one per cmd. count/publish_fail_count are emitted only
+// when >=0 (burst). A terminal result (done/error) is cached verbatim for dedup replay.
 void publishReflectResult(const char* reqId, const char* plant, const char* status,
-                          const char* code) {
-    char p[160];
-    snprintf(p, sizeof(p), "{\"request_id\":\"%s\",\"status\":\"%s\",\"plant\":\"%s\",\"code\":\"%s\"}",
-             reqId, status, plant, code);
+                          const char* code, int32_t count = -1, int32_t failCount = -1) {
+    char p[200];
+    int n = snprintf(p, sizeof(p),
+        "{\"request_id\":\"%s\",\"status\":\"%s\",\"plant\":\"%s\",\"code\":\"%s\"",
+        reqId, status, plant, code);
+    if (count >= 0 && n > 0 && (size_t)n < sizeof(p))
+        n += snprintf(p + n, sizeof(p) - n, ",\"count\":%ld", (long)count);
+    if (failCount >= 0 && n > 0 && (size_t)n < sizeof(p))
+        n += snprintf(p + n, sizeof(p) - n, ",\"publish_fail_count\":%ld", (long)failCount);
+    if (n > 0 && (size_t)n < sizeof(p))
+        snprintf(p + n, sizeof(p) - n, "}");
+
     client.publish(reflectResultTopic, p, false);
     logf("[reflect] result %s\n", p);
-    strncpy(lastReqId, reqId, sizeof(lastReqId) - 1);   lastReqId[sizeof(lastReqId) - 1] = '\0';
-    strncpy(lastStatus, status, sizeof(lastStatus) - 1); lastStatus[sizeof(lastStatus) - 1] = '\0';
+
+    // Cache a terminal result of a real request for dedup replay (not busy/malformed).
+    if (reqId[0] && (strcmp(status, "done") == 0 || strcmp(status, "error") == 0)) {
+        strncpy(lastReqId, reqId, sizeof(lastReqId) - 1);       lastReqId[sizeof(lastReqId) - 1] = '\0';
+        strncpy(lastResultJson, p, sizeof(lastResultJson) - 1); lastResultJson[sizeof(lastResultJson) - 1] = '\0';
+    }
 }
 
 // Parse + dispatch one queued cmd. Single-flight: a 2nd cmd while measuring -> busy;
@@ -112,27 +134,47 @@ void handleReflectCmd(const char* raw) {
     const char* reqId  = doc["request_id"] | "";
     const char* plant  = doc["plant"]      | "";
     const char* action = doc["action"]     | "";
+    // 0 -> one-shot; >0 -> burst window (s). Accept `duration` as an alias for `duration_s`.
+    int durationS      = doc["duration_s"] | (doc["duration"] | 0);
 
     if (err || reqId[0] == '\0' || plant[0] == '\0' || strcmp(action, "measure") != 0) {
-        publishReflectResult(reqId, plant, "malformed", "bad_cmd");  // state stays idle
+        publishReflectResult(reqId, plant, "malformed", "bad_cmd");
         return;
     }
-    if (strcmp(reqId, lastReqId) == 0) {              // dedup
-        publishReflectResult(reqId, plant, lastStatus, "dedup");
+    // in-flight: the SAME request while measuring is already running.
+    if (reflectState == REFLECT_MEASURING && strcmp(reqId, curReqId) == 0) {
+        publishReflectResult(reqId, plant, "busy", "in_flight");
         return;
     }
-    if (reflectState == REFLECT_MEASURING) {          // single-flight reject
+    // finished dedup: replay that request's cached result verbatim (never re-measure).
+    if (reqId[0] && strcmp(reqId, lastReqId) == 0 && lastResultJson[0]) {
+        client.publish(reflectResultTopic, lastResultJson, false);
+        logf("[reflect] result (dedup) %s\n", lastResultJson);
+        return;
+    }
+    // a DIFFERENT request while measuring -> busy.
+    if (reflectState == REFLECT_MEASURING) {
         publishReflectResult(reqId, plant, "busy", "measuring");
         return;
     }
+    // start a new measurement.
     strncpy(curReqId, reqId, sizeof(curReqId) - 1); curReqId[sizeof(curReqId) - 1] = '\0';
     strncpy(curPlant, plant, sizeof(curPlant) - 1); curPlant[sizeof(curPlant) - 1] = '\0';
-    if (!reflectStart()) {                            // no AS7341 -> can't measure
-        publishReflectResult(reqId, plant, "error", "no_sensor");  // state stays idle
-        return;
+
+    if (durationS > 0) {                              // burst
+        if (durationS > (int)BURST_MAX_DURATION_S) durationS = (int)BURST_MAX_DURATION_S;
+        if (!reflectBurstStart()) { publishReflectResult(reqId, plant, "error", "no_sensor"); return; }
+        burstActive    = true;
+        burstStartMs   = millis();
+        burstDeadline  = burstStartMs + (uint32_t)durationS * 1000;
+        burstSeq       = 0;
+        burstFailCount = 0;
+    } else {                                          // one-shot
+        if (!reflectStart()) { publishReflectResult(reqId, plant, "error", "no_sensor"); return; }
+        burstActive = false;
     }
     reflectState = REFLECT_MEASURING;
-    publishReflectState();                            // measuring
+    publishReflectState();                            // measuring (published once)
 }
 
 // Run on EVERY successful (re)connect: subscribe, announce online, and republish the
@@ -300,7 +342,8 @@ bool mqttPublishSpectrum(const SpectrumReading& s) {
 // Publish one reflectance measurement to the spectrum topic: mode=reflect + plant +
 // request_id + status + raw dark_*/lit_*/net_* (10 channels) + quality flags. QoS0,
 // not retained. Internal (called from reflectLoop). Returns true if accepted.
-static bool mqttPublishReflect(const ReflectReading& r, const char* reqId, const char* plant) {
+static bool mqttPublishReflect(const ReflectReading& r, const char* reqId, const char* plant,
+                               int32_t seq = -1, float elapsedMs = NAN) {
     if (!mqttConnected() || !r.valid) return false;
     const char* status = r.saturated ? "saturated" : (r.ambient_leak ? "ambient_leak" : "ok");
     static const char* const NAMES[10] =
@@ -336,10 +379,20 @@ static bool mqttPublishReflect(const ReflectReading& r, const char* reqId, const
 
     w = snprintf(payload + n, sizeof(payload) - n,
         ",\"saturated\":%.1f,\"ambient_leak\":%.1f,\"spectrum_read_ms\":%.1f,"
-        "\"nir_valid\":%.1f,\"nir_saturated\":%.1f,\"nir_status\":\"%s\",\"nir_read_ms\":%.1f}",
+        "\"nir_valid\":%.1f,\"nir_saturated\":%.1f,\"nir_status\":\"%s\",\"nir_read_ms\":%.1f",
         r.saturated ? 1.0 : 0.0, r.ambient_leak ? 1.0 : 0.0, r.read_ms,
         r.nir_valid ? 1.0 : 0.0, r.nir_saturated ? 1.0 : 0.0, r.nir_status,
         r.nir_valid ? r.nir_read_ms : 0.0);
+    if (w < 0 || (size_t)w >= sizeof(payload) - n) { logln("[mqtt] reflect aborted: overflow"); return false; }
+    n += (size_t)w;
+
+    if (seq >= 0) {  // burst sample: session sequence + elapsed time
+        w = snprintf(payload + n, sizeof(payload) - n, ",\"seq\":%ld,\"elapsed_ms\":%.1f",
+                     (long)seq, elapsedMs);
+        if (w < 0 || (size_t)w >= sizeof(payload) - n) { logln("[mqtt] reflect aborted: overflow"); return false; }
+        n += (size_t)w;
+    }
+    w = snprintf(payload + n, sizeof(payload) - n, "}");
     if (w < 0 || (size_t)w >= sizeof(payload) - n) { logln("[mqtt] reflect aborted: overflow"); return false; }
     n += (size_t)w;
 
@@ -352,36 +405,73 @@ static bool mqttPublishReflect(const ReflectReading& r, const char* reqId, const
 bool reflectBusy() { return reflectState == REFLECT_MEASURING; }
 
 void reflectLoop() {
-    if (!mqttConnected()) return;
+    // Disconnected: run LOCAL cleanup only. We can't publish; onConnected() re-sends the
+    // retained state on reconnect. Abort any in-flight measurement so the LED can't stay ON.
+    if (!mqttConnected()) {
+        if (reflectState == REFLECT_MEASURING) {
+            reflectAbort();               // LED off; reset both state machines
+            reflectState = REFLECT_IDLE;
+            burstActive  = false;
+        }
+        return;                           // don't accept new cmds while offline
+    }
 
-    if (cmdPending) {            // drain one queued command per tick
+    if (cmdPending) {                     // drain one queued command per tick
         cmdPending = false;
         handleReflectCmd(pendRaw);
     }
 
-    // Phase 4b1: advance the non-blocking dark→LED→lit read. (4b2 will publish the full
-    // dark/lit/net to the spectrum topic here; for now we log it and ack via reflect/result.)
-    if (reflectState == REFLECT_MEASURING) {
+    if (reflectState != REFLECT_MEASURING) return;
+
+    // ---- Burst: stream lit samples until the window closes (or the hard cap) ----
+    if (burstActive) {
         ReflectReading rr;
-        ReflectStatus st = reflectPoll(&rr);
+        ReflectStatus st = reflectBurstPoll(&rr);
         if (st == REFLECT_DONE) {
-            logf("[reflect] done read_ms=%.0f vis_clear(d=%.0f l=%.0f net=%.0f) sat=%d leak=%d "
-                 "| nir=%s n810(d=%.0f l=%.0f net=%.0f)\n",
-                 rr.read_ms, rr.dark[8], rr.lit[8], rr.net[8], (int)rr.saturated, (int)rr.ambient_leak,
-                 rr.nir_status, rr.nir_dark[4], rr.nir_lit[4], rr.nir_net[4]);
-            mqttPublishReflect(rr, curReqId, curPlant);  // full dark/lit/net -> spectrum topic
+            uint32_t elapsed = millis() - burstStartMs;
+            if (!mqttPublishReflect(rr, curReqId, curPlant, burstSeq, (float)elapsed)) burstFailCount++;
+            burstSeq++;
+            if (millis() >= burstDeadline || burstSeq >= BURST_MAX_SAMPLES) {
+                reflectBurstEnd();
+                reflectState = REFLECT_IDLE;
+                burstActive  = false;
+                publishReflectState();    // idle
+                publishReflectResult(curReqId, curPlant, "done", "burst", burstSeq, burstFailCount);
+            } else {
+                reflectBurstNext();       // kick the next lit read
+            }
+        } else if (st == REFLECT_TIMEOUT || st == REFLECT_NA) {
+            reflectBurstEnd();
             reflectState = REFLECT_IDLE;
-            publishReflectResult(curReqId, curPlant, "done", "measured");
+            burstActive  = false;
             publishReflectState();
-        } else if (st == REFLECT_TIMEOUT) {
-            reflectState = REFLECT_IDLE;
-            publishReflectResult(curReqId, curPlant, "error", "timeout");
-            publishReflectState();
-        } else if (st == REFLECT_NA) {
-            reflectState = REFLECT_IDLE;
-            publishReflectResult(curReqId, curPlant, "error", "no_sensor");
-            publishReflectState();
+            publishReflectResult(curReqId, curPlant, "error",
+                                 st == REFLECT_NA ? "no_sensor" : "timeout", burstSeq, burstFailCount);
         }
         // REFLECT_BUSY: keep polling next iteration
+        return;
     }
+
+    // ---- One-shot (unchanged): a single dark/lit + AS7263 ----
+    ReflectReading rr;
+    ReflectStatus st = reflectPoll(&rr);
+    if (st == REFLECT_DONE) {
+        logf("[reflect] done read_ms=%.0f vis_clear(d=%.0f l=%.0f net=%.0f) sat=%d leak=%d "
+             "| nir=%s n810(d=%.0f l=%.0f net=%.0f)\n",
+             rr.read_ms, rr.dark[8], rr.lit[8], rr.net[8], (int)rr.saturated, (int)rr.ambient_leak,
+             rr.nir_status, rr.nir_dark[4], rr.nir_lit[4], rr.nir_net[4]);
+        mqttPublishReflect(rr, curReqId, curPlant);  // full dark/lit/net -> spectrum topic
+        reflectState = REFLECT_IDLE;
+        publishReflectResult(curReqId, curPlant, "done", "measured");
+        publishReflectState();
+    } else if (st == REFLECT_TIMEOUT) {
+        reflectState = REFLECT_IDLE;
+        publishReflectResult(curReqId, curPlant, "error", "timeout");
+        publishReflectState();
+    } else if (st == REFLECT_NA) {
+        reflectState = REFLECT_IDLE;
+        publishReflectResult(curReqId, curPlant, "error", "no_sensor");
+        publishReflectState();
+    }
+    // REFLECT_BUSY: keep polling next iteration
 }
