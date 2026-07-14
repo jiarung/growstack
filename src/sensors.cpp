@@ -22,8 +22,9 @@ namespace {
 constexpr uint8_t I2C_SDA = 17;
 constexpr uint8_t I2C_SCL = 18;
 
-// Two BH1750s by ADDR strap: floating/low -> 0x23 (primary, plant location -> lux),
-// tied to 3V3 -> 0x5C (reference, no-natural-light spot -> lux_ref).
+// Two BH1750s by ADDR strap: floating/low -> 0x23 (primary, at the plant, lit by
+// the grow lamp -> lux), tied to 3V3 -> 0x5C (reference ~10cm away, same ambient
+// but shielded from the grow lamp -> lux_ref; lux - lux_ref ≈ the lamp's share).
 constexpr uint8_t BH1750_ADDR_MAIN = 0x23;
 constexpr uint8_t BH1750_ADDR_REF  = 0x5C;
 

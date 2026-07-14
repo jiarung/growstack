@@ -10,8 +10,8 @@ struct SensorReading {
     float hum      = NAN;  // %RH
     float pressure = NAN;  // hPa
     float gas      = NAN;  // kOhm
-    float lux      = NAN;  // lux      — primary BH1750 @ 0x23 (plant location)
-    float lux_ref  = NAN;  // lux      — reference BH1750 @ 0x5C (no-natural-light spot)
+    float lux      = NAN;  // lux      — primary BH1750 @ 0x23 (plant location, lit by the grow lamp)
+    float lux_ref  = NAN;  // lux      — reference BH1750 @ 0x5C (same spot ~10cm away, shielded from the grow lamp → ambient only; lux - lux_ref ≈ the lamp's contribution)
 
     bool tempValid     = false;
     bool humValid      = false;
