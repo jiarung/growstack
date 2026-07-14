@@ -18,6 +18,7 @@ import time
 from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 
+import aiohttp
 import aiomqtt
 from kasa import Credentials, Discover
 
@@ -30,6 +31,13 @@ _start_min = int(os.getenv("LIGHT_WINDOW_START_MIN", "480"))    # 08:00
 _end_min = int(os.getenv("LIGHT_WINDOW_END_MIN", "1110"))       # 18:30
 ON_START = dtime(_start_min // 60, _start_min % 60)  # only turn ON within [ON_START, HARD_OFF)
 HARD_OFF = dtime(_end_min // 60, _end_min % 60)      # at/after this → force OFF regardless of lux
+# Dark-day extension: on days whose accumulated DLI is low, keep supplementing
+# past HARD_OFF until EXTEND_END (a later cap). Extends only the light window,
+# not the deadman gate. DLI comes from InfluxDB (survives restarts, reuses the
+# panel's computation); a failed query just means "don't extend".
+_extend_min = int(os.getenv("LIGHT_EXTEND_END_MIN", "1230"))   # 20:30
+EXTEND_END = dtime(_extend_min // 60, _extend_min % 60)
+DLI_EXTEND_BELOW = float(os.getenv("DLI_EXTEND_BELOW", "1.5"))  # mol·m⁻²·day⁻¹
 MIN_HOLD = 5 * 60        # after a switch, hold ≥ this (matches MANUAL_HOLD; lamp may raise own lux)
 STALE = 5 * 60           # lux older than this → fail safe OFF (dead sensor)
 TICK = 60                # decision cadence, seconds
@@ -37,12 +45,18 @@ MANUAL_HOLD = 5 * 60     # an external cmd suppresses auto for this long
 
 # ---- env ----
 LOC = os.getenv("LIGHT_LOCATION", "livingroom")
-TZ = ZoneInfo(os.getenv("LIGHT_TZ", "Asia/Taipei"))
+TZ_NAME = os.getenv("LIGHT_TZ", "Asia/Taipei")
+TZ = ZoneInfo(TZ_NAME)
 SENSOR = os.getenv("LIGHT_SENSOR_DEVICE", "sensor-01")
 MQTT_HOST = os.getenv("MQTT_HOST", "mosquitto")
 TAPO_IP = os.getenv("TAPO_IP", "")
 TAPO_EMAIL = os.getenv("TAPO_EMAIL", "")
 TAPO_PASSWORD = os.getenv("TAPO_PASSWORD", "")
+# InfluxDB read (for the dark-day DLI check) — token/org/bucket from .env
+INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
+INFLUX_ORG = os.getenv("DOCKER_INFLUXDB_INIT_ORG", "monitor-air")
+INFLUX_BUCKET = os.getenv("DOCKER_INFLUXDB_INIT_BUCKET", "sensors")
+INFLUX_TOKEN = os.getenv("DOCKER_INFLUXDB_INIT_ADMIN_TOKEN", "")
 
 TELEM_TOPIC = f"monitor-air/{SENSOR}/telemetry"
 CMD_TOPIC = f"monitor-air/{LOC}/light/cmd"
@@ -50,14 +64,15 @@ STATE_TOPIC = f"monitor-air/{LOC}/light/state"
 AVAIL_TOPIC = f"monitor-air/{LOC}/light/availability"
 
 
-def decide(lux, lux_at, now, current):
+def decide(lux, lux_at, now, current, hard_off=HARD_OFF):
     """Desired 'ON'/'OFF'. Pure: window + hysteresis + staleness.
 
-    MIN_HOLD and MANUAL_HOLD are enforced by the caller, not here.
+    `hard_off` is the window's end for this call — normally HARD_OFF, but the
+    caller passes EXTEND_END on dark days. MIN_HOLD/MANUAL_HOLD enforced by caller.
     """
     cur = "ON" if current == "ON" else "OFF"
     t = now.time()                         # naive local wall time
-    in_window = ON_START <= t < HARD_OFF
+    in_window = ON_START <= t < hard_off
     if lux is None or (now.timestamp() - lux_at) > STALE:
         # sensor dropout: this environment is light-deficient, so inside the
         # window we HOLD an already-on light rather than fail it off; only fail
@@ -70,6 +85,46 @@ def decide(lux, lux_at, now, current):
     if lux > LUX_OFF_ABOVE:
         return "OFF"
     return cur                             # hysteresis band → hold last state
+
+
+async def todays_dli():
+    """Today's accumulated DLI (mol·m⁻²·day⁻¹) for the sensor device, from
+    InfluxDB — same lux/54 integral the Grafana DLI panel uses. Returns None on
+    any error (caller then does not extend). Queried from the DB rather than
+    accumulated in-process so it survives service restarts."""
+    if not INFLUX_TOKEN:
+        return None
+    flux = (
+        'import "timezone"\n'
+        f'option location = timezone.location(name: "{TZ_NAME}")\n'
+        f'from(bucket: "{INFLUX_BUCKET}")\n'
+        '  |> range(start: -25h)\n'
+        '  |> filter(fn: (r) => r._measurement == "air" and r._field == "lux"'
+        f' and r.device == "{SENSOR}")\n'
+        '  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n'
+        '  |> aggregateWindow(every: 1d, fn: (tables=<-, column) =>'
+        ' tables |> integral(unit: 1s), createEmpty: false)\n'
+        '  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n'
+        '  |> last()'
+    )
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                f"{INFLUX_URL}/api/v2/query", params={"org": INFLUX_ORG}, data=flux,
+                headers={"Authorization": f"Token {INFLUX_TOKEN}",
+                         "Content-Type": "application/vnd.flux",
+                         "Accept": "application/csv"},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                text = await resp.text()
+        data = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
+        if len(data) < 2:                  # header + at least one data row
+            return None
+        vi = data[0].split(",").index("_value")
+        return float(data[-1].split(",")[vi])
+    except Exception as e:
+        print(f"DLI query failed: {e}", flush=True)
+        return None
 
 
 # ---- Tapo plug (the only code that knows about the hardware) ----
@@ -161,11 +216,30 @@ async def run():
                         await drive(tgt, "manual", client)
 
         async def tick():
+            ext = {"decided": None, "day": None}   # per-day dark-day extension decision
             while True:
                 now = time.time()
+                now_local = datetime.now(TZ)
+                t = now_local.time()
+
+                # dark-day extension: once we enter [HARD_OFF, EXTEND_END), resolve
+                # (one InfluxDB query) whether today's DLI is low → extend to EXTEND_END
+                today = now_local.date()
+                if ext["day"] != today:
+                    ext.update(decided=None, day=today)
+                hard_off = HARD_OFF
+                if HARD_OFF <= t < EXTEND_END and ext["decided"] is None:
+                    dli = await todays_dli()
+                    if dli is not None:                       # None → retry next tick
+                        ext["decided"] = dli < DLI_EXTEND_BELOW
+                        print(f"[extend] DLI so far {dli:.2f} → "
+                              f"{'extend to '+EXTEND_END.strftime('%H:%M') if ext['decided'] else 'off at '+HARD_OFF.strftime('%H:%M')}",
+                              flush=True)
+                if ext["decided"]:
+                    hard_off = EXTEND_END
+
                 if now >= st["manual_until"] and now - st["last_switch"] >= MIN_HOLD:
-                    want = decide(st["lux"], st["lux_at"], datetime.now(TZ),
-                                  st["current"])
+                    want = decide(st["lux"], st["lux_at"], now_local, st["current"], hard_off)
                     await drive(want, "auto", client)
                 await asyncio.sleep(TICK)
 
@@ -173,9 +247,9 @@ async def run():
 
 
 def selftest():
-    def at(h, m, lux, cur="OFF", age=10):
+    def at(h, m, lux, cur="OFF", age=10, ho=HARD_OFF):
         now = datetime(2026, 6, 25, h, m, tzinfo=TZ)
-        return decide(lux, now.timestamp() - age, now, cur)
+        return decide(lux, now.timestamp() - age, now, cur, ho)
 
     assert at(12, 0, 50) == "ON", "dark@noon (<5000) → ON"
     assert at(12, 0, 4300) == "ON", "lux 4300 (<5000) in window → ON (post-sun re-on)"
@@ -199,6 +273,12 @@ def selftest():
     assert decide(None, open_t.timestamp(), open_t, "ON") == "ON", "dropout+ON at 08:00 (incl.) → hold ON"
     close_t = datetime(2026, 6, 25, 18, 30, tzinfo=TZ)
     assert decide(None, close_t.timestamp(), close_t, "ON") == "OFF", "dropout+ON at 18:30 (excl.) → OFF"
+    # dark-day extension: caller passes EXTEND_END (20:30) as hard_off
+    ext = dtime(20, 30)
+    assert at(19, 0, 50) == "OFF", "19:00 past base 18:30 (normal day) → OFF"
+    assert at(19, 0, 50, ho=ext) == "ON", "19:00 within extended 20:30 window + dark → ON"
+    assert at(20, 30, 50, ho=ext) == "OFF", "20:30 extended hard-off → OFF"
+    assert at(19, 0, 20000, ho=ext) == "OFF", "19:00 extended but bright (>15000) → OFF"
     print("selftest OK")
 
 
