@@ -29,6 +29,7 @@ struct SpectrumReading {
     float f590 = NAN, f630 = NAN, f680 = NAN;
     float clear = NAN, nir = NAN;
     float read_ms = NAN;  // how long the (blocking) read took — a bus-health signal
+    bool saturated = false;  // a channel hit the ADC ceiling → PPFD sum untrustworthy
     bool valid = false;
 };
 

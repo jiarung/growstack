@@ -144,6 +144,12 @@ constexpr uint32_t REFLECT_PHASE_TIMEOUT_MS = 2500; // deadline for BOTH sensors
 constexpr uint16_t SAT_LEVEL                = 65000;// near the 16-bit ADC ceiling
 constexpr uint16_t AMBIENT_LEAK_CLEAR       = 2000; // dark clear above this = ambient leaking in
 
+// The AS7341 gain register is shared, so each read path sets its OWN gain before starting
+// integration: ambient daylight needs a LOW gain (64x saturates by ~10k lux); reflect's close
+// LED wants 64x. 4x gives ~16x headroom over the 64x saturation point (~160k lux) for full sun.
+constexpr as7341_gain_t AMBIENT_GAIN = AS7341_GAIN_4X;
+constexpr as7341_gain_t REFLECT_GAIN = AS7341_GAIN_64X;
+
 // Dual-sensor reflect: a dark phase then a lit phase. The AS7341 (visible, primary) is read
 // NON-blocking (start/poll/get). The AS7263 (NIR, best-effort) is read with the library's
 // BLOCKING takeMeasurements() at the correct LED state — its non-blocking mode returned stale
@@ -178,6 +184,7 @@ bool readNirBlocking(uint16_t* buf) {
 bool reflectStart() {
     if (!as7341Ok) { rphase = RP_IDLE; return false; }  // no visible sensor -> can't measure
     rStart = millis();
+    as7341.setGain(REFLECT_GAIN);         // reclaim 64x from ambient's low gain
     as7341.enableLED(false);              // dark: LED off (both sensors)
     nirDarkOk = readNirBlocking(nirDark); // AS7263 dark (blocking, LED off)
     as7341.startReading();                // AS7341 dark (non-blocking)
@@ -251,6 +258,7 @@ uint32_t bSampleStart = 0;   // current lit read start (for read_ms)
 
 bool reflectBurstStart() {
     if (!as7341Ok) { bphase = BURST_IDLE; return false; }
+    as7341.setGain(REFLECT_GAIN);   // reclaim 64x from ambient's low gain
     as7341.enableLED(false);   // dark0: LED off
     as7341.startReading();
     bphase = BURST_DARK0;
@@ -324,6 +332,7 @@ SpectrumReading spectrumRead() {
     // is a hardening item (matters mainly if the bus wedges or for reflectance).
     // Time it: a creeping read_ms is an early warning of a degrading I2C connection.
     uint16_t ch[12];
+    as7341.setGain(AMBIENT_GAIN);   // low gain: daylight would saturate reflect's 64x
     uint32_t t0 = millis();
     bool ok = as7341.readAllChannels(ch);
     s.read_ms = (float)(millis() - t0);
@@ -333,6 +342,8 @@ SpectrumReading spectrumRead() {
     s.f415 = ch[0];  s.f445 = ch[1];  s.f480 = ch[2];  s.f515 = ch[3];
     s.f555 = ch[6];  s.f590 = ch[7];  s.f630 = ch[8];  s.f680 = ch[9];
     s.clear = ch[10]; s.nir = ch[11];
+    // Any clipped channel corrupts the PPFD sum — flag it so downstream doesn't trust the value.
+    for (int i = 0; i < 10; i++) if (ch[CH10[i]] >= SAT_LEVEL) s.saturated = true;
     s.valid = true;
     return s;
 }

@@ -322,9 +322,9 @@ bool mqttPublishSpectrum(const SpectrumReading& s) {
     int n = snprintf(payload, sizeof(payload),
         "{\"mode\":\"ambient\",\"f415\":%.1f,\"f445\":%.1f,\"f480\":%.1f,\"f515\":%.1f,"
         "\"f555\":%.1f,\"f590\":%.1f,\"f630\":%.1f,\"f680\":%.1f,\"clear\":%.1f,\"nir\":%.1f,"
-        "\"spectrum_read_ms\":%.1f}",
+        "\"spectrum_read_ms\":%.1f,\"saturated\":%.1f}",
         s.f415, s.f445, s.f480, s.f515, s.f555, s.f590, s.f630, s.f680, s.clear, s.nir,
-        s.read_ms);
+        s.read_ms, s.saturated ? 1.0 : 0.0);
     if (n < 0 || (size_t)n >= sizeof(payload)) {
         logln("[mqtt] spectrum publish aborted: payload overflow");
         return false;
