@@ -13,11 +13,13 @@ BH1750**去交叉校準 AS7341 光譜。搭配 `calibrate-ppfd.sh` 使用。
 
 ## 韌體設定(已查好 — staging-01 的 AS7341)
 
-- Gain = **64×**、ATIME = 100、ASTEP = 999 → 積分時間 ≈ **280.78 ms**
-- ADC 滿格(飽和)= **65535** counts
-- 這組設定的 datasheet 交叉檢查 CAL = **0.00023336**
-  (面板現在的占位值 `0.005` 高了約 21 倍 → 面板目前把 PPFD 高估約 21 倍;
-  日光 fit 才是最終仲裁,但預期 CAL 大約落在 2e-4 量級。)
+- **ambient 讀取 Gain = 4×**(韌體 c9e0690 起,和 reflect 的 64× 分開;64× 會被
+  日光爆表)、ATIME = 100、ASTEP = 999 → 積分時間 ≈ **280.78 ms**
+- ADC 滿格(飽和)= **65535** counts;payload 帶 `saturated` 旗標
+- 這組設定(gain 4×)的 datasheet 交叉檢查 CAL = **0.0037337**
+- **面板已校準完成:`CAL = 0.0017469`**(2026-07-16 日光 fit,見「判讀結果」)。
+  datasheet 0.0037 vs 日光 0.0017 差 ~2×,已解釋(BH1750 比 Photone 低 ~1.4× ×
+  datasheet 法本身 ±2×),非 bug。
 
 ## 感測器佈局(重要)
 
@@ -71,8 +73,9 @@ BH1750**去交叉校準 AS7341 光譜。搭配 `calibrate-ppfd.sh` 使用。
 
 ```bash
 cd ~/monitor-air/broker
-./calibrate-ppfd.sh --device staging-01 --start -90m --gain 64 --tint-ms 280.78
+./calibrate-ppfd.sh --device staging-01 --start -90m --gain 4 --tint-ms 280.78
 # 偏暗/陰天就加:  --lux-min 500
+# 只用單一 gain 的乾淨子窗(中途調過 gain 的話):--start/--stop 框那段
 # 擺法 B(選項加好後): --lux-field lux_ref
 ```
 
@@ -81,10 +84,18 @@ cd ~/monitor-air/broker
 - **CAL(OLS)** ≈ **CAL(中位數)** —— 兩者差異小。
 - **ratio-vs-lux 是平的** —— 真正的驗收關鍵(不能只看 R²)。漂移 > 30%
   → 幾何/光譜被污染 → 重擺、重收。
-- **CAL_daylight 落在 CAL_datasheet(0.00023)的 ~2× 內** —— 兩種獨立方法互相
-  吻合 = 有信心。
-- 然後(伺服器側):把 `CAL` 貼進 PPFD 面板(air.json id 9),並把 DLI 面板從
-  `lux/54` 換成光譜積分。
+- **CAL_daylight 落在 CAL_datasheet(gain 4× → 0.0037)的 ~2× 內** —— 兩種獨立
+  方法互相吻合 = 有信心。(2026-07-16 那次:0.0017 vs 0.0037 = 0.47×,剛出界但
+  已由 BH1750 低估 + datasheet ±2× 解釋。)
+- 然後(伺服器側):把 `CAL` 貼進 PPFD 面板(air.json id 9,**已完成:0.0017469**),
+  並把 DLI 面板從 `lux/54` 換成光譜積分(**尚未做,且需 AS7341 先搬到植物位置**)。
+
+### 首次校準基準(2026-07-16 14:00–15:00,staging-01 陽台,gain 4×)
+- CAL(OLS)=**0.0017469**、CAL(median)=0.0017958(差 2.7%)、R²=0.99、
+  ratio drift 9%、lux 604–7121、60/60 分鐘保留。
+- 教訓:整段窗前半在 64× 爆表 + 中途手調 gain → 必須限縮到 settle 後的**單一
+  gain 乾淨子窗**才過驗收。光譜 telemetry 尚未帶 gain 欄位,無法事後回推 →
+  見 `SENSOR-DRIFT-DESIGN.md`。
 
 ## 注意事項
 
