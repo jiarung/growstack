@@ -211,6 +211,33 @@
           "query": "from(bucket: \"sensors\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"reflect\" and r._field =~ /^net_f[0-9]+$/)\n  |> group(columns: [\"plant\", \"_field\"])\n  |> last()\n  |> group()\n  |> pivot(rowKey: [\"_field\"], columnKey: [\"plant\"], valueColumn: \"_value\")\n  |> sort(columns: [\"_field\"])"
         }
       ]
+    },
+    {
+      "id": 12,
+      "title": "PPFD — spectrum vs Photone ground-truth (livingroom)",
+      "type": "timeseries",
+      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 54 },
+      "description": "Spectrum-derived PPFD (line, CAL=0.0017469) with Photone ground-truth readings overlaid as points (coloured by source). A Photone dot sitting off the line = the spectrum CAL's error at that light. Empty until Photone readings are recorded (planned record-photone.sh; see broker/PHOTONE-CAL-PLAN.md).",
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": false } }, "overrides": [ { "matcher": { "id": "byFrameRefID", "options": "B" }, "properties": [ { "id": "custom.drawStyle", "value": "points" }, { "id": "custom.pointSize", "value": 12 } ] } ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "CAL = 0.0017469\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and r.device == \"livingroom\" and (r._field == \"f415\" or r._field == \"f445\" or r._field == \"f480\" or r._field == \"f515\" or r._field == \"f555\" or r._field == \"f590\" or r._field == \"f630\" or r._field == \"f680\"))\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.f415 and exists r.f445 and exists r.f480 and exists r.f515 and exists r.f555 and exists r.f590 and exists r.f630 and exists r.f680)\n  |> map(fn: (r) => ({ _time: r._time, _value: CAL * (r.f415/55.0*415.0 + r.f445/110.0*445.0 + r.f480/210.0*480.0 + r.f515/390.0*515.0 + r.f555/590.0*555.0 + r.f590/840.0*590.0 + r.f630/1350.0*630.0 + r.f680/1070.0*680.0) }))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"spectrum PPFD\")" },
+        { "refId": "B", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"photone\" and r._field == \"ppfd\" and r.device == \"livingroom\")\n  |> keep(columns: [\"_time\", \"_value\", \"source\"])\n  |> group(columns: [\"source\"])\n  |> yield(name: \"Photone\")" }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Photone CAL check — ground-truth vs sensors (per reading)",
+      "type": "table",
+      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 62 },
+      "description": "Each Photone reading vs the co-timed sensor values stored with it (no dashboard-side time-join): photone / spectrum PPFD / lux÷54, plus k_spec = photone/spectrum (the spectrum CAL correction for that light) and k_lux = photone/(lux÷54). daylight k should be ~1 (validates CAL); lamp k_spec is the unresolved lamp correction. n = paired sample count. Empty until Photone readings are recorded (planned record-photone.sh; see broker/PHOTONE-CAL-PLAN.md).",
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 2, "custom": { "align": "auto" } }, "overrides": [] },
+      "options": { "showHeader": true },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r._measurement == \"photone\" and (r._field == \"ppfd\" or r._field == \"spec_ppfd_at\" or r._field == \"lux_at\" or r._field == \"n\" or r._field == \"paired\"))\n  |> pivot(rowKey: [\"_time\", \"source\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({ _time: r._time, source: r.source, photone: r.ppfd, spectrum: r.spec_ppfd_at, lux_div54: r.lux_at / 54.0, k_spec: r.ppfd / r.spec_ppfd_at, k_lux: r.ppfd / (r.lux_at / 54.0), n: r.n, paired: r.paired }))\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> keep(columns: [\"_time\", \"source\", \"photone\", \"spectrum\", \"lux_div54\", \"k_spec\", \"k_lux\", \"n\", \"paired\"])" }
+      ]
     }
   ]
 }

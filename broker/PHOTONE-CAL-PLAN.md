@@ -54,7 +54,7 @@ CAL 和修正模型以後**都會變**。若每筆只存「當下算出來的光
 每筆快照(±2 分鐘窗):
 - **AS7341 原始 8 通道均值**(`f415`…`f680`,全部寫 **float**)→ 未來換 CAL、換 Rᵢ 除數、甚至換公式,都能從原始 counts 重算。最保險的一層,量極小值得。
 - **採集設定**:`gain`(tag)**+ 積分時間** `atime`/`astep`(或 `tint_ms`)—— counts 同時依賴 gain **和積分時間**(這正是先前校準踩過的洞),只存 gain 不夠。
-- `spec_ppfd_at`、`lux_at`、`lux_ref_at`(當時感測值)、`cal_at`(當下 CAL,provenance)、`n`/窗品質標記(說明這些是窗均值)、`paired`(bool)。
+- `spec_ppfd_at`、`lux_at`、`lux_ref_at`(當時感測值)、`cal_at`(當下 CAL,provenance)、`n`/窗品質標記(說明這些是窗均值)、`paired`(**float 1.0/0.0**,非 bool —— 全欄 float 才不會和 pivot 型別衝突)。
 - **append-only CSV 副本** `broker/photone-log.csv`(人類可讀、可匯出、DB 掛了也在)。
 - bucket **永久保留**(retention=0,已是)。
 
@@ -65,6 +65,7 @@ CAL 和修正模型以後**都會變**。若每筆只存「當下算出來的光
 ## 3. Grafana 展示
 - **疊在 PPFD 面板(id 9)**:加第二條 query 把 `photone` ppfd 畫成**純點**(無線、大點、醒目色)→ 真值點坐在感測曲線上,偏差一眼看出。依 device 過濾。**區分 paired / unpaired 點**(空窗那些標不同色)。
 - **新「CAL check」表格面板**:最新 photone 點 + photone/光譜/lux54/k_spec/k_lux + **配對樣本數/窗品質**,依 source 分組。**比值直接讀存好的 `spec_ppfd_at` 等欄位算,不做 dashboard 端 time-join**(時間戳會歪)。一眼看:日光 k≈1 嗎?k_lamp 多少?
+  - ⚠️ unpaired(空窗)點若**省略** `spec_ppfd_at`/`lux_at`,Flux `map()` 會 label-missing 報錯 → CLI 對 unpaired 要寫 **sentinel**(如 -1),或表格 query 先 `filter(fn: (r) => r.paired == 1.0)`。(codex)
 - (之後選配)stat 面板顯示當前 `k_daylight`、`k_lamp`。
 
 ## 4. 套用修正(payoff,之後的 phase,現在不做)
