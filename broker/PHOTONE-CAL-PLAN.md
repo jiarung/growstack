@@ -81,9 +81,15 @@ CAL 和修正模型以後**都會變**。若每筆只存「當下算出來的光
 - **daylight 的 k 要跨天/跨亮度多點才可信**(不能單一天一個點就信),再談自動改 CAL。
 
 ## 落地順序
-1. `record-photone.sh`(寫入 + 三方對照)← 量完當晚就能用
-2. Grafana 疊點 + CAL check 表
-3. (資料夠後)決定修正模型 → 套用
+1. ✅ **`record-photone.sh`**(寫入 + co-timed 快照 + 三方對照 + CSV 稽核)—— 已實作、
+   兩輪 codex review、回歸+實寫測試通過。`--dry-run` / `--self-check` 可用。
+   CSV `broker/photone-log.csv` 為執行期資料,已 gitignore。
+2. ✅ **Grafana 疊點(id 12)+ CAL check 表(id 13)** —— 已上線(commit 1936587)。
+3. ⏳ (資料夠後)決定修正模型 → 套用。**需真 Photone 資料**(手動量測),現在不做。
+
+**現在可用**:天黑後燈下量一筆 →
+`./record-photone.sh --ppfd <值> --source lamp`(要開燈可叫 Claude);日光下對照
+`--source daylight`。點會出現在面板 id 12/13。
 
 ## 相關
 - `PPFD-CALIBRATION.md`(CAL 由來)、`SENSOR-DRIFT-DESIGN.md`(採集設定缺口)、記憶 `ppfd-calibration-status`(燈下 0.48× 未解、下一步 Photone)。

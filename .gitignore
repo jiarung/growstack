@@ -20,3 +20,6 @@ tasks/
 
 # Rendered from rules.yaml.tmpl by broker/start.sh (bakes LIGHT_WINDOW_* from .env)
 broker/grafana/provisioning/alerting/rules.yaml
+
+# Photone CAL recording audit log (runtime data, per-host)
+broker/photone-log.csv
