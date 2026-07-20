@@ -30,7 +30,8 @@ REQUIRED:
 OPTIONAL:
   --lux <v>         Photone lux reading (stored for BH1750 cross-check)
   --device <name>   sensor location to pair with        (default: livingroom)
-  --at <t>          when taken: now | -8m | RFC3339 UTC (…Z); window ±2m  (default: now)
+  --at <t>          when taken (window ±2m): now | -8m | "YYYY-MM-DD HH:MM" (Taipei)
+                    | RFC3339 with Z (UTC). bare/no-zone time = Taipei.  (default: now)
   --note "<text>"   free note stored on the point
   --gain <str>      AS7341 ambient gain tag              (default: 4x)
   --tint-ms <v>     AS7341 integration time, ms          (default: 280.78)
@@ -138,12 +139,15 @@ dry = os.environ["DRY_RUN"] == "1"
 
 # ---------- resolve --at → an instant (UTC) and a ±window range ----------
 at_raw = os.environ["AT"].strip()
+LOCAL_TZ = timezone(timedelta(hours=8))   # Asia/Taipei (no DST) — a bare --at time is LOCAL, not UTC
 def parse_at(s):
     if s == "now": return datetime.now(timezone.utc)
     if s and s[0] == "-" and s[-1] in "smh":   # -30m / -2h / -90s relative to now
         n = float(s[1:-1]); unit = {"s":1,"m":60,"h":3600}[s[-1]]
         return datetime.now(timezone.utc) - timedelta(seconds=n*unit)
-    return datetime.fromisoformat(s.replace("Z","+00:00")).astimezone(timezone.utc)
+    dt = datetime.fromisoformat(s.replace("Z","+00:00"))
+    if dt.tzinfo is None: dt = dt.replace(tzinfo=LOCAL_TZ)   # "2026-07-20 20:30" → Taipei, not UTC
+    return dt.astimezone(timezone.utc)
 try: at = parse_at(at_raw)
 except Exception as e: die(f"--at not understood ({at_raw!r}): {e}")
 start = (at - timedelta(minutes=win)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -211,7 +215,9 @@ else:  # unpaired: sentinels (-1) so the Grafana table's map() never label-error
     spec_at = lux_at = ref_at = -1.0; chan_at = {c: -1.0 for c in CH}; k_spec = k_lux = float("nan")
 
 # ---------- report ----------
-print(f"Photone reading @ {at.strftime('%Y-%m-%dT%H:%M:%SZ')}  device={device}  source={source}  gain={gain}")
+print(f"Photone reading @ {at.strftime('%Y-%m-%dT%H:%M:%SZ')} "
+      f"({at.astimezone(LOCAL_TZ).strftime('%Y-%m-%d %H:%M')} Taipei)  "
+      f"device={device}  source={source}  gain={gain}")
 print(f"  window ±{win:g}m: {n} spectrum sample(s), {len(lux_samples)} lux sample(s)"
       + (f", lux {min(lux_samples):.0f}–{max(lux_samples):.0f} (CV {lux_cv*100:.0f}%)" if lux_samples else ""))
 for w in warns: print(f"  ⚠ {w}")
