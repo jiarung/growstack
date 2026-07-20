@@ -12,6 +12,45 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+usage() {
+  cat <<'EOF'
+record-photone.sh — record a calibrated Photone PPFD ground-truth reading into
+InfluxDB (measurement `photone`), paired with the co-timed AS7341 spectrum +
+BH1750 lux, and print photone / spectrum PPFD / lux÷54 with k_spec & k_lux.
+
+USAGE:
+  ./record-photone.sh --ppfd <µmol/m²/s> --source <daylight|lamp|mixed> [options]
+  ./record-photone.sh --self-check          # internal math self-test (no InfluxDB)
+
+REQUIRED:
+  --ppfd <v>        Photone PPFD reading (µmol/m²/s)
+  --source <s>      light condition: daylight | lamp | mixed
+                    (mixed = diagnostic only — k is not a stable correction)
+
+OPTIONAL:
+  --lux <v>         Photone lux reading (stored for BH1750 cross-check)
+  --device <name>   sensor location to pair with        (default: livingroom)
+  --at <t>          when taken: now | -8m | RFC3339 UTC (…Z); window ±2m  (default: now)
+  --note "<text>"   free note stored on the point
+  --gain <str>      AS7341 ambient gain tag              (default: 4x)
+  --tint-ms <v>     AS7341 integration time, ms          (default: 280.78)
+  --cal <v>         CAL used to compute spectrum PPFD    (default: 0.0017469)
+  --window <min>    pairing half-window, minutes         (default: 2)
+  --dry-run         query + preview, write nothing (still needs a DB token)
+  --self-check      run the math self-test and exit (no InfluxDB, no token)
+  -h, --help        this help
+
+EXAMPLES:
+  ./record-photone.sh --ppfd 42 --source lamp --lux 2100 --note "cactus-03 canopy"
+  ./record-photone.sh --ppfd 260 --source daylight --lux 14000 --note "midday, lamp off"
+  ./record-photone.sh --ppfd 42 --source lamp --at -8m
+  ./record-photone.sh --ppfd 42 --source lamp --dry-run
+
+Writes one point + appends broker/photone-log.csv (gitignored). Unpaired/unstable
+windows store -1 sentinels. Design: broker/PHOTONE-CAL-PLAN.md.
+EOF
+}
+
 # ---- defaults / args ----
 PPFD=""; SOURCE=""; LUX=""; DEVICE="livingroom"; AT="now"; NOTE=""
 GAIN="4x"; TINT_MS="280.78"; CAL="0.0017469"; WINDOW_MIN="2"; DRY_RUN=0; SELF_CHECK=0
@@ -29,7 +68,8 @@ while [ $# -gt 0 ]; do
     --window)    WINDOW_MIN="${2:?--window needs a value}"; shift 2;;
     --dry-run)   DRY_RUN=1; shift;;
     --self-check) SELF_CHECK=1; shift;;
-    *) echo "unknown arg: $1" >&2; exit 1;;
+    -h|--help)   usage; exit 0;;
+    *) echo "unknown arg: $1" >&2; echo "try --help" >&2; exit 1;;
   esac
 done
 
