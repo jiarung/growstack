@@ -238,6 +238,28 @@
       "targets": [
         { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r._measurement == \"photone\" and (r._field == \"ppfd\" or r._field == \"spec_ppfd_at\" or r._field == \"lux_at\" or r._field == \"n\" or r._field == \"paired\"))\n  |> pivot(rowKey: [\"_time\", \"source\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({ _time: r._time, source: r.source, photone: r.ppfd, spectrum: r.spec_ppfd_at, lux_div54: r.lux_at / 54.0, k_spec: r.ppfd / r.spec_ppfd_at, k_lux: r.ppfd / (r.lux_at / 54.0), n: r.n, paired: r.paired }))\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> keep(columns: [\"_time\", \"source\", \"photone\", \"spectrum\", \"lux_div54\", \"k_spec\", \"k_lux\", \"n\", \"paired\"])" }
       ]
+    },
+    {
+      "id": 14,
+      "title": "Outdoor weather — rain / cloud / solar (板橋, Open-Meteo)",
+      "type": "timeseries",
+      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 70 },
+      "description": "Hourly local outdoor weather from Open-Meteo (新北板橋). Precipitation (mm, bars) + cloud cover (%) on the left; shortwave solar radiation (W/m², right axis) is the outdoor driver of indoor DLI. Rainy/cloudy hours → low solar → low DLI — compare against the DLI panels above.",
+      "fieldConfig": {
+        "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 15, "spanNulls": true } },
+        "overrides": [
+          { "matcher": { "id": "byFrameRefID", "options": "A" }, "properties": [ { "id": "custom.drawStyle", "value": "bars" }, { "id": "unit", "value": "lengthmm" }, { "id": "custom.fillOpacity", "value": 70 } ] },
+          { "matcher": { "id": "byFrameRefID", "options": "B" }, "properties": [ { "id": "unit", "value": "percent" }, { "id": "max", "value": 100 } ] },
+          { "matcher": { "id": "byFrameRefID", "options": "C" }, "properties": [ { "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "radiationflux" } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"precipitation\")\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  |> yield(name: \"precipitation (mm)\")" },
+        { "refId": "B", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"cloud_cover\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"cloud cover (%)\")" },
+        { "refId": "C", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"shortwave_radiation\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"solar (W/m²)\")" }
+      ]
     }
   ]
 }

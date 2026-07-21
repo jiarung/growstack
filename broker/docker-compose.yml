@@ -34,6 +34,9 @@ services:
     environment:
       # single source of truth: map the influx admin token to the name telegraf.conf uses
       INFLUX_TOKEN: ${DOCKER_INFLUXDB_INIT_ADMIN_TOKEN}
+      # Open-Meteo weather poll location (新北板橋 default) — expanded in telegraf.conf
+      WEATHER_LAT: ${WEATHER_LAT:-25.01}
+      WEATHER_LON: ${WEATHER_LON:-121.46}
     volumes:
       - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
     depends_on:
