@@ -14,6 +14,8 @@ static inline bool finiteF(float v) {
 #include <Adafruit_BME680.h>
 #include <Adafruit_AS7341.h>
 #include <AS726X.h>
+#include <HX711.h>
+#include <Preferences.h>
 
 namespace {
 
@@ -39,6 +41,20 @@ bool bh1750Ok = false;     // primary present
 bool bh1750RefOk = false;  // reference present
 bool as7341Ok = false;     // visible spectral present
 bool as7263Ok = false;     // NIR spectral present
+
+HX711 hx711;                              // load cell ADC (weight); NOT on I2C (GPIO DT/SCK)
+constexpr uint8_t HX711_DT = 4, HX711_SCK = 5;
+constexpr uint32_t HX711_STALE_MS = 1000; // no fresh sample for this long -> stale (10 SPS)
+constexpr int HX_N = 24;                  // ~2.4 s window @ 10 SPS (long enough to judge settling)
+long     hxRing[HX_N]   = {0};            // raw counts
+uint32_t hxRingMs[HX_N] = {0};            // per-sample millis() (for the window span)
+int      hxCount = 0, hxIdx = 0;          // filled count + write index
+uint32_t hxLastMs = 0;                    // millis() of the last accepted sample (freshness)
+
+long  hxTare  = 0;                        // raw at zero load (NVS / hx711Tare)
+float hxScale = 1.0f;                     // counts per gram (NVS / hx711Calibrate); 1.0 = uncalibrated
+bool  hxCalibrated = false;
+Preferences hxPrefs;                      // NVS store for tare/scale (survives a cell swap 1kg->5kg)
 
 // BME680 sits at 0x77 on most Adafruit-style modules, 0x76 on some clones.
 bool beginBme() {
@@ -100,6 +116,8 @@ bool sensorsBegin() {
         logln("[sensors] AS7263 NOT found @ 0x49");
     }
 
+    hx711Begin();  // load cell (own GPIOs; no presence check — is_ready() gates reads)
+
     return bmeOk || bh1750Ok || bh1750RefOk || as7341Ok || as7263Ok;
 }
 
@@ -130,6 +148,128 @@ SensorReading sensorsRead() {
     }
 
     return r;
+}
+
+// --- HX711 (weight) — ready-gated read + windowed grams stats (stability) + NVS calibration -------
+void hx711Begin() {
+    hx711.begin(HX711_DT, HX711_SCK);
+    pinMode(HX711_DT, INPUT_PULLUP);  // bogde leaves DOUT plain INPUT; the pull-up makes a
+                                      // disconnected DT read HIGH (=not ready), not float into garbage
+    hxPrefs.begin("hx711", true);     // read-only load
+    hxTare  = hxPrefs.getLong("tare", 0);
+    hxScale = hxPrefs.getFloat("scale", 1.0f);
+    hxPrefs.end();
+    if (!isfinite(hxScale) || hxScale == 0.0f) hxScale = 1.0f;  // corrupt NVS -> treat as uncalibrated
+    hxCalibrated = (hxScale != 1.0f);
+    logf("[sensors] HX711 begin (DT=%u SCK=%u) tare=%ld scale=%.3f %s\n", HX711_DT, HX711_SCK,
+         hxTare, hxScale, hxCalibrated ? "" : "(UNCALIBRATED: serial 't' then 'c<grams>')");
+}
+
+void hx711Poll() {
+    if (!hx711.is_ready()) return;   // skip until DOUT goes low (a fresh sample is waiting)
+    uint32_t now = millis();
+    hxRing[hxIdx]   = hx711.read();  // one 24-bit read; short now that we're ready
+    hxRingMs[hxIdx] = now;
+    hxIdx = (hxIdx + 1) % HX_N;
+    if (hxCount < HX_N) hxCount++;
+    hxLastMs = now;
+}
+
+static double hxMeanRaw() {          // mean raw over the current buffer (for tare/calibrate)
+    if (hxCount == 0) return 0;
+    double sum = 0;
+    for (int i = 0; i < hxCount; i++) sum += hxRing[i];
+    return sum / hxCount;
+}
+
+static bool hxSamplesReady() {       // enough FRESH samples to tare/calibrate on (else reject)
+    return hxCount >= 8 && (millis() - hxLastMs) <= HX711_STALE_MS;
+}
+
+WeightStats hx711WindowStats() {
+    WeightStats s;
+    s.calibrated = hxCalibrated;
+    s.stale = (hxCount == 0) || (millis() - hxLastMs > HX711_STALE_MS);
+    if (hxCount == 0 || s.stale) return s;   // valid stays false (fail-open)
+
+    float lo = 3.4e38f, hi = -3.4e38f;
+    double sum = 0;
+    uint32_t tMin = 0xFFFFFFFF, tMax = 0;
+    for (int i = 0; i < hxCount; i++) {
+        float g = ((float)hxRing[i] - (float)hxTare) / hxScale;  // grams (= raw when uncal, scale=1)
+        if (g < lo) lo = g;
+        if (g > hi) hi = g;
+        sum += g;
+        if (hxRingMs[i] < tMin) tMin = hxRingMs[i];
+        if (hxRingMs[i] > tMax) tMax = hxRingMs[i];
+    }
+    s.mean_g = (float)(sum / hxCount);
+    s.min_g = lo; s.max_g = hi; s.range_g = hi - lo;
+    s.sample_count = hxCount;
+    s.window_ms = tMax - tMin;
+    s.valid = true;
+    return s;
+}
+
+void hx711Tare() {
+    if (!hxSamplesReady()) { logln("[hx711] tare skipped: not enough fresh samples (let it settle)"); return; }
+    hxTare = lround(hxMeanRaw());
+    hxPrefs.begin("hx711", false);
+    hxPrefs.putLong("tare", hxTare);
+    hxPrefs.end();
+    logf("[hx711] tare = %ld\n", hxTare);
+}
+
+void hx711Calibrate(float g) {
+    if (g <= 0) { logln("[hx711] calibrate needs a positive gram value"); return; }
+    if (!hxSamplesReady()) { logln("[hx711] calibrate skipped: not enough fresh samples (let it settle)"); return; }
+    double net = hxMeanRaw() - (double)hxTare;
+    if (net == 0) { logln("[hx711] calibrate: no load delta (tare empty, then load a known mass)"); return; }
+    hxScale = (float)(net / g);
+    hxCalibrated = true;
+    hxPrefs.begin("hx711", false);
+    hxPrefs.putFloat("scale", hxScale);
+    hxPrefs.end();
+    logf("[hx711] scale = %.4f counts/g (from %.1f g)\n", hxScale, g);
+}
+
+// Bench calibration over the serial monitor: 't' = tare (empty scale), 'c<grams>' = calibrate with a
+// known mass, e.g. 'c500'. Re-run after swapping the load cell (1kg -> 5kg).
+void hx711SerialCmd() {
+    static char buf[16];
+    static int  len = 0;
+    static bool ovf = false;
+    while (Serial.available()) {
+        char c = (char)Serial.read();
+        if (c == '\n' || c == '\r') {
+            if (ovf) logln("[hx711] command too long — ignored");
+            else if (len > 0) {
+                buf[len] = '\0';
+                if (buf[0] == 't')      hx711Tare();
+                else if (buf[0] == 'c') hx711Calibrate(atof(buf + 1));
+                else if (buf[0] == 'i') {   // live I2C scan — bus-health check without rebooting
+                    logln("[i2c] scan (expect 0x24 0x39 0x49 0x3C):");
+                    int found = 0;
+                    for (uint8_t a = 1; a < 127; a++) {
+                        Wire.beginTransmission(a);
+                        if (Wire.endTransmission() == 0) { logf("  found 0x%02X\n", a); found++; }
+                    }
+                    logf("[i2c] %d device(s)\n", found);
+                }
+                else if (buf[0] == 'w') {   // print current window stats (calibration/stability check)
+                    WeightStats s = hx711WindowStats();
+                    logf("[hx711] w=%.1fg range=%.1fg n=%d win=%ums stale=%d cal=%d valid=%d\n",
+                         s.mean_g, s.range_g, s.sample_count, s.window_ms,
+                         (int)s.stale, (int)s.calibrated, (int)s.valid);
+                }
+            }
+            len = 0; ovf = false;
+        } else if (len < (int)sizeof(buf) - 1) {
+            buf[len++] = c;
+        } else {
+            ovf = true;   // line too long -> reject (don't parse a truncated number)
+        }
+    }
 }
 
 namespace {

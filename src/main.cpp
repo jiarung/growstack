@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_system.h>
 
 #include "secrets.h"
 #include "sensors.h"
@@ -30,6 +31,23 @@ static void wifiEnsure() {
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 }
 
+// Why the chip last reset — BROWNOUT points at an undervoltage/supply problem (vs a code PANIC).
+static const char* resetReasonStr() {
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON:   return "power-on";
+        case ESP_RST_EXT:       return "external pin";
+        case ESP_RST_SW:        return "software (esp_restart)";
+        case ESP_RST_PANIC:     return "PANIC (crash/exception)";
+        case ESP_RST_INT_WDT:   return "interrupt watchdog";
+        case ESP_RST_TASK_WDT:  return "task watchdog";
+        case ESP_RST_WDT:       return "other watchdog";
+        case ESP_RST_DEEPSLEEP: return "deep-sleep wake";
+        case ESP_RST_BROWNOUT:  return "BROWNOUT (undervoltage)";
+        case ESP_RST_SDIO:      return "SDIO";
+        default:                return "unknown";
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     // USB-CDC on boot: a reset drops the USB device and the host re-enumerates
@@ -40,6 +58,7 @@ void setup() {
     delay(100);
     Serial.println();  // separate from boot-ROM chatter
     logln("[boot] monitor-air starting");
+    logf("[boot] reset reason: %s\n", resetReasonStr());
 
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
@@ -56,6 +75,8 @@ void loop() {
     wifiEnsure();  // non-blocking reconnect
     mqttLoop();    // pump client + rate-limited MQTT reconnect
     reflectLoop(); // drain reflect/cmd + advance the reflectance state machine
+    hx711Poll();      // non-blocking weight sampling (reads 1 raw when the HX711 is ready)
+    hx711SerialCmd(); // bench calibration: 't' tare, 'c<grams>' calibrate (over the serial monitor)
 
     uint32_t now = millis();
     bool due = (lastPublish == 0) || (now - lastPublish >= PUBLISH_INTERVAL_MS);

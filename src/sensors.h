@@ -40,6 +40,28 @@ bool sensorsBegin();
 // Take a fresh reading. Returns a new value each call (no shared mutable state).
 SensorReading sensorsRead();
 
+// --- HX711 load cell (weight) — NON-blocking, NOT on I2C (own GPIOs DT=4/SCK=5) ----
+// hx711Poll() runs every loop and reads ONE raw only when is_ready() (never the lib's blocking
+// averaging). hx711WindowStats() is the station's stability signal over the recent sample buffer.
+void hx711Begin();
+void hx711Poll();   // call every loop iteration (samples when the HX711 signals ready)
+
+// Windowed stats over the recent sample buffer — the measurement station's stability signal.
+// Weights are grams once calibrated (raw counts if not). Judge "stable" on range_g, not the mean.
+struct WeightStats {
+    float mean_g = NAN, min_g = NAN, max_g = NAN, range_g = NAN;
+    int   sample_count = 0;
+    uint32_t window_ms = 0;   // span of the samples in the buffer
+    bool  stale = true;       // no fresh sample recently (loose lead / dead cell)
+    bool  calibrated = false; // scale set via hx711Calibrate()
+    bool  valid = false;      // false if no samples or stale
+};
+WeightStats hx711WindowStats();
+
+void hx711Tare();             // zero: tare_offset = current mean raw (persisted to NVS)
+void hx711Calibrate(float g); // scale = (mean raw - tare)/g from a known mass (persisted to NVS)
+void hx711SerialCmd();        // bench calibration over serial: 't' = tare, 'c<grams>' = calibrate
+
 // Take a fresh ambient spectral reading (AS7341, LED off). valid=false if no AS7341.
 SpectrumReading spectrumRead();
 
