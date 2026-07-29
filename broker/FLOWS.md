@@ -162,8 +162,9 @@ share one value domain on purpose — that is what lets the two join per plant.
    (4 consumers loaded), Node-RED image rebuilt + volume reset so `station-flow` seeded,
    Grafana picked the panel up on its own. Verified by publishing two copies of one event:
    both acked, exactly one `plant_weight` written, UID resolved to `cactus-01`, the point
-   landed in InfluxDB (test point deleted afterwards). **Still untested with real hardware —
-   a physical tag has not been tapped.**
+   landed in InfluxDB (test points deleted afterwards). **Confirmed on real hardware** the
+   same day: `staging-01` published a genuine weigh at 16:38:36 UTC and it stored as
+   `plant_weight device=staging-01 plant_id=cactus-01 uid=00A8635C weight_g=334.6`.
 3. **Single-file bind mounts are stale, and a restart will not fix them.** Docker binds a
    single-file mount by **inode**, so an editor that writes-new-then-renames silently detaches
    the container from the file. This has already happened to `telegraf.conf`:
@@ -179,6 +180,24 @@ share one value domain on purpose — that is what lets the two join per plant.
    example because the trap will recur. The same trap applies to `node-red/tag-map.json`,
    which is why it must be edited **in place** by `add-tag.sh` and never by a rename-on-save
    editor.
+
+   ⚠️ **git counts as a rename-on-save editor.** `git checkout`, `merge`, `pull` and `reset`
+   all rewrite these two files with fresh inodes. Merging this branch into `main` detached
+   *both* mounts, with identical content — so nothing looked broken, but the next
+   `add-tag.sh` edit would silently never have reached Node-RED. **After any git operation
+   that touches `telegraf/telegraf.conf` or `node-red/tag-map.json`, run:**
+
+   ```bash
+   docker compose up -d --force-recreate telegraf node-red   # keeps the volumes
+
+   # then confirm: the host inode must equal the one the container sees
+   [ "$(stat -c %i telegraf/telegraf.conf)" \
+     = "$(docker exec monitor-air-telegraf stat -c %i /etc/telegraf/telegraf.conf)" ] \
+     && echo "telegraf attached" || echo "telegraf DETACHED"
+   [ "$(stat -c %i node-red/tag-map.json)" \
+     = "$(docker exec monitor-air-nodered stat -c %i /data/tag-map.json)" ] \
+     && echo "node-red attached" || echo "node-red DETACHED"
+   ```
 4. **`docker compose build` fails on this host** — `~/.docker/buildx` is root-owned (from a
    2023 `sudo docker` run), so buildx cannot write its instance dir. Prefix builds with
    `DOCKER_BUILDKIT=0` (legacy builder) or `chown` the directory. This is silent-ish: compose
