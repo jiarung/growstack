@@ -4,6 +4,11 @@ The ESP32-S3 probe (`staging-01`) is an NFC-triggered weight **measurement stati
 committed). This is the **server-side** work: Node-RED resolves the tag → plant identity, acks the device,
 and hands a clean record to InfluxDB via Telegraf. **The ESP stays dumb — it only knows the tag UID.**
 
+> **Status: implemented.** Node-RED flow → `node-red/flows.json` (tab "Measurement station");
+> UID map → `node-red/tag-map.json` (bind-mounted, edit with `./add-tag.sh <uid> <plant-id>`, live —
+> no rebuild); Telegraf consumer + Grafana weight panel added. Import the flow once
+> (`node-red/README.md`), then `docker compose up -d --build`.
+
 ## Flow
 ```
 ESP  ──measure/event_raw──▶  Node-RED  ──measure/ack──▶  ESP   (stops the ESP's retries → OLED "sent")

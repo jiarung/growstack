@@ -464,5 +464,130 @@
   "x": 430,
   "y": 480,
   "wires": []
+ },
+ {
+  "id": "station-flow",
+  "type": "tab",
+  "label": "Measurement station",
+  "disabled": false,
+  "info": "Phase 3 server-side: resolve NFC tag UID -> plant_id, ack the ESP (stops its retries), republish an enriched plant_weight for Telegraf.\n\nThe ESP is at-least-once (same event_id resent up to 5 copies): ack every copy, write once per (dev,event_id) via 60s dedup.\n\nUID map read by the 'file in' node from /data/tag-map.json (git-tracked broker/node-red/tag-map.json, bind-mounted; edit with add-tag.sh, re-read per measurement — no rebuild, no functionExternalModules dependency).\n\nTelegraf subscribes ONLY to plant_weight (never measure/event_raw)."
+ },
+ {
+  "id": "n-evt-in",
+  "type": "mqtt in",
+  "z": "station-flow",
+  "name": "measure/event_raw",
+  "topic": "monitor-air/+/measure/event_raw",
+  "qos": "0",
+  "datatype": "json",
+  "broker": "mqtt-mosquitto",
+  "nl": false,
+  "rap": true,
+  "rh": 0,
+  "inputs": 0,
+  "x": 150,
+  "y": 120,
+  "wires": [
+   [
+    "n-evt-dedup"
+   ]
+  ]
+ },
+ {
+  "id": "n-evt-dedup",
+  "type": "function",
+  "z": "station-flow",
+  "name": "validate + ack + dedup",
+  "func": "// NFC weigh station — step 1: validate, ACK every copy, dedup (write-once).\nconst parts = (msg.topic || '').split('/');   // monitor-air/<dev>/measure/event_raw\nconst dev = parts[1];\nconst p = msg.payload || {};\nconst id = p.event_id, uid = p.uid, w = p.weight_g;\nif (!dev || typeof id !== 'number' || typeof w !== 'number' || typeof uid !== 'string') {\n    node.warn('bad event_raw on ' + msg.topic + ': ' + JSON.stringify(p));\n    return [null, null];\n}\n// Ack first receipt AND retries (idempotent) so the ESP stops retrying ASAP.\nconst ack = { topic: 'monitor-air/' + dev + '/measure/ack', payload: { event_id: id }, qos: 0, retain: false };\n// Dedup on (dev,event_id), ~60s TTL. event_id is session-scoped (resets on reboot);\n// the short window makes cross-reboot repeats a non-issue.\nconst now = Date.now();\nconst seen = flow.get('seen') || {};\nfor (const k in seen) { if (now - seen[k] > 60000) delete seen[k]; }\nconst key = dev + ':' + id;\nif (seen[key]) { flow.set('seen', seen); node.status({fill:'blue',shape:'ring',text:'dup ' + key}); return [ack, null]; }\nseen[key] = now; flow.set('seen', seen);\n// New event: carry it past the tag-map file read (which overwrites msg.payload).\nmsg.evt = { dev: dev, id: id, uid: uid, w: w };\nnode.status({fill:'grey',shape:'dot',text:'new ' + key});\nreturn [ack, msg];\n",
+  "outputs": 2,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 390,
+  "y": 120,
+  "wires": [
+   [
+    "n-ack-out"
+   ],
+   [
+    "n-tagfile"
+   ]
+  ]
+ },
+ {
+  "id": "n-ack-out",
+  "type": "mqtt out",
+  "z": "station-flow",
+  "name": "measure/ack (non-retained)",
+  "topic": "",
+  "qos": "0",
+  "retain": "false",
+  "respTopic": "",
+  "contentType": "",
+  "userProps": "",
+  "correl": "",
+  "expiry": "",
+  "broker": "mqtt-mosquitto",
+  "x": 700,
+  "y": 80,
+  "wires": []
+ },
+ {
+  "id": "n-tagfile",
+  "type": "file in",
+  "z": "station-flow",
+  "name": "read tag-map.json",
+  "filename": "/data/tag-map.json",
+  "filenameType": "str",
+  "format": "utf8",
+  "chunk": false,
+  "sendError": true,
+  "encoding": "none",
+  "allProps": false,
+  "x": 660,
+  "y": 160,
+  "wires": [
+   [
+    "n-enrich"
+   ]
+  ]
+ },
+ {
+  "id": "n-enrich",
+  "type": "function",
+  "z": "station-flow",
+  "name": "uid->plant_id + build plant_weight",
+  "func": "// NFC weigh station — step 2: msg.payload is tag-map.json contents (from the\n// file-in node). Resolve uid -> plant_id. Missing file / bad JSON / unknown uid\n// => 'unknown' but KEEP the raw uid so the record is never dropped / is back-fillable.\nconst e = msg.evt || {};\nlet plant_id = 'unknown';\ntry { const map = JSON.parse(msg.payload || '{}'); if (map[e.uid]) plant_id = map[e.uid]; }\ncatch (err) { node.warn('tag-map parse failed: ' + err.message); }\nif (plant_id === 'unknown') node.warn('unknown tag uid ' + e.uid + ' on ' + e.dev);\nmsg.topic = 'monitor-air/' + e.dev + '/plant_weight';\nmsg.payload = { plant_id: plant_id, uid: e.uid, weight_g: e.w };\nmsg.qos = 0; msg.retain = false;\nnode.status({fill:'green',shape:'dot',text:plant_id + ' ' + e.w + 'g'});\nreturn msg;\n",
+  "outputs": 1,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 420,
+  "y": 220,
+  "wires": [
+   [
+    "n-weight-out"
+   ]
+  ]
+ },
+ {
+  "id": "n-weight-out",
+  "type": "mqtt out",
+  "z": "station-flow",
+  "name": "plant_weight (enriched)",
+  "topic": "",
+  "qos": "0",
+  "retain": "false",
+  "respTopic": "",
+  "contentType": "",
+  "userProps": "",
+  "correl": "",
+  "expiry": "",
+  "broker": "mqtt-mosquitto",
+  "x": 760,
+  "y": 220,
+  "wires": []
  }
 ]

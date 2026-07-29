@@ -1,265 +1,832 @@
 {
-  "annotations": { "list": [] },
-  "editable": true,
-  "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
-  "links": [],
-  "liveNow": false,
-  "refresh": "30s",
-  "schemaVersion": 39,
-  "tags": ["monitor-air"],
-  "templating": { "list": [] },
-  "time": { "from": "now-24h", "to": "now" },
-  "timepicker": {},
-  "timezone": "",
-  "title": "monitor-air",
-  "uid": "monitor-air-overview",
-  "version": 2,
-  "panels": [
-    {
-      "id": 6,
-      "title": "Sensor freshness — seconds since last reading (device × field)",
-      "type": "table",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 0 },
-      "description": "Each cell = seconds since that device's field last arrived. A red cell with green neighbours = that sensor dropped (e.g. BH1750 lux); a whole red row = the device is offline. New devices add rows, new sensors add columns automatically. Thresholds align with the controller's STALE=5min.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": { "align": "center", "cellOptions": { "type": "color-background" } },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "yellow", "value": 180 },
-            { "color": "red", "value": 300 }
-          ] }
-        },
-        "overrides": [
-          { "matcher": { "id": "byName", "options": "device" },
-            "properties": [ { "id": "custom.cellOptions", "value": { "type": "auto" } } ] }
-        ]
+ "annotations": {
+  "list": []
+ },
+ "editable": true,
+ "fiscalYearStartMonth": 0,
+ "graphTooltip": 0,
+ "links": [],
+ "liveNow": false,
+ "refresh": "30s",
+ "schemaVersion": 39,
+ "tags": [
+  "monitor-air"
+ ],
+ "templating": {
+  "list": []
+ },
+ "time": {
+  "from": "now-24h",
+  "to": "now"
+ },
+ "timepicker": {},
+ "timezone": "",
+ "title": "monitor-air",
+ "uid": "monitor-air-overview",
+ "version": 2,
+ "panels": [
+  {
+   "id": 6,
+   "title": "Sensor freshness — seconds since last reading (device × field)",
+   "type": "table",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "description": "Each cell = seconds since that device's field last arrived. A red cell with green neighbours = that sensor dropped (e.g. BH1750 lux); a whole red row = the device is offline. New devices add rows, new sensors add columns automatically. Thresholds align with the controller's STALE=5min.",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "align": "center",
+      "cellOptions": {
+       "type": "color-background"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 180
+       },
+       {
+        "color": "red",
+        "value": 300
+       }
+      ]
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "device"
       },
-      "options": { "showHeader": true },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-          "query": "from(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"air\" and r.device != \"sim\")\n  |> group(columns: [\"device\", \"_field\"])\n  |> last()\n  |> map(fn: (r) => ({ r with _value: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0 }))\n  |> group()\n  |> keep(columns: [\"device\", \"_field\", \"_value\"])\n  |> pivot(rowKey: [\"device\"], columnKey: [\"_field\"], valueColumn: \"_value\")"
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "auto"
         }
+       }
       ]
-    },
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true
+   },
+   "targets": [
     {
-      "id": 1,
-      "title": "Temperature (°C)",
-      "type": "timeseries",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
-      "fieldConfig": { "defaults": { "unit": "celsius", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-          "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"temp\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "title": "Humidity (%)",
-      "type": "timeseries",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
-      "fieldConfig": { "defaults": { "unit": "humidity", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-          "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"hum\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "title": "Pressure (hPa)",
-      "type": "timeseries",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
-      "fieldConfig": { "defaults": { "unit": "pressurehpa", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-          "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"pressure\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "title": "Gas resistance (kΩ)",
-      "type": "timeseries",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
-      "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-          "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"gas\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "title": "Light (lux + lux_ref)",
-      "type": "timeseries",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
-      "fieldConfig": { "defaults": { "unit": "lux", "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": false, "showPoints": "auto" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-          "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and (r._field == \"lux\" or r._field == \"lux_ref\"))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: true)"
-        }
-      ]
-    },
-    {
-      "id": 7,
-      "title": "DLI — daily light integral (mol/m²/day, lux est. — LEGACY)",
-      "type": "timeseries",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
-      "description": "Estimated Daily Light Integral, last 7 days. PPFD ≈ lux/54 (daylight-spectrum approximation — NOT a true PAR measurement; an AS7341 spectral sensor would give real PAR). Integrated per local (Asia/Taipei) day. Underestimates across lux dropouts; today's bar is partial.",
-      "fieldConfig": { "defaults": { "unit": "none", "decimals": 2, "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-          "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> yield(name: \"DLI\")"
-        }
-      ]
-    },
-    {
-      "id": 11,
-      "title": "DLI — daily light integral (mol/m²/day, spectrum PPFD — real PAR)",
-      "type": "timeseries",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 46 },
-      "description": "Real-PAR Daily Light Integral, last 7 days: the spectrum PPFD (CAL·Σ(countᵢ/Rᵢ·λᵢ), CAL=0.0017469 at ambient gain 4×) integrated per local (Asia/Taipei) day. Unlike lux/54 it counts the red/blue grow lamp correctly (lux undercounts it ~2–3×). Series by device — represents the PLANT's DLI only once the AS7341 is co-located at livingroom; BLANK while staging-01 is offline / not publishing ambient spectrum. The legacy lux/54 DLI panel is kept alongside for continuity until this one is trusted.",
-      "fieldConfig": { "defaults": { "unit": "none", "decimals": 2, "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-          "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\nCAL = 0.0017469\n\nfrom(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and (r._field == \"f415\" or r._field == \"f445\" or r._field == \"f480\" or r._field == \"f515\" or r._field == \"f555\" or r._field == \"f590\" or r._field == \"f630\" or r._field == \"f680\" or r._field == \"saturated\"))\n  |> pivot(rowKey: [\"_time\", \"device\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.f415 and exists r.f445 and exists r.f480 and exists r.f515 and exists r.f555 and exists r.f590 and exists r.f630 and exists r.f680)\n  |> filter(fn: (r) => (not exists r.saturated or r.saturated == 0.0) and r.f415 < 65535.0 and r.f445 < 65535.0 and r.f480 < 65535.0 and r.f515 < 65535.0 and r.f555 < 65535.0 and r.f590 < 65535.0 and r.f630 < 65535.0 and r.f680 < 65535.0)\n  |> map(fn: (r) => ({ _time: r._time, device: r.device, _value: CAL * (r.f415/55.0*415.0 + r.f445/110.0*445.0 + r.f480/210.0*480.0 + r.f515/390.0*515.0 + r.f555/590.0*555.0 + r.f590/840.0*590.0 + r.f630/1350.0*630.0 + r.f680/1070.0*680.0) }))\n  |> group(columns: [\"device\"])\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> yield(name: \"DLI_spectrum\")"
-        }
-      ]
-    },
-    {
-      "id": 8,
-      "title": "AS7341 ambient spectrum (latest, raw counts by wavelength)",
-      "type": "barchart",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 },
-      "description": "Latest AS7341 8-channel visible spectrum (f415 violet → f680 red, nm), raw ADC counts. Shows the spectral shape of ambient light. Single device (staging-01) for now. Raw counts are gain/integration-time dependent; useful for relative shape, not absolute irradiance.",
-      "fieldConfig": { "defaults": { "unit": "none", "custom": { "fillOpacity": 80, "lineWidth": 1 } }, "overrides": [] },
-      "options": { "xField": "_field", "showValue": "auto", "orientation": "auto", "legend": { "showLegend": false }, "tooltip": { "mode": "single" } },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-          "query": "from(bucket: \"sensors\")\n  |> range(start: -15m)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and r._field =~ /^f[0-9]+$/)\n  |> last()\n  |> group()\n  |> keep(columns: [\"_field\", \"_value\"])\n  |> sort(columns: [\"_field\"])"
-        }
-      ]
-    },
-    {
-      "id": 9,
-      "title": "PPFD (spectrum-derived, µmol·m⁻²·s⁻¹ — real PAR, calibration pending)",
-      "type": "timeseries",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 },
-      "description": "Instantaneous PPFD from the AS7341 PAR spectrum: PPFD ≈ CAL · Σ(countᵢ / Rᵢ · λᵢ) over the 8 visible channels. Counts are first normalized by each channel's datasheet irradiance responsivity Rᵢ (warm-white 2700K @ 107.67µW/cm²: F1=55, F2=110, F3=210, F4=390, F5=590, F6=840, F7=1350, F8=1070 — the channels span ~25× in sensitivity), then photon-weighted by λ. The gain/integration scaling is common to all channels so it folds into CAL. Series labelled by device (staging-01 while indoors; livingroom once at the plant). CAL = 0.0017469 — calibrated by daylight×lux cross-cal (calibrate-ppfd.sh) over 2026-07-16 14:00–15:00 at ambient gain 4×: ratio-flat (9% drift), R²=0.99, tied to the BH1750 lux/54 reference so it stays consistent with the lux DLI panel. VALID ONLY at the 4× ambient gain (since firmware c9e0690) — re-derive with calibrate-ppfd.sh if gain/integration changes. DLI = the integral of this; the lux/54 DLI panel stays until DLI switches to spectrum.",
-      "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": false } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-          "query": "CAL = 0.0017469\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and (r._field == \"f415\" or r._field == \"f445\" or r._field == \"f480\" or r._field == \"f515\" or r._field == \"f555\" or r._field == \"f590\" or r._field == \"f630\" or r._field == \"f680\"))\n  |> pivot(rowKey: [\"_time\", \"device\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.f415 and exists r.f445 and exists r.f480 and exists r.f515 and exists r.f555 and exists r.f590 and exists r.f630 and exists r.f680)\n  |> map(fn: (r) => ({ _time: r._time, device: r.device, _value: CAL * (r.f415/55.0*415.0 + r.f445/110.0*445.0 + r.f480/210.0*480.0 + r.f515/390.0*515.0 + r.f555/590.0*555.0 + r.f590/840.0*590.0 + r.f630/1350.0*630.0 + r.f680/1070.0*680.0) }))\n  |> group(columns: [\"device\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
-        }
-      ]
-    },
-    {
-      "id": 10,
-      "title": "Leaf reflectance — latest net spectrum per plant (LED-lit, ambient-subtracted)",
-      "type": "barchart",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 38 },
-      "description": "Each plant's most recent reflectance measurement (phone /ui → Measure): net_* = LED-lit counts minus ambient leak, per AS7341 channel (net_f415 violet → net_f680 red). One bar group per wavelength, one colour per plant. Raw counts — compare shapes between plants / over time for the same plant, not absolute values. Healthy-vegetation signature: strong red/green, low blue.",
-      "fieldConfig": { "defaults": { "unit": "none", "custom": { "fillOpacity": 80, "lineWidth": 1 } }, "overrides": [] },
-      "options": { "xField": "_field", "showValue": "auto", "orientation": "auto", "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-          "query": "from(bucket: \"sensors\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"reflect\" and r._field =~ /^net_f[0-9]+$/)\n  |> group(columns: [\"plant\", \"_field\"])\n  |> last()\n  |> group()\n  |> pivot(rowKey: [\"_field\"], columnKey: [\"plant\"], valueColumn: \"_value\")\n  |> sort(columns: [\"_field\"])"
-        }
-      ]
-    },
-    {
-      "id": 12,
-      "title": "PPFD — spectrum vs Photone ground-truth (livingroom)",
-      "type": "timeseries",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 54 },
-      "description": "Spectrum-derived PPFD (line, CAL=0.0017469) with Photone ground-truth readings overlaid as points (coloured by source). A Photone dot sitting off the line = the spectrum CAL's error at that light. Empty until Photone readings are recorded (planned record-photone.sh; see broker/PHOTONE-CAL-PLAN.md).",
-      "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": false } }, "overrides": [ { "matcher": { "id": "byFrameRefID", "options": "B" }, "properties": [ { "id": "custom.drawStyle", "value": "points" }, { "id": "custom.pointSize", "value": 12 } ] } ] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "targets": [
-        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "CAL = 0.0017469\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and r.device == \"livingroom\" and (r._field == \"f415\" or r._field == \"f445\" or r._field == \"f480\" or r._field == \"f515\" or r._field == \"f555\" or r._field == \"f590\" or r._field == \"f630\" or r._field == \"f680\"))\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.f415 and exists r.f445 and exists r.f480 and exists r.f515 and exists r.f555 and exists r.f590 and exists r.f630 and exists r.f680)\n  |> map(fn: (r) => ({ _time: r._time, _value: CAL * (r.f415/55.0*415.0 + r.f445/110.0*445.0 + r.f480/210.0*480.0 + r.f515/390.0*515.0 + r.f555/590.0*555.0 + r.f590/840.0*590.0 + r.f630/1350.0*630.0 + r.f680/1070.0*680.0) }))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"spectrum PPFD\")" },
-        { "refId": "B", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"photone\" and r._field == \"ppfd\" and r.device == \"livingroom\")\n  |> keep(columns: [\"_time\", \"_value\", \"source\"])\n  |> group(columns: [\"source\"])\n  |> yield(name: \"Photone\")" }
-      ]
-    },
-    {
-      "id": 13,
-      "title": "Photone CAL check — ground-truth vs sensors (per reading)",
-      "type": "table",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 62 },
-      "description": "Each Photone reading vs the co-timed sensor values stored with it (no dashboard-side time-join): photone / spectrum PPFD / lux÷54, plus k_spec = photone/spectrum (the spectrum CAL correction for that light) and k_lux = photone/(lux÷54). daylight k should be ~1 (validates CAL); lamp k_spec is the unresolved lamp correction. n = paired sample count. Empty until Photone readings are recorded (planned record-photone.sh; see broker/PHOTONE-CAL-PLAN.md).",
-      "fieldConfig": { "defaults": { "unit": "none", "decimals": 2, "custom": { "align": "auto" } }, "overrides": [] },
-      "options": { "showHeader": true },
-      "targets": [
-        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r._measurement == \"photone\" and (r._field == \"ppfd\" or r._field == \"spec_ppfd_at\" or r._field == \"lux_at\" or r._field == \"n\" or r._field == \"paired\"))\n  |> pivot(rowKey: [\"_time\", \"source\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({ _time: r._time, source: r.source, photone: r.ppfd, spectrum: r.spec_ppfd_at, lux_div54: r.lux_at / 54.0, k_spec: r.ppfd / r.spec_ppfd_at, k_lux: r.ppfd / (r.lux_at / 54.0), n: r.n, paired: r.paired }))\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> keep(columns: [\"_time\", \"source\", \"photone\", \"spectrum\", \"lux_div54\", \"k_spec\", \"k_lux\", \"n\", \"paired\"])" }
-      ]
-    },
-    {
-      "id": 14,
-      "title": "Outdoor weather — rain / cloud / solar (板橋, Open-Meteo)",
-      "type": "timeseries",
-      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 70 },
-      "description": "Hourly local outdoor weather from Open-Meteo (新北板橋). Precipitation (mm, bars) + cloud cover (%) on the left; shortwave solar radiation (W/m², right axis) is the outdoor driver of indoor DLI. Rainy/cloudy hours → low solar → low DLI — compare against the DLI panels above.",
-      "fieldConfig": {
-        "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 15, "spanNulls": true } },
-        "overrides": [
-          { "matcher": { "id": "byFrameRefID", "options": "A" }, "properties": [ { "id": "custom.drawStyle", "value": "bars" }, { "id": "unit", "value": "lengthmm" }, { "id": "custom.fillOpacity", "value": 70 } ] },
-          { "matcher": { "id": "byFrameRefID", "options": "B" }, "properties": [ { "id": "unit", "value": "percent" }, { "id": "max", "value": 100 } ] },
-          { "matcher": { "id": "byFrameRefID", "options": "C" }, "properties": [ { "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "radiationflux" } ] }
-        ]
-      },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "targets": [
-        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"precipitation\")\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  |> yield(name: \"precipitation (mm)\")" },
-        { "refId": "B", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"cloud_cover\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"cloud cover (%)\")" },
-        { "refId": "C", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"shortwave_radiation\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"solar (W/m²)\")" }
-      ]
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"air\" and r.device != \"sim\")\n  |> group(columns: [\"device\", \"_field\"])\n  |> last()\n  |> map(fn: (r) => ({ r with _value: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0 }))\n  |> group()\n  |> keep(columns: [\"device\", \"_field\", \"_value\"])\n  |> pivot(rowKey: [\"device\"], columnKey: [\"_field\"], valueColumn: \"_value\")"
     }
-  ]
+   ]
+  },
+  {
+   "id": 1,
+   "title": "Temperature (°C)",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 6
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "celsius",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"temp\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "title": "Humidity (%)",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 6
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "humidity",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"hum\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "title": "Pressure (hPa)",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 14
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "pressurehpa",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"pressure\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "title": "Gas resistance (kΩ)",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 14
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"gas\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "title": "Light (lux + lux_ref)",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 22
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "lux",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "spanNulls": false,
+      "showPoints": "auto"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and (r._field == \"lux\" or r._field == \"lux_ref\"))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: true)"
+    }
+   ]
+  },
+  {
+   "id": 7,
+   "title": "DLI — daily light integral (mol/m²/day, lux est. — LEGACY)",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 22
+   },
+   "description": "Estimated Daily Light Integral, last 7 days. PPFD ≈ lux/54 (daylight-spectrum approximation — NOT a true PAR measurement; an AS7341 spectral sensor would give real PAR). Integrated per local (Asia/Taipei) day. Underestimates across lux dropouts; today's bar is partial.",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 2,
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 70,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "single"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> yield(name: \"DLI\")"
+    }
+   ]
+  },
+  {
+   "id": 11,
+   "title": "DLI — daily light integral (mol/m²/day, spectrum PPFD — real PAR)",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 46
+   },
+   "description": "Real-PAR Daily Light Integral, last 7 days: the spectrum PPFD (CAL·Σ(countᵢ/Rᵢ·λᵢ), CAL=0.0017469 at ambient gain 4×) integrated per local (Asia/Taipei) day. Unlike lux/54 it counts the red/blue grow lamp correctly (lux undercounts it ~2–3×). Series by device — represents the PLANT's DLI only once the AS7341 is co-located at livingroom; BLANK while staging-01 is offline / not publishing ambient spectrum. The legacy lux/54 DLI panel is kept alongside for continuity until this one is trusted.",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 2,
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 70,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "single"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\nCAL = 0.0017469\n\nfrom(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and (r._field == \"f415\" or r._field == \"f445\" or r._field == \"f480\" or r._field == \"f515\" or r._field == \"f555\" or r._field == \"f590\" or r._field == \"f630\" or r._field == \"f680\" or r._field == \"saturated\"))\n  |> pivot(rowKey: [\"_time\", \"device\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.f415 and exists r.f445 and exists r.f480 and exists r.f515 and exists r.f555 and exists r.f590 and exists r.f630 and exists r.f680)\n  |> filter(fn: (r) => (not exists r.saturated or r.saturated == 0.0) and r.f415 < 65535.0 and r.f445 < 65535.0 and r.f480 < 65535.0 and r.f515 < 65535.0 and r.f555 < 65535.0 and r.f590 < 65535.0 and r.f630 < 65535.0 and r.f680 < 65535.0)\n  |> map(fn: (r) => ({ _time: r._time, device: r.device, _value: CAL * (r.f415/55.0*415.0 + r.f445/110.0*445.0 + r.f480/210.0*480.0 + r.f515/390.0*515.0 + r.f555/590.0*555.0 + r.f590/840.0*590.0 + r.f630/1350.0*630.0 + r.f680/1070.0*680.0) }))\n  |> group(columns: [\"device\"])\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> yield(name: \"DLI_spectrum\")"
+    }
+   ]
+  },
+  {
+   "id": 8,
+   "title": "AS7341 ambient spectrum (latest, raw counts by wavelength)",
+   "type": "barchart",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 30
+   },
+   "description": "Latest AS7341 8-channel visible spectrum (f415 violet → f680 red, nm), raw ADC counts. Shows the spectral shape of ambient light. Single device (staging-01) for now. Raw counts are gain/integration-time dependent; useful for relative shape, not absolute irradiance.",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "fillOpacity": 80,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "xField": "_field",
+    "showValue": "auto",
+    "orientation": "auto",
+    "legend": {
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "single"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: -15m)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and r._field =~ /^f[0-9]+$/)\n  |> last()\n  |> group()\n  |> keep(columns: [\"_field\", \"_value\"])\n  |> sort(columns: [\"_field\"])"
+    }
+   ]
+  },
+  {
+   "id": 9,
+   "title": "PPFD (spectrum-derived, µmol·m⁻²·s⁻¹ — real PAR, calibration pending)",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 30
+   },
+   "description": "Instantaneous PPFD from the AS7341 PAR spectrum: PPFD ≈ CAL · Σ(countᵢ / Rᵢ · λᵢ) over the 8 visible channels. Counts are first normalized by each channel's datasheet irradiance responsivity Rᵢ (warm-white 2700K @ 107.67µW/cm²: F1=55, F2=110, F3=210, F4=390, F5=590, F6=840, F7=1350, F8=1070 — the channels span ~25× in sensitivity), then photon-weighted by λ. The gain/integration scaling is common to all channels so it folds into CAL. Series labelled by device (staging-01 while indoors; livingroom once at the plant). CAL = 0.0017469 — calibrated by daylight×lux cross-cal (calibrate-ppfd.sh) over 2026-07-16 14:00–15:00 at ambient gain 4×: ratio-flat (9% drift), R²=0.99, tied to the BH1750 lux/54 reference so it stays consistent with the lux DLI panel. VALID ONLY at the 4× ambient gain (since firmware c9e0690) — re-derive with calibrate-ppfd.sh if gain/integration changes. DLI = the integral of this; the lux/54 DLI panel stays until DLI switches to spectrum.",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "spanNulls": false
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "CAL = 0.0017469\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and (r._field == \"f415\" or r._field == \"f445\" or r._field == \"f480\" or r._field == \"f515\" or r._field == \"f555\" or r._field == \"f590\" or r._field == \"f630\" or r._field == \"f680\"))\n  |> pivot(rowKey: [\"_time\", \"device\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.f415 and exists r.f445 and exists r.f480 and exists r.f515 and exists r.f555 and exists r.f590 and exists r.f630 and exists r.f680)\n  |> map(fn: (r) => ({ _time: r._time, device: r.device, _value: CAL * (r.f415/55.0*415.0 + r.f445/110.0*445.0 + r.f480/210.0*480.0 + r.f515/390.0*515.0 + r.f555/590.0*555.0 + r.f590/840.0*590.0 + r.f630/1350.0*630.0 + r.f680/1070.0*680.0) }))\n  |> group(columns: [\"device\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+    }
+   ]
+  },
+  {
+   "id": 10,
+   "title": "Leaf reflectance — latest net spectrum per plant (LED-lit, ambient-subtracted)",
+   "type": "barchart",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 38
+   },
+   "description": "Each plant's most recent reflectance measurement (phone /ui → Measure): net_* = LED-lit counts minus ambient leak, per AS7341 channel (net_f415 violet → net_f680 red). One bar group per wavelength, one colour per plant. Raw counts — compare shapes between plants / over time for the same plant, not absolute values. Healthy-vegetation signature: strong red/green, low blue.",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "fillOpacity": 80,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "xField": "_field",
+    "showValue": "auto",
+    "orientation": "auto",
+    "legend": {
+     "showLegend": true,
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "single"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"reflect\" and r._field =~ /^net_f[0-9]+$/)\n  |> group(columns: [\"plant\", \"_field\"])\n  |> last()\n  |> group()\n  |> pivot(rowKey: [\"_field\"], columnKey: [\"plant\"], valueColumn: \"_value\")\n  |> sort(columns: [\"_field\"])"
+    }
+   ]
+  },
+  {
+   "id": 12,
+   "title": "PPFD — spectrum vs Photone ground-truth (livingroom)",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 54
+   },
+   "description": "Spectrum-derived PPFD (line, CAL=0.0017469) with Photone ground-truth readings overlaid as points (coloured by source). A Photone dot sitting off the line = the spectrum CAL's error at that light. Empty until Photone readings are recorded (planned record-photone.sh; see broker/PHOTONE-CAL-PLAN.md).",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "spanNulls": false
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "B"
+      },
+      "properties": [
+       {
+        "id": "custom.drawStyle",
+        "value": "points"
+       },
+       {
+        "id": "custom.pointSize",
+        "value": 12
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "CAL = 0.0017469\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and r.device == \"livingroom\" and (r._field == \"f415\" or r._field == \"f445\" or r._field == \"f480\" or r._field == \"f515\" or r._field == \"f555\" or r._field == \"f590\" or r._field == \"f630\" or r._field == \"f680\"))\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.f415 and exists r.f445 and exists r.f480 and exists r.f515 and exists r.f555 and exists r.f590 and exists r.f630 and exists r.f680)\n  |> map(fn: (r) => ({ _time: r._time, _value: CAL * (r.f415/55.0*415.0 + r.f445/110.0*445.0 + r.f480/210.0*480.0 + r.f515/390.0*515.0 + r.f555/590.0*555.0 + r.f590/840.0*590.0 + r.f630/1350.0*630.0 + r.f680/1070.0*680.0) }))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"spectrum PPFD\")"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"photone\" and r._field == \"ppfd\" and r.device == \"livingroom\")\n  |> keep(columns: [\"_time\", \"_value\", \"source\"])\n  |> group(columns: [\"source\"])\n  |> yield(name: \"Photone\")"
+    }
+   ]
+  },
+  {
+   "id": 13,
+   "title": "Photone CAL check — ground-truth vs sensors (per reading)",
+   "type": "table",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 62
+   },
+   "description": "Each Photone reading vs the co-timed sensor values stored with it (no dashboard-side time-join): photone / spectrum PPFD / lux÷54, plus k_spec = photone/spectrum (the spectrum CAL correction for that light) and k_lux = photone/(lux÷54). daylight k should be ~1 (validates CAL); lamp k_spec is the unresolved lamp correction. n = paired sample count. Empty until Photone readings are recorded (planned record-photone.sh; see broker/PHOTONE-CAL-PLAN.md).",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 2,
+     "custom": {
+      "align": "auto"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r._measurement == \"photone\" and (r._field == \"ppfd\" or r._field == \"spec_ppfd_at\" or r._field == \"lux_at\" or r._field == \"n\" or r._field == \"paired\"))\n  |> pivot(rowKey: [\"_time\", \"source\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({ _time: r._time, source: r.source, photone: r.ppfd, spectrum: r.spec_ppfd_at, lux_div54: r.lux_at / 54.0, k_spec: r.ppfd / r.spec_ppfd_at, k_lux: r.ppfd / (r.lux_at / 54.0), n: r.n, paired: r.paired }))\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> keep(columns: [\"_time\", \"source\", \"photone\", \"spectrum\", \"lux_div54\", \"k_spec\", \"k_lux\", \"n\", \"paired\"])"
+    }
+   ]
+  },
+  {
+   "id": 14,
+   "title": "Outdoor weather — rain / cloud / solar (板橋, Open-Meteo)",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 70
+   },
+   "description": "Hourly local outdoor weather from Open-Meteo (新北板橋). Precipitation (mm, bars) + cloud cover (%) on the left; shortwave solar radiation (W/m², right axis) is the outdoor driver of indoor DLI. Rainy/cloudy hours → low solar → low DLI — compare against the DLI panels above.",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 15,
+      "spanNulls": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "A"
+      },
+      "properties": [
+       {
+        "id": "custom.drawStyle",
+        "value": "bars"
+       },
+       {
+        "id": "unit",
+        "value": "lengthmm"
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 70
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "B"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "percent"
+       },
+       {
+        "id": "max",
+        "value": 100
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "C"
+      },
+      "properties": [
+       {
+        "id": "custom.axisPlacement",
+        "value": "right"
+       },
+       {
+        "id": "unit",
+        "value": "radiationflux"
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"precipitation\")\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  |> yield(name: \"precipitation (mm)\")"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"cloud_cover\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"cloud cover (%)\")"
+    },
+    {
+     "refId": "C",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"shortwave_radiation\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"solar (W/m²)\")"
+    }
+   ]
+  },
+  {
+   "id": 15,
+   "title": "Plant weight (g) per plant — NFC weigh station",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 78
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "massg",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 0,
+      "spanNulls": true,
+      "showPoints": "always",
+      "pointSize": 6
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> group(columns: [\"plant_id\"])"
+    }
+   ]
+  }
+ ]
 }

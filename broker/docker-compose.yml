@@ -89,6 +89,10 @@ services:
       - "${NODERED_BIND:-127.0.0.1}:1880:1880"   # editor + /ui dashboard
     volumes:
       - nodered-data:/data
+      # git-tracked UID -> plant_id map for the weigh station, bind-mounted so
+      # edits are live (the station flow re-reads it per measurement — no rebuild).
+      # The host file MUST exist before `up` or docker creates a directory here.
+      - ./node-red/tag-map.json:/data/tag-map.json:ro
     depends_on:
       mosquitto:
         condition: service_started

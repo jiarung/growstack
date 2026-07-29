@@ -71,6 +71,22 @@ put them on the home screen, and tap the right one at each plant.
   Shortcuts, put a token / Basic Auth in front. Medium-term, lock the broker down
   (`allow_anonymous false` + a password file) and give the ESP32 + Node-RED their own creds.
 
+## Measurement station (weight) — second flow
+
+The `flows.json` also carries a **Measurement station** tab (Phase 3): it subscribes
+`monitor-air/+/measure/event_raw`, resolves the NFC tag UID → `plant_id` via
+`tag-map.json`, **acks** the ESP (every copy — the device is at-least-once, up to 5),
+and republishes an enriched `plant_weight` (once per `(device, event_id)`, 60 s dedup)
+for Telegraf. See `../MEASUREMENT-STATION.md` for the full contract.
+
+- **UID map** — `tag-map.json` here is **bind-mounted** read-only into `/data/tag-map.json`
+  (docker-compose) and read by a **`file in` node** on every measurement, so edits are
+  **live — no rebuild or volume reset** (unlike this flow file). (A `file in` node, not
+  `fs` in a function, so it doesn't depend on `functionExternalModules`.) Add a tag with
+  `../add-tag.sh <uid> <plant-id>`, then commit `tag-map.json`.
+- Unknown UID → `plant_id="unknown"` with the raw `uid` kept (record is never dropped).
+- `plant_id` values MUST match the reflect `plant` ids so weight and spectrum join per plant.
+
 ## Persistence / repo drift
 
 Flows live in the `nodered-data` volume after import. Edits in the GUI won't flow back to this
