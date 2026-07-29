@@ -57,10 +57,10 @@ graph LR
     light -- "on/off" --> plug
     light -- "light/state (retained)" --> mqtt
     graf -- "deadman: series silent ~17 min" --> teleg
-    influx -. "backup (NOT scheduled)" .-> hdd
+    influx -- "nightly backup + rotate" --> hdd
 ```
 
-Dotted = defined but not running. See [Known gaps](#known-gaps).
+See [Known gaps](#known-gaps) for what is defined but not yet proven on real hardware.
 
 ## A. Ingest — MQTT/HTTP → InfluxDB
 
@@ -146,16 +146,17 @@ share one value domain on purpose — that is what lets the two join per plant.
 | Flow | What | Live? |
 |---|---|---|
 | Grafana deadman alert | per `(device, _field)` series silent >900 s, **then** `for: 2m` pending → Telegram fires ~17 min after the last point | ✅ |
-| `backup/influx-backup.sh` | InfluxDB → `/data/influx-backups`, keeps newest 14 | ⛔ **not scheduled** |
+| `backup/influx-backup.sh` | InfluxDB → `/data/influx-backups`, keeps newest 14 | ✅ cron `30 3 * * *` UTC (= 11:30 Taipei — the host is UTC) |
 | `sim/publish.sh` | fake telemetry generator | ⛔ container `Exited` (intentional) |
 | `start.sh` | bring the stack up | on demand |
 
 ## Known gaps
 
-1. **Backups are not running.** `README.md` documents a `30 3 * * *` cron line, but no such
-   entry exists in `crontab -l`, there is no `backup/backup.log`, and the newest backup in
-   `/data/influx-backups` is `2026-06-15_090629`. The script works — it was run once by hand
-   and never scheduled. **Install the cron line or delete the claim.**
+1. ~~Backups are not running.~~ **Scheduled 2026-07-29.** The documented cron line was never
+   actually installed; `/data/influx-backups` held one 20 KB backup from 2026-06-15, taken
+   when the database was nearly empty (1 shard, 653 B). Now installed and verified under a
+   minimal `env -i` environment, the way cron will run it — today's backup is 13 MB across
+   7 shards. ⚠️ The host runs **UTC**, so `30 3` fires at **11:30 Taipei**, not overnight.
 2. ~~The weigh station is not deployed.~~ **Deployed 2026-07-29.** Telegraf recreated
    (4 consumers loaded), Node-RED image rebuilt + volume reset so `station-flow` seeded,
    Grafana picked the panel up on its own. Verified by publishing two copies of one event:

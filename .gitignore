@@ -23,3 +23,6 @@ broker/grafana/provisioning/alerting/rules.yaml
 
 # Photone CAL recording audit log (runtime data, per-host)
 broker/photone-log.csv
+
+# Written daily by the influx-backup cron (see broker/README.md)
+broker/backup/backup.log
