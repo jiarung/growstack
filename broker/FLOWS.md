@@ -35,6 +35,7 @@ graph LR
     meteo(["Open-Meteo API"])
     teleg(["Telegram"])
     hdd[("HDD /data/influx-backups")]
+    photone["record-photone.sh<br/>(manual, on the host)"]
 
     esp -- "telemetry" --> mqtt
     stn -- "telemetry / spectrum" --> mqtt
@@ -51,6 +52,7 @@ graph LR
     mqtt --> tgf
     meteo --> tgf
     tgf --> influx --> graf
+    photone -- "influx write (bypasses MQTT + Telegraf)" --> influx
     mqtt -- "telemetry (lux)" --> light
     light -- "on/off" --> plug
     light -- "light/state (retained)" --> mqtt
@@ -62,16 +64,24 @@ Dotted = defined but not running. See [Known gaps](#known-gaps).
 
 ## A. Ingest — MQTT/HTTP → InfluxDB
 
-All five are Telegraf inputs in [`telegraf/telegraf.conf`](telegraf/telegraf.conf); nothing else
-writes to InfluxDB.
+1–5 are Telegraf inputs in [`telegraf/telegraf.conf`](telegraf/telegraf.conf). **6 is not** — it
+writes to InfluxDB directly, bypassing MQTT and Telegraf entirely, so it is invisible to
+anything that only reads the Telegraf config.
 
 | # | Source | → measurement | Tags | Live? |
 |---|---|---|---|---|
 | 1 | `monitor-air/+/telemetry` | `air` | `device` | ✅ `livingroom`, `staging-01` |
-| 2 | `monitor-air/+/light/state` | `light` | `device` | ✅ |
+| 2 | `monitor-air/+/light/state` | `light` | `location` ⚠️ not `device` | ✅ |
 | 3 | `monitor-air/+/spectrum` | `spectrum` | `device`, `plant`, `mode` | ✅ |
-| 4 | Open-Meteo HTTP (25.01, 121.46 — 板橋) | `weather` | — | ✅ |
+| 4 | Open-Meteo HTTP (25.01, 121.46 — 板橋) | `weather` | `source`, `location`, `url` | ✅ |
 | 5 | `monitor-air/+/plant_weight` | `plant_weight` | `device`, `plant_id` | ⛔ **config written, not deployed** |
+| 6 | `record-photone.sh` → `influx write` | `photone` | `device`, `source`, `gain` | ✅ manual (35 points to date) |
+
+Flow 6 also appends every reading to `photone-log.csv` as an audit copy, so that file and the
+`photone` measurement are two views of the same write.
+
+Flow 2 tags the topic's 2nd segment as **`location`**, not `device` — that segment is a room
+(`livingroom`), not a device id. Queries that join `light` to `air` on `device` return nothing.
 
 Telegraf subscribes to `plant_weight` and **never** to `measure/event_raw` — the device is
 at-least-once, so consuming the raw topic would write ~5 points per measurement.
@@ -80,18 +90,24 @@ at-least-once, so consuming the raw topic would write ~5 points per measurement.
 
 [`control/light.py`](control/light.py), one decision every 60 s.
 
+Topics are built from env vars, **not hardcoded** — `LIGHT_SENSOR_DEVICE` (code default
+`sensor-01`) and `LIGHT_LOCATION` (default `livingroom`). Both are set to `livingroom` in
+`.env` today, which is why the two halves currently coincide.
+
 | Direction | Topic | Note |
 |---|---|---|
-| in | `monitor-air/livingroom/telemetry` | lux only; `LIGHT_SENSOR_DEVICE` |
-| in | `monitor-air/livingroom/light/cmd` | manual/AI override, suppresses auto for 5 min |
-| out | `monitor-air/livingroom/light/state` | retained |
-| out | `monitor-air/livingroom/light/availability` | retained LWT |
-| out | Tapo P110M (local API) | on/off |
+| in | `monitor-air/${LIGHT_SENSOR_DEVICE}/telemetry` | lux only |
+| in | `monitor-air/${LIGHT_LOCATION}/light/cmd` | manual/AI override, suppresses auto for 5 min |
+| out | `monitor-air/${LIGHT_LOCATION}/light/state` | retained |
+| out | `monitor-air/${LIGHT_LOCATION}/light/availability` | retained LWT |
+| out | Tapo P110M (local API) | on/off; auto decisions drive the plug directly, they do **not** round-trip through `cmd` |
 
 `decide()`: ON below 5000 lx, OFF above 15000 lx, hysteresis + a `[ON_START, HARD_OFF)`
-window, a DLI-based evening extension, ≥5 min hold after any switch, and **fail-safe OFF if
-lux is older than 5 min**. `light-ctl.sh` is the manual path — it publishes `light/cmd`.
-Live: ✅.
+window, a DLI-based evening extension past `HARD_OFF` on dark days, and ≥5 min hold after any
+switch. **On a stale/missing lux reading (>5 min) it does NOT simply fail off** — inside the
+window an already-ON light is *held* on (this environment is light-deficient, so a dead sensor
+shouldn't darken the plants); it goes OFF only if it was already off or the window has passed.
+`light-ctl.sh` is the manual path — it publishes `light/cmd`. Live: ✅.
 
 ## C. On-demand measurement — Node-RED
 
@@ -117,7 +133,7 @@ Full contract: [`MEASUREMENT-STATION.md`](MEASUREMENT-STATION.md).
 
 | Flow | Defines | Propagation |
 |---|---|---|
-| `./add-plant.sh <id>...` | the `plant` id domain (Node-RED dropdown) | rebuild + **volume reset** + re-import |
+| `./add-plant.sh <id>...` | the `plant` id domain (Node-RED dropdown) | the script does it all: rebuild + **volume reset** + up + verify (the fresh volume is re-seeded from the image, so there is no manual re-import) |
 | `./add-tag.sh <plant-id>` | NFC UID → `plant_id` | bind-mounted, **live on the next weigh** |
 | `./calibrate-ppfd.sh`, `./record-photone.sh` | lux/spectrum → PPFD calibration | see [`PPFD-CALIBRATION.md`](PPFD-CALIBRATION.md) |
 
@@ -129,7 +145,7 @@ share one value domain on purpose — that is what lets the two join per plant.
 
 | Flow | What | Live? |
 |---|---|---|
-| Grafana deadman alert | per `(device, _field)` series silent >15 min → Telegram | ✅ |
+| Grafana deadman alert | per `(device, _field)` series silent >900 s, **then** `for: 2m` pending → Telegram fires ~17 min after the last point | ✅ |
 | `backup/influx-backup.sh` | InfluxDB → `/data/influx-backups`, keeps newest 14 | ⛔ **not scheduled** |
 | `sim/publish.sh` | fake telemetry generator | ⛔ container `Exited` (intentional) |
 | `start.sh` | bring the stack up | on demand |
@@ -140,10 +156,24 @@ share one value domain on purpose — that is what lets the two join per plant.
    entry exists in `crontab -l`, there is no `backup/backup.log`, and the newest backup in
    `/data/influx-backups` is `2026-06-15_090629`. The script works — it was run once by hand
    and never scheduled. **Install the cron line or delete the claim.**
-2. **The weigh station is not deployed.** The running `node-red` container predates the
-   station flow and has no `tag-map.json` mount; `telegraf` still runs the pre-`plant_weight`
-   config. Needs `docker compose up -d` + a one-time flow import, then a real tap to verify.
-3. **Two older diagrams are incomplete** — `../README.md` and `README.md` both draw the stack
+2. **The weigh station is not deployed.** The running Node-RED has `reflect-flow` but not
+   `station-flow` (verified with the check below), and `telegraf` is still running the
+   pre-`plant_weight` config. Needs a container **recreate** (see gap 3) + a one-time flow
+   import, then a real tap to verify.
+3. **Single-file bind mounts are stale, and a restart will not fix them.** Docker binds a
+   single-file mount by **inode**, so an editor that writes-new-then-renames silently detaches
+   the container from the file. This has already happened to `telegraf.conf`:
+
+   | | inode | mtime | `mqtt_consumer` count |
+   |---|---|---|---|
+   | host file | 44836170 | 2026-07-29 10:27 | 4 |
+   | what the container sees | 44836847 | 2026-07-21 09:40 | 3 |
+
+   Same path, different inode. `docker restart` keeps the old mount — only
+   `docker compose up -d --force-recreate telegraf` (or `down`/`up`) reattaches. The same
+   trap applies to `node-red/tag-map.json`, which is why it must be edited **in place** by
+   `add-tag.sh` and not by a rename-on-save editor.
+4. **Two older diagrams are incomplete** — `../README.md` and `README.md` both draw the stack
    without Node-RED, so neither shows C1 or C2. Prefer this file.
 
 ## Verifying this file
@@ -152,14 +182,26 @@ The "Live?" column is a claim about the running system, so check it rather than 
 
 ```bash
 docker compose ps                                  # which services are actually up
-docker inspect monitor-air-nodered --format '{{range .Mounts}}{{.Destination}} {{end}}'
-                                                   # /data/tag-map.json present => C2 deployed
-grep -c mqtt_consumer telegraf/telegraf.conf       # vs. what the running telegraf loaded
+
+# C: which flows the RUNNING Node-RED actually has. The bind-mount alone proves
+# nothing — the flow lives in the nodered-data volume and must be imported.
+docker exec monitor-air-nodered node -e "
+  const f=require('/data/flows.json');
+  for (const id of ['reflect-flow','station-flow'])
+    console.log(id, f.some(n=>n.id===id))"
+
+# A: consumers the running Telegraf loaded (its conf is bind-mounted, so a repo
+# edit shows up here immediately but is NOT loaded until the container restarts —
+# compare against the container's start time).
+docker exec monitor-air-telegraf grep -c '^\[\[inputs.mqtt_consumer\]\]' /etc/telegraf/telegraf.conf
+docker inspect -f '{{.State.StartedAt}}' monitor-air-telegraf
+
 crontab -l | grep influx-backup                    # E: backups scheduled?
 ls -t /data/influx-backups | head -1               # E: newest backup
 ```
 
-For ingest, the honest check is InfluxDB itself — a pipeline is live only if points arrived:
+For ingest, the honest check is InfluxDB itself — a pipeline is live only if points arrived.
+Note flow 6 (`photone`) is manual and will be absent from a 24 h window; widen the range for it:
 
 ```bash
 docker exec monitor-air-influxdb influx query --org monitor-air \
