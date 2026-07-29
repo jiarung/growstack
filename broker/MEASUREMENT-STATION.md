@@ -48,43 +48,59 @@ Subscribe `monitor-air/+/measure/event_raw`. Per message:
    ```
 
 ## UID → plant_id map (version-controlled — NOT flow/global context)
-A git-tracked file so it survives container rebuilds and is reviewable. Suggest `broker/node-red/tag-map.json`:
+Keep it in git (survives rebuilds, reviewable). ⚠️ The Node-RED container mounts only the named volume
+`/data`; a repo file under `broker/node-red/` is NOT visible inside unless you mount it. Do ONE of:
+- **Bind-mount (recommended, live-editable):** in docker-compose.yml, node-red service →
+  `volumes: - ./node-red/tag-map.json:/data/tag-map.json:ro`. Node-RED reads `/data/tag-map.json`.
+- **Seed via the Dockerfile** (like flows.json): `COPY tag-map.json /data/tag-map.json` — but a named volume
+  is only seeded when EMPTY, so map edits then need `docker volume rm broker_nodered-data` (same caveat as
+  flows.json). The bind-mount avoids this.
+
+Format (`tag-map.json`):
 ```json
 {
   "00A8635C": "cactus-01",
   "04A1B2C3": "cactus-02"
 }
 ```
-Node-RED reads it on start + on change (a file-in / watch node, or a function that re-reads). Registering a
-new tag = add a line + redeploy (mirror `add-plant.sh`). Reuse the existing plant registry / dropdown ids so
-`plant_id` matches the reflect `plant` tag → weight and spectrum join on the same plant.
+Node-RED reads it (file-in node, or a function re-reading on change). New tag = add a line + redeploy
+(mirror `add-plant.sh`). **`plant_id` values MUST match the existing reflect `plant` ids** (the Node-RED
+dropdown list) so weight and spectrum join on one plant. Missing file / bad JSON / unknown UID → don't
+crash: `plant_id="unknown"`, keep `uid`, still ack.
 
 ## Telegraf — add a `plant_weight` consumer
-Mirror the existing telemetry consumer; only `plant_weight` is ingested (never `event_raw`):
+Mirror the existing telemetry consumer; only `plant_weight` is ingested (never `event_raw`).
+**Repo-ready** (Telegraf and Mosquitto are separate containers, so `servers` is required, like the
+existing consumers):
 ```toml
 [[inputs.mqtt_consumer]]
+  servers = ["tcp://mosquitto:1883"]   # REQUIRED — same broker as the other consumers
   topics = ["monitor-air/+/plant_weight"]
   data_format = "json"
   name_override = "plant_weight"
-  tag_keys = ["plant_id"]        # (+ "measure_type" in Phase 4)
-  json_string_fields = []         # weight_g stays a float field; uid is dropped unless you want it
+  tag_keys = ["plant_id"]              # (+ "measure_type" in Phase 4)
+  json_string_fields = ["uid"]         # KEEP uid as a field so an "unknown" plant_id is still traceable
   [[inputs.mqtt_consumer.topic_parsing]]
     topic = "monitor-air/+/plant_weight"
     tags = "_/device/_"
 ```
-→ InfluxDB: measurement `plant_weight`, tags `device` + `plant_id`, field `weight_g`, server timestamp.
-(`uid` is a string; with `json_string_fields=[]` it's dropped — fine, plant_id is the key. Add it to
-`json_string_fields` only if you want the raw uid stored.)
+→ InfluxDB: measurement `plant_weight`, tags `device` + `plant_id`, fields `weight_g` (float) + `uid`
+(string), server timestamp. **`plant_id` MUST use the exact same value domain as the reflect `plant`
+tag** (spectrum consumer already tags `plant`) so weight and spectrum join on one plant.
 
 ## Grafana
 - v1: `weight_g` over time per `plant_id` (time series or a latest-per-plant table).
 - Phase 4 (dry/wet): a `measure_type` tag (dry|wet) → **water uptake = wet − dry** per plant + a trend.
 
 ## Notes / gotchas
-- **Dedup is mandatory** — the ESP is at-least-once. Without it you'll write 5 points per measurement.
-- **Ack fast** — the device retries for ~12 s then gives up (OLED `UNSENT`). Ack on first receipt so the
-  operator sees `sent OK` promptly.
-- **`event_id` is session-scoped** — after an ESP reboot the counter restarts at 1, so `(dev, event_id)`
-  can repeat across reboots. The 60 s dedup window makes that a non-issue in practice (measurements are
-  seconds apart, reboots minutes+). Don't use `event_id` as a long-term primary key.
+- **Dedup is mandatory** — the ESP is at-least-once (up to 5 copies). Without it you write ~5 points/measurement.
+- **Dedup cache is ephemeral** — flow-context dedup is lost on a Node-RED restart; a restart DURING the ESP's
+  ~12 s retry window can let one duplicate through. Acceptable (rare); persist the dedup set only if it bites.
+- **Ack fast** — the device publishes once, retries every 3 s ×4 (a ~12 s retry window), and declares `UNSENT`
+  ~15 s in. Ack on first receipt so the operator sees `sent OK` promptly.
+- **`event_id` is session-scoped** — after an ESP reboot the counter restarts at 1, so `(dev, event_id)` can
+  repeat across reboots. The 60 s dedup window makes that a non-issue in practice (measurements are seconds
+  apart, reboots minutes+). Don't use `event_id` as a long-term primary key.
+- **Unknown UID** — store `plant_id="unknown"` + the raw `uid` (both) so the missing registration is visible
+  and back-fillable; never drop the record.
 - Timestamp = server (Telegraf write) time; the event carries none (publish is near-instant after weighing).
