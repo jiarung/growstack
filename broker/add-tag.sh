@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Map an NFC tag UID -> plant id for the weigh station.
 #
-#   ./add-tag.sh 00A8635C cactus-14
+#   ./add-tag.sh cactus-14              # tap the tag when prompted (uid read off MQTT)
+#   ./add-tag.sh 00A8635C cactus-14     # or give the uid yourself
 #
 # tag-map.json is bind-mounted read-only into Node-RED (see docker-compose.yml),
 # and the station flow re-reads it on each measurement, so a saved edit is picked
@@ -14,10 +15,11 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 MAP="node-red/tag-map.json"
 
-[ $# -eq 2 ] || { echo "usage: $(basename "$0") <tag-uid-hex> <plant-id>" >&2; exit 1; }
-uid="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
-plant="$2"
-[[ "$uid"   =~ ^[0-9A-F]{8,20}$ ]]      || { echo "invalid uid '$1' (hex, 8-20 chars)" >&2; exit 1; }
+case $# in
+  1) uid=""   plant="$1" ;;
+  2) uid="$1" plant="$2" ;;
+  *) echo "usage: $(basename "$0") [<tag-uid-hex>] <plant-id>   (omit the uid to read it from a tap)" >&2; exit 1 ;;
+esac
 [[ "$plant" =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "invalid plant id '$plant' ([A-Za-z0-9_-]{1,40})" >&2; exit 1; }
 
 # plant_id MUST already exist as a reflect `plant` id (the n-plant dropdown), else
@@ -32,6 +34,27 @@ if plant not in ids:
     print(f"unknown plant id '{plant}' — not in the reflect dropdown", file=sys.stderr)
     sys.exit(1)
 PY
+
+# No uid given: read it off the wire instead of hand-copying it from a debug log.
+# mosquitto_sub lives in the broker container, so nothing extra to install; -C 1
+# takes the first of the ESP's up-to-5 retries. This is a passive listen — Node-RED
+# still acks and records the measurement as usual (it'll log plant_id=unknown once).
+if [ -z "$uid" ]; then
+  echo "Tap the NFC tag on the station now (waiting ${WAIT:=60}s)..."
+  err="$(mktemp)"; trap 'rm -f "$err"' EXIT
+  evt="$(docker compose exec -T mosquitto \
+           mosquitto_sub -t 'monitor-air/+/measure/event_raw' -C 1 -W "$WAIT" 2>"$err")" || true
+  if [ -z "$evt" ]; then
+    # Don't blame the station for what is usually a broker/compose problem — show why.
+    echo "no measurement captured (station offline, or the broker is unreachable)" >&2
+    [ -s "$err" ] && sed 's/^/  /' "$err" >&2
+    exit 1
+  fi
+  uid="$(printf '%s' "$evt" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("uid",""))')"
+  echo "captured uid $uid"
+fi
+uid="$(printf '%s' "$uid" | tr '[:lower:]' '[:upper:]')"
+[[ "$uid" =~ ^[0-9A-F]{8,20}$ ]] || { echo "invalid uid '$uid' (hex, 8-20 chars)" >&2; exit 1; }
 
 python3 - "$uid" "$plant" "$MAP" <<'PY'
 import json, os, sys

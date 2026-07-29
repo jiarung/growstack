@@ -5,8 +5,8 @@ committed). This is the **server-side** work: Node-RED resolves the tag → plan
 and hands a clean record to InfluxDB via Telegraf. **The ESP stays dumb — it only knows the tag UID.**
 
 > **Status: implemented.** Node-RED flow → `node-red/flows.json` (tab "Measurement station");
-> UID map → `node-red/tag-map.json` (bind-mounted, edit with `./add-tag.sh <uid> <plant-id>`, live —
-> no rebuild); Telegraf consumer + Grafana weight panel added. Import the flow once
+> UID map → `node-red/tag-map.json` (bind-mounted, register a tag with `./add-tag.sh <plant-id>`
+> + a tap, live — no rebuild); Telegraf consumer + Grafana weight panel added. Import the flow once
 > (`node-red/README.md`), then `docker compose up -d --build`.
 
 ## Flow
@@ -68,8 +68,9 @@ Format (`tag-map.json`):
   "04A1B2C3": "cactus-02"
 }
 ```
-Node-RED reads it (file-in node, or a function re-reading on change). New tag = add a line + redeploy
-(mirror `add-plant.sh`). **`plant_id` values MUST match the existing reflect `plant` ids** (the Node-RED
+Node-RED reads it (file-in node) on every measurement, so a new tag is live on the next weigh — no
+redeploy. Register one with `./add-tag.sh <plant-id>`, which waits for a tap and reads the uid off
+`measure/event_raw` (uid-as-argument still works). **`plant_id` values MUST match the existing reflect `plant` ids** (the Node-RED
 dropdown list) so weight and spectrum join on one plant. Missing file / bad JSON / unknown UID → don't
 crash: `plant_id="unknown"`, keep `uid`, still ack.
 

@@ -82,8 +82,10 @@ for Telegraf. See `../MEASUREMENT-STATION.md` for the full contract.
 - **UID map** — `tag-map.json` here is **bind-mounted** read-only into `/data/tag-map.json`
   (docker-compose) and read by a **`file in` node** on every measurement, so edits are
   **live — no rebuild or volume reset** (unlike this flow file). (A `file in` node, not
-  `fs` in a function, so it doesn't depend on `functionExternalModules`.) Add a tag with
-  `../add-tag.sh <uid> <plant-id>`, then commit `tag-map.json`.
+  `fs` in a function, so it doesn't depend on `functionExternalModules`.) Register a tag with
+  `../add-tag.sh <plant-id>` and tap it when prompted — the uid is read off `measure/event_raw`,
+  so you never transcribe it by hand (`../add-tag.sh <uid> <plant-id>` still works). Commit
+  `tag-map.json` afterwards.
 - Unknown UID → `plant_id="unknown"` with the raw `uid` kept (record is never dropped).
 - `plant_id` values MUST match the reflect `plant` ids so weight and spectrum join per plant.
 
