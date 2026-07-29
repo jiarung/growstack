@@ -56,7 +56,7 @@ graph LR
     mqtt -- "telemetry (lux)" --> light
     light -- "on/off" --> plug
     light -- "light/state (retained)" --> mqtt
-    graf -- "deadman: series silent >15 min" --> teleg
+    graf -- "deadman: series silent ~17 min" --> teleg
     influx -. "backup (NOT scheduled)" .-> hdd
 ```
 
@@ -74,7 +74,7 @@ anything that only reads the Telegraf config.
 | 2 | `monitor-air/+/light/state` | `light` | `location` ⚠️ not `device` | ✅ |
 | 3 | `monitor-air/+/spectrum` | `spectrum` | `device`, `plant`, `mode` | ✅ |
 | 4 | Open-Meteo HTTP (25.01, 121.46 — 板橋) | `weather` | `source`, `location`, `url` | ✅ |
-| 5 | `monitor-air/+/plant_weight` | `plant_weight` | `device`, `plant_id` | ⛔ **config written, not deployed** |
+| 5 | `monitor-air/+/plant_weight` | `plant_weight` | `device`, `plant_id` | ✅ deployed 2026-07-29, verified end-to-end |
 | 6 | `record-photone.sh` → `influx write` | `photone` | `device`, `source`, `gain` | ✅ manual (35 points to date) |
 
 Flow 6 also appends every reading to `photone-log.csv` as an audit copy, so that file and the
@@ -122,7 +122,7 @@ Phone `/ui` (pick plant → Measure) or `POST /reflect/measure?plant=X` → Node
 `reflect/state|result|availability` come back. The server-side id is the whole point: the
 firmware dedups by `request_id`, so a fixed-payload phone button would only ever get `dedup`.
 
-**C2. Measurement station** (tab `station-flow`) — Live: ⛔ **not deployed**
+**C2. Measurement station** (tab `station-flow`) — Live: ✅ (deployed 2026-07-29)
 
 `measure/event_raw` → validate → **ack every copy** (the ESP retries 5×; the ack is what stops
 it) → dedup on `(device, event_id)`, 60 s TTL → UID → `plant_id` via `tag-map.json` →
@@ -156,10 +156,12 @@ share one value domain on purpose — that is what lets the two join per plant.
    entry exists in `crontab -l`, there is no `backup/backup.log`, and the newest backup in
    `/data/influx-backups` is `2026-06-15_090629`. The script works — it was run once by hand
    and never scheduled. **Install the cron line or delete the claim.**
-2. **The weigh station is not deployed.** The running Node-RED has `reflect-flow` but not
-   `station-flow` (verified with the check below), and `telegraf` is still running the
-   pre-`plant_weight` config. Needs a container **recreate** (see gap 3) + a one-time flow
-   import, then a real tap to verify.
+2. ~~The weigh station is not deployed.~~ **Deployed 2026-07-29.** Telegraf recreated
+   (4 consumers loaded), Node-RED image rebuilt + volume reset so `station-flow` seeded,
+   Grafana picked the panel up on its own. Verified by publishing two copies of one event:
+   both acked, exactly one `plant_weight` written, UID resolved to `cactus-01`, the point
+   landed in InfluxDB (test point deleted afterwards). **Still untested with real hardware —
+   a physical tag has not been tapped.**
 3. **Single-file bind mounts are stale, and a restart will not fix them.** Docker binds a
    single-file mount by **inode**, so an editor that writes-new-then-renames silently detaches
    the container from the file. This has already happened to `telegraf.conf`:
@@ -170,10 +172,17 @@ share one value domain on purpose — that is what lets the two join per plant.
    | what the container sees | 44836847 | 2026-07-21 09:40 | 3 |
 
    Same path, different inode. `docker restart` keeps the old mount — only
-   `docker compose up -d --force-recreate telegraf` (or `down`/`up`) reattaches. The same
-   trap applies to `node-red/tag-map.json`, which is why it must be edited **in place** by
-   `add-tag.sh` and not by a rename-on-save editor.
-4. **Two older diagrams are incomplete** — `../README.md` and `README.md` both draw the stack
+   `docker compose up -d --force-recreate telegraf` (or `down`/`up`) reattaches. **Fixed for
+   telegraf on 2026-07-29** by exactly that recreate; the table above is kept as the worked
+   example because the trap will recur. The same trap applies to `node-red/tag-map.json`,
+   which is why it must be edited **in place** by `add-tag.sh` and never by a rename-on-save
+   editor.
+4. **`docker compose build` fails on this host** — `~/.docker/buildx` is root-owned (from a
+   2023 `sudo docker` run), so buildx cannot write its instance dir. Prefix builds with
+   `DOCKER_BUILDKIT=0` (legacy builder) or `chown` the directory. This is silent-ish: compose
+   prints the error but `up -d` then happily starts the **stale image**, which is how a volume
+   reset can re-seed the old flow. `add-plant.sh` will hit this too.
+5. **Two older diagrams are incomplete** — `../README.md` and `README.md` both draw the stack
    without Node-RED, so neither shows C1 or C2. Prefer this file.
 
 ## Verifying this file
