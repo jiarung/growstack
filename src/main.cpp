@@ -6,6 +6,7 @@
 #include "sensors.h"
 #include "mqtt_client.h"
 #include "log.h"
+#include "measure.h"
 
 // A fixed AS7341 node streams ambient spectrum; a roving reflectance-only probe sets
 // PUBLISH_AMBIENT_SPECTRUM to 0 in its secrets.h to suppress the mode:"ambient" stream.
@@ -68,6 +69,7 @@ void setup() {
         logln("[sensors] none available — continuing (will publish nothing useful)");
     }
     mqttSetup();
+    measureBegin();  // PN532 NFC (software SPI) for the measurement station
     wifiEnsure();  // start the first (non-blocking) connection attempt
 }
 
@@ -77,6 +79,7 @@ void loop() {
     reflectLoop(); // drain reflect/cmd + advance the reflectance state machine
     hx711Poll();      // non-blocking weight sampling (reads 1 raw when the HX711 is ready)
     hx711SerialCmd(); // bench calibration: 't' tare, 'c<grams>' calibrate (over the serial monitor)
+    measureLoop();    // NFC-triggered weight measurement station (PN532 SPI + stability state machine)
 
     uint32_t now = millis();
     bool due = (lastPublish == 0) || (now - lastPublish >= PUBLISH_INTERVAL_MS);

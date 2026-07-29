@@ -9,6 +9,7 @@
 
 #include "secrets.h"
 #include "log.h"
+#include "measure.h"
 
 namespace {
 
@@ -40,6 +41,10 @@ char reflectCmdTopic[96]    = {0};
 char reflectStateTopic[96]  = {0};
 char reflectResultTopic[96] = {0};
 char reflectAvailTopic[96]  = {0};
+
+// Measurement station: ESP publishes event_raw; Node-RED (Phase 3) enriches + acks.
+char measureEventTopic[96]  = {0};   // ESP -> monitor-air/<dev>/measure/event_raw
+char measureAckTopic[96]    = {0};   // Node-RED -> monitor-air/<dev>/measure/ack  (device subscribes)
 
 enum ReflectState { REFLECT_IDLE, REFLECT_MEASURING };
 ReflectState reflectState = REFLECT_IDLE;
@@ -80,13 +85,21 @@ bool isValidDeviceId(const char* s) {
 // MQTT callback — runs inside client.loop(). Stays tiny: bounded-copy the raw payload
 // out of PubSubClient's reused internal buffer, set a flag, return. No parse, no publish,
 // no measurement, no pointer kept. (PubSubClient exposes no retained flag to the callback.)
-void onReflectCmd(char* t, uint8_t* payload, unsigned int len) {
-    if (strcmp(t, reflectCmdTopic) != 0) return;
-    if (cmdPending) return;  // one already queued; reflectLoop() drains it within a tick
-    size_t n = len < sizeof(pendRaw) - 1 ? len : sizeof(pendRaw) - 1;
-    memcpy(pendRaw, payload, n);
-    pendRaw[n] = '\0';
-    cmdPending = true;
+// Single dispatcher (PubSubClient has ONE callback) — route by topic. Stays tiny: bounded-copy + flag,
+// no parse/publish/measurement here.
+void onMqttMessage(char* t, uint8_t* payload, unsigned int len) {
+    if (strcmp(t, reflectCmdTopic) == 0) {
+        if (cmdPending) return;  // one already queued; reflectLoop() drains it within a tick
+        size_t n = len < sizeof(pendRaw) - 1 ? len : sizeof(pendRaw) - 1;
+        memcpy(pendRaw, payload, n);
+        pendRaw[n] = '\0';
+        cmdPending = true;
+        return;
+    }
+    if (strcmp(t, measureAckTopic) == 0) {
+        measureOnAck(payload, len);  // bounded-copy + flag; matched in measureLoop()
+        return;
+    }
 }
 
 // reflect/state: QoS0 RETAINED, current device state only (idle|measuring).
@@ -181,6 +194,7 @@ void handleReflectCmd(const char* raw) {
 // CURRENT retained state (not only on transitions) so a broker restart can't leave it stale.
 void onConnected() {
     client.subscribe(reflectCmdTopic, 1);
+    client.subscribe(measureAckTopic, 1);               // measurement-station acks
     client.publish(reflectAvailTopic, "online", true);  // retained
     publishReflectState();                              // current state (idle on boot)
 }
@@ -227,6 +241,8 @@ void mqttSetup() {
     snprintf(reflectStateTopic,  sizeof(reflectStateTopic),  "monitor-air/%s/reflect/state", MQTT_DEVICE_ID);
     snprintf(reflectResultTopic, sizeof(reflectResultTopic), "monitor-air/%s/reflect/result", MQTT_DEVICE_ID);
     snprintf(reflectAvailTopic,  sizeof(reflectAvailTopic),  "monitor-air/%s/reflect/availability", MQTT_DEVICE_ID);
+    snprintf(measureEventTopic,  sizeof(measureEventTopic),  "monitor-air/%s/measure/event_raw", MQTT_DEVICE_ID);
+    snprintf(measureAckTopic,    sizeof(measureAckTopic),    "monitor-air/%s/measure/ack", MQTT_DEVICE_ID);
     snprintf(clientId, sizeof(clientId), "monitor-air-%s", MQTT_DEVICE_ID);
     configValid = true;
 
@@ -234,7 +250,7 @@ void mqttSetup() {
     client.setBufferSize(MQTT_BUFFER_SIZE);
     client.setKeepAlive(MQTT_KEEPALIVE_S);
     client.setSocketTimeout(MQTT_SOCKET_TMO_S);
-    client.setCallback(onReflectCmd);
+    client.setCallback(onMqttMessage);
     logf("[mqtt] topic=%s\n", topic);
 }
 
@@ -257,6 +273,13 @@ void mqttLoop() {
 
 bool mqttConnected() {
     return configValid && client.connected();
+}
+
+bool mqttPublishMeasureEvent(const char* json) {
+    if (!mqttConnected()) return false;
+    bool ok = client.publish(measureEventTopic, json, false);  // QoS0, not retained
+    logf("[measure] publish %s %s\n", ok ? "ok" : "FAILED", json);
+    return ok;
 }
 
 bool mqttPublish(const SensorReading& r) {

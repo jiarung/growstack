@@ -28,3 +28,8 @@ bool mqttPublish(const SensorReading& r);
 // (QoS 0, not retained), tagged "mode":"ambient". No-op if the reading is invalid
 // (AS7341 absent). Returns true if the publish was accepted by the client.
 bool mqttPublishSpectrum(const SpectrumReading& s);
+
+// Publish a measurement-station event (already-built JSON) to monitor-air/<device>/measure/event_raw
+// (QoS 0, not retained). Returns true if accepted by the client. The measure module holds a pending
+// copy + retries until it sees a matching measure/ack.
+bool mqttPublishMeasureEvent(const char* json);
