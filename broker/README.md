@@ -263,11 +263,18 @@ bash broker/backup/influx-backup.sh        # one-off backup + rotation (keeps ne
 Schedule a daily backup via cron (`crontab -e`):
 
 ```cron
-30 3 * * * "$HOME"/monitor-air/broker/backup/influx-backup.sh >> "$HOME"/monitor-air/broker/backup/backup.log 2>&1
+# InfluxDB -> HDD daily backup + rotation
+# 19:30 UTC = 03:30 Asia/Taipei (this host runs UTC — check `timedatectl` on yours)
+30 19 * * * "$HOME"/monitor-air/broker/backup/influx-backup.sh >> "$HOME"/monitor-air/broker/backup/backup.log 2>&1
 ```
 
+**cron uses the host's timezone, not the containers'** — the compose services are
+`TZ=Asia/Taipei` but the host is UTC, so a naive `30 3` would run at 11:30 local.
+
 The script resolves its own path, loads `broker/.env`, and is safe under cron's
-minimal environment. Tune retention with `KEEP=30 bash .../influx-backup.sh`.
+minimal environment (verified with `env -i HOME=... PATH=/usr/bin:/bin`). Tune
+retention with `KEEP=30 bash .../influx-backup.sh`. Check it ran:
+`tail broker/backup/backup.log` and `ls -t /data/influx-backups | head -1`.
 
 ## Storage rationale
 

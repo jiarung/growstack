@@ -146,7 +146,7 @@ share one value domain on purpose — that is what lets the two join per plant.
 | Flow | What | Live? |
 |---|---|---|
 | Grafana deadman alert | per `(device, _field)` series silent >900 s, **then** `for: 2m` pending → Telegram fires ~17 min after the last point | ✅ |
-| `backup/influx-backup.sh` | InfluxDB → `/data/influx-backups`, keeps newest 14 | ✅ cron `30 3 * * *` UTC (= 11:30 Taipei — the host is UTC) |
+| `backup/influx-backup.sh` | InfluxDB → `/data/influx-backups`, keeps newest 14 | ✅ cron `30 19 * * *` UTC = **03:30 Taipei** |
 | `sim/publish.sh` | fake telemetry generator | ⛔ container `Exited` (intentional) |
 | `start.sh` | bring the stack up | on demand |
 
@@ -156,7 +156,8 @@ share one value domain on purpose — that is what lets the two join per plant.
    actually installed; `/data/influx-backups` held one 20 KB backup from 2026-06-15, taken
    when the database was nearly empty (1 shard, 653 B). Now installed and verified under a
    minimal `env -i` environment, the way cron will run it — today's backup is 13 MB across
-   7 shards. ⚠️ The host runs **UTC**, so `30 3` fires at **11:30 Taipei**, not overnight.
+   7 shards. Scheduled `30 19 * * *`: **cron follows the host timezone (UTC), not the
+   containers' `TZ=Asia/Taipei`**, so 19:30 UTC is what actually lands at 03:30 Taipei.
 2. ~~The weigh station is not deployed.~~ **Deployed 2026-07-29.** Telegraf recreated
    (4 consumers loaded), Node-RED image rebuilt + volume reset so `station-flow` seeded,
    Grafana picked the panel up on its own. Verified by publishing two copies of one event:
