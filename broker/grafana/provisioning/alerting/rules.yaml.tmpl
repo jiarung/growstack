@@ -44,7 +44,21 @@ groups:
                 minofday = date.hour(t: now()) * 60 + date.minute(t: now())
                 from(bucket: "sensors")
                   |> range(start: -30d)
-                  |> filter(fn: (r) => r._measurement == "air" and r.device != "sim")
+                  // Only continuously-reporting PRODUCTION series belong in a deadman.
+                  //   * `sim` is the synthetic publisher.
+                  //   * `staging-01` is the bench board — it runs only while someone is
+                  //     developing on it, so silence is its normal state, not an outage.
+                  //     (Its env fields were one 12-minute bring-up on 2026-07-17 and are
+                  //     retired; watching them means a permanent false alarm.)
+                  //   * `weight_raw` is event-driven since station Phase 2: a weigh happens
+                  //     on an NFC tap (measure/event_raw -> plant_weight), so a gap means
+                  //     "nobody weighed anything", not "the scale died". Excluded by field
+                  //     so it stays excluded if a production station ever publishes it.
+                  // Alert fatigue is how a deadman dies — a rule that always fires is a
+                  // rule nobody reads.
+                  |> filter(fn: (r) => r._measurement == "air"
+                       and r.device != "sim" and r.device != "staging-01"
+                       and r._field != "weight_raw")
                   // BH1750 light fields (lux, lux_ref) drop out in darkness, which is
                   // normal — only alert on them inside the plant-light operating
                   // window; other fields 24/7. The window comes from broker/.env

@@ -145,7 +145,7 @@ share one value domain on purpose — that is what lets the two join per plant.
 
 | Flow | What | Live? |
 |---|---|---|
-| Grafana deadman alert | per `(device, field)` series silent >900 s, **then** `for: 2m` pending → Telegram | ✅ **fixed + proven 2026-07-30** — it had never fired (see gap 5) |
+| Grafana deadman alert | per `(device, field)` series silent >900 s, **then** `for: 2m` pending → Telegram. Watches **production series only** — `sim`, `staging-01` (bench board) and `weight_raw` (event-driven) are excluded | ✅ **fixed + proven 2026-07-30** — it had never fired (see gap 5) |
 | `backup/influx-backup.sh` | InfluxDB → `/data/influx-backups`, keeps newest 14 | ✅ cron `30 19 * * *` UTC = **03:30 Taipei** |
 | `sim/publish.sh` | fake telemetry generator | ⛔ container `Exited` (intentional) |
 | `start.sh` | bring the stack up | on demand |
@@ -207,12 +207,19 @@ share one value domain on purpose — that is what lets the two join per plant.
    `staging-01`'s 5 Alerting, routed to the `telegram` contact point, bot token valid and
    chat reachable.
 
-   **Two things this exposed, both still open:**
-   - `staging-01` has published no `temp`/`hum`/`pressure`/`gas` for **13 days**. Nobody was
-     told, because of the above. Real device or firmware problem — needs looking at.
-   - `weight_raw` stopped ~33 h ago. If Phase 2 deliberately replaced continuous weight
-     telemetry with NFC-triggered `measure/event_raw`, this will now alert forever and should
-     be excluded from the rule; if not, it is a second real outage. **Decide which.**
+   **What it exposed turned out to be scope, not outages** — both resolved by narrowing the
+   rule to production series (2026-07-30):
+   - `staging-01` is the **bench board**; it only runs while someone is developing on it. Its
+     env fields (`temp`/`hum`/`pressure`/`gas`/`lux_ref`) exist for exactly one 12-minute
+     bring-up on 2026-07-17 — 43 points each, never before or since — so they are retired,
+     not broken. Excluded by device, like `sim` already was.
+   - `weight_raw` is **event-driven by design** since station Phase 2: a weigh happens on an
+     NFC tap, so a gap means nobody weighed anything. Excluded by field, so it stays excluded
+     if a production station ever publishes it.
+
+   The rule now watches 4 series (`livingroom` temp/hum/pressure/gas, plus `lux`/`lux_ref`
+   inside the light window) and alerts on none of them, which is the correct resting state. A
+   deadman that always fires is one nobody reads.
 5. **`docker compose build` fails on this host** — `~/.docker/buildx` is root-owned (from a
    2023 `sudo docker` run), so buildx cannot write its instance dir. Prefix builds with
    `DOCKER_BUILDKIT=0` (legacy builder) or `chown` the directory. This is silent-ish: compose
