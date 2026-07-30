@@ -145,7 +145,7 @@ share one value domain on purpose — that is what lets the two join per plant.
 
 | Flow | What | Live? |
 |---|---|---|
-| Grafana deadman alert | per `(device, _field)` series silent >900 s, **then** `for: 2m` pending → Telegram fires ~17 min after the last point | ✅ |
+| Grafana deadman alert | per `(device, field)` series silent >900 s, **then** `for: 2m` pending → Telegram | ✅ **fixed + proven 2026-07-30** — it had never fired (see gap 5) |
 | `backup/influx-backup.sh` | InfluxDB → `/data/influx-backups`, keeps newest 14 | ✅ cron `30 19 * * *` UTC = **03:30 Taipei** |
 | `sim/publish.sh` | fake telemetry generator | ⛔ container `Exited` (intentional) |
 | `start.sh` | bring the stack up | on demand |
@@ -198,12 +198,27 @@ share one value domain on purpose — that is what lets the two join per plant.
      = "$(docker exec monitor-air-nodered stat -c %i /data/tag-map.json)" ] \
      && echo "node-red attached" || echo "node-red DETACHED"
    ```
-4. **`docker compose build` fails on this host** — `~/.docker/buildx` is root-owned (from a
+4. **The deadman alert had never fired, and `staging-01` has been dead 13 days.** Fixed
+   2026-07-30. It evaluated to NoData with no labels while `noDataState: OK` reported that as
+   green, so the one alert whose job is noticing silence was itself silent. Three separate
+   faults in the Flux output shape (missing `_time`, `_time` older than `relativeTimeRange`,
+   and `_field` colliding with Grafana's reserved field-name column) plus the `OK` setting.
+   Now verified the whole way: 9 labelled instances, `livingroom`'s 4 fields Normal,
+   `staging-01`'s 5 Alerting, routed to the `telegram` contact point, bot token valid and
+   chat reachable.
+
+   **Two things this exposed, both still open:**
+   - `staging-01` has published no `temp`/`hum`/`pressure`/`gas` for **13 days**. Nobody was
+     told, because of the above. Real device or firmware problem — needs looking at.
+   - `weight_raw` stopped ~33 h ago. If Phase 2 deliberately replaced continuous weight
+     telemetry with NFC-triggered `measure/event_raw`, this will now alert forever and should
+     be excluded from the rule; if not, it is a second real outage. **Decide which.**
+5. **`docker compose build` fails on this host** — `~/.docker/buildx` is root-owned (from a
    2023 `sudo docker` run), so buildx cannot write its instance dir. Prefix builds with
    `DOCKER_BUILDKIT=0` (legacy builder) or `chown` the directory. This is silent-ish: compose
    prints the error but `up -d` then happily starts the **stale image**, which is how a volume
    reset can re-seed the old flow. `add-plant.sh` will hit this too.
-5. **Two older diagrams are incomplete** — `../README.md` and `README.md` both draw the stack
+6. **Two older diagrams are incomplete** — `../README.md` and `README.md` both draw the stack
    without Node-RED, so neither shows C1 or C2. Prefer this file.
 
 ## Verifying this file

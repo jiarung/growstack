@@ -24,8 +24,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: 'Sensor silent: {{ $labels.device }} / {{ $labels._field }}'
-          description: 'No new {{ $labels._field }} from {{ $labels.device }} for >15 min — check the device / sensor.'
+          summary: 'Sensor silent: {{ $labels.device }} / {{ $labels.field }}'
+          description: 'No new {{ $labels.field }} from {{ $labels.device }} for >15 min — check the device / sensor.'
         data:
           - refId: A
             relativeTimeRange:
@@ -53,19 +53,22 @@ groups:
                   |> filter(fn: (r) => (r._field != "lux" and r._field != "lux_ref") or (minofday >= $LIGHT_WINDOW_START_MIN and minofday < $LIGHT_WINDOW_END_MIN))
                   |> group(columns: ["device", "_field"])
                   |> last()
-                  // Age in seconds, stamped at NOW. Both parts matter:
-                  //   * _time must survive into the output, or Grafana's Flux
-                  //     datasource can't build a series and the reduce below
-                  //     silently yields NoData.
-                  //   * _time must be now(), NOT the last report time — the point
-                  //     would otherwise sit outside relativeTimeRange (600s) and be
-                  //     filtered out, so the STALEST series (the ones we care about)
-                  //     would be the ones that vanish.
-                  // Getting this wrong fails silent, not loud: see noDataState above.
-                  |> map(fn: (r) => ({ r with
-                       _value: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0,
-                       _time: now() }))
-                  |> keep(columns: ["device", "_field", "_time", "_value"])
+                  // Rebuild each row as a one-point series whose value is the age
+                  // in seconds. Three things here are load-bearing; each one broke
+                  // this rule silently before:
+                  //   * `_time` must be present, or Grafana's Flux datasource has no
+                  //     series to give the reduce below and yields NoData.
+                  //   * `_time` must be now(), NOT the last report time — an old
+                  //     point falls outside relativeTimeRange (600s), so the STALEST
+                  //     series would be exactly the ones that disappear.
+                  //   * the field name must NOT be carried as `_field`: Grafana treats
+                  //     that as the frame's field NAME rather than a label, so every
+                  //     series from one device collapses to {device=...} and the rule
+                  //     dies with "frame cannot uniquely be identified by its labels".
+                  //     Carried as plain `field` — annotations use $labels.field.
+                  |> map(fn: (r) => ({ device: r.device, field: r._field, _time: now(),
+                       _value: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0 }))
+                  |> group(columns: ["device", "field"])
           - refId: B
             datasourceUid: __expr__
             model:
