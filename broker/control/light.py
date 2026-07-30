@@ -31,13 +31,29 @@ _start_min = int(os.getenv("LIGHT_WINDOW_START_MIN", "480"))    # 08:00
 _end_min = int(os.getenv("LIGHT_WINDOW_END_MIN", "1110"))       # 18:30
 ON_START = dtime(_start_min // 60, _start_min % 60)  # only turn ON within [ON_START, HARD_OFF)
 HARD_OFF = dtime(_end_min // 60, _end_min % 60)      # at/after this → force OFF regardless of lux
-# Dark-day extension: on days whose accumulated DLI is low, keep supplementing
-# past HARD_OFF until EXTEND_END (a later cap). Extends only the light window,
-# not the deadman gate. DLI comes from InfluxDB (survives restarts, reuses the
-# panel's computation); a failed query just means "don't extend".
+# Evening top-up: after HARD_OFF, keep supplementing until the day's accumulated
+# DLI reaches DLI_TARGET, capped at EXTEND_END. Extends only the light window, not
+# the deadman gate. DLI comes from InfluxDB (survives restarts, reuses the panel's
+# computation).
+#
+# Why a target and not a "was today dark?" threshold: this room gets almost no
+# usable daylight — measured 2026-07-30, natural light is 1-2% of the daily total
+# (0.02-0.07 of ~3.5 mol), and indoor lux does not track outdoor solar at all. So
+# "is today dark" has the same answer every day and a threshold on it only ever
+# encodes a fixed extend-or-not, while silently breaking whenever the lamp or the
+# sensor changes scale (which is exactly what happened: a lens clean on ~2026-07-23
+# moved DLI ~2.2x and killed the old `< 1.5` rule without a single error).
+# A target is in real units, so a recalibration means re-deriving it once.
+#
+# Useful range, at the measured ~0.33 mol/h the lamp delivers:
+#   <= 3.47  never tops up (the 08:00-18:30 window already reaches it)
+#    ~4.0    tops up most evenings, stops early when the sun did contribute
+#   >= 4.12  always runs to EXTEND_END (then just move LIGHT_WINDOW_END_MIN instead)
+# Derive it from the measured baseline, NOT from horticultural tables: lux/54 is a
+# daylight conversion applied to an LED, so the absolute scale is not trustworthy.
 _extend_min = int(os.getenv("LIGHT_EXTEND_END_MIN", "1230"))   # 20:30
 EXTEND_END = dtime(_extend_min // 60, _extend_min % 60)
-DLI_EXTEND_BELOW = float(os.getenv("DLI_EXTEND_BELOW", "1.5"))  # mol·m⁻²·day⁻¹
+DLI_TARGET = float(os.getenv("DLI_TARGET", "4.0"))  # mol·m⁻²·day⁻¹
 MIN_HOLD = 5 * 60        # after a switch, hold ≥ this (matches MANUAL_HOLD; lamp may raise own lux)
 STALE = 5 * 60           # lux older than this → fail safe OFF (dead sensor)
 TICK = 60                # decision cadence, seconds
@@ -85,6 +101,16 @@ def decide(lux, lux_at, now, current, hard_off=HARD_OFF):
     if lux > LUX_OFF_ABOVE:
         return "OFF"
     return cur                             # hysteresis band → hold last state
+
+
+def extend_decision(dli, target, last):
+    """Keep supplementing this evening? Pure.
+
+    A failed DLI query (None) HOLDS the previous answer rather than defaulting to
+    off: the query runs every tick, so defaulting would drop the lamp on a single
+    blip and flap it back a minute later.
+    """
+    return last if dli is None else dli < target
 
 
 async def todays_dli():
@@ -216,27 +242,33 @@ async def run():
                         await drive(tgt, "manual", client)
 
         async def tick():
-            ext = {"decided": None, "day": None}   # per-day dark-day extension decision
+            ext = {"on": False, "day": None}   # evening top-up, re-evaluated each tick
             while True:
                 now = time.time()
                 now_local = datetime.now(TZ)
                 t = now_local.time()
 
-                # dark-day extension: once we enter [HARD_OFF, EXTEND_END), resolve
-                # (one InfluxDB query) whether today's DLI is low → extend to EXTEND_END
+                # Evening top-up: inside [HARD_OFF, EXTEND_END), keep the window open
+                # while today's DLI is still short of DLI_TARGET. Re-checked EVERY tick
+                # rather than decided once at HARD_OFF, so the lamp stops the moment the
+                # target is reached instead of running blind to EXTEND_END.
                 today = now_local.date()
                 if ext["day"] != today:
-                    ext.update(decided=None, day=today)
+                    ext.update(on=False, day=today)
                 hard_off = HARD_OFF
-                if HARD_OFF <= t < EXTEND_END and ext["decided"] is None:
+                if HARD_OFF <= t < EXTEND_END:
                     dli = await todays_dli()
-                    if dli is not None:                       # None → retry next tick
-                        ext["decided"] = dli < DLI_EXTEND_BELOW
-                        print(f"[extend] DLI so far {dli:.2f} → "
-                              f"{'extend to '+EXTEND_END.strftime('%H:%M') if ext['decided'] else 'off at '+HARD_OFF.strftime('%H:%M')}",
+                    was = ext["on"]
+                    ext["on"] = extend_decision(dli, DLI_TARGET, was)
+                    if ext["on"] != was and dli is not None:   # log transitions only
+                        print(f"[top-up] DLI {dli:.2f}/{DLI_TARGET:.2f} → "
+                              f"{'on until '+EXTEND_END.strftime('%H:%M')+' or target' if ext['on'] else 'target reached, stop'}",
                               flush=True)
-                if ext["decided"]:
+                if ext["on"]:
                     hard_off = EXTEND_END
+                    # Once the lamp goes off at target, DLI stops climbing, so this can
+                    # re-arm within a tick or two. MIN_HOLD bounds that to one switch per
+                    # 5 min, and each burst adds ~0.03 mol, so it settles just past target.
 
                 if now >= st["manual_until"] and now - st["last_switch"] >= MIN_HOLD:
                     want = decide(st["lux"], st["lux_at"], now_local, st["current"], hard_off)
@@ -279,6 +311,13 @@ def selftest():
     assert at(19, 0, 50, ho=ext) == "ON", "19:00 within extended 20:30 window + dark → ON"
     assert at(20, 30, 50, ho=ext) == "OFF", "20:30 extended hard-off → OFF"
     assert at(19, 0, 20000, ho=ext) == "OFF", "19:00 extended but bright (>15000) → OFF"
+
+    # evening top-up: target comparison + hold-last on a failed DLI query
+    assert extend_decision(3.40, 4.0, False) is True, "below target → top up"
+    assert extend_decision(4.00, 4.0, True) is False, "at target (not <) → stop"
+    assert extend_decision(4.20, 4.0, True) is False, "past target → stop"
+    assert extend_decision(None, 4.0, True) is True, "query failed → hold ON, don't flap off"
+    assert extend_decision(None, 4.0, False) is False, "query failed → hold OFF too"
     print("selftest OK")
 
 

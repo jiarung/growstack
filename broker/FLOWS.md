@@ -103,8 +103,8 @@ Topics are built from env vars, **not hardcoded** — `LIGHT_SENSOR_DEVICE` (cod
 | out | Tapo P110M (local API) | on/off; auto decisions drive the plug directly, they do **not** round-trip through `cmd` |
 
 `decide()`: ON below 5000 lx, OFF above 15000 lx, hysteresis + a `[ON_START, HARD_OFF)`
-window, a DLI-based evening extension past `HARD_OFF` on dark days, and ≥5 min hold after any
-switch. **On a stale/missing lux reading (>5 min) it does NOT simply fail off** — inside the
+window, an **evening top-up** past `HARD_OFF` (keep supplementing until the day reaches
+`DLI_TARGET`, capped at `LIGHT_EXTEND_END_MIN`), and ≥5 min hold after any switch. **On a stale/missing lux reading (>5 min) it does NOT simply fail off** — inside the
 window an already-ON light is *held* on (this environment is light-deficient, so a dead sensor
 shouldn't darken the plants); it goes OFF only if it was already off or the window has passed.
 `light-ctl.sh` is the manual path — it publishes `light/cmd`. Live: ✅.
