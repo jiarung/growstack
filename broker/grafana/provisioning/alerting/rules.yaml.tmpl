@@ -15,7 +15,11 @@ groups:
         title: Sensor stale — device/field silent
         condition: C
         for: 2m
-        noDataState: OK
+        # NOT OK. This rule's whole job is to notice silence, so treating "the
+        # query returned nothing" as healthy makes it unable to report its own
+        # failure — which is exactly what happened: a broken query read as green
+        # for weeks while staging-01/temp had been dead 12 days.
+        noDataState: NoData
         execErrState: Error
         labels:
           severity: warning
@@ -49,8 +53,19 @@ groups:
                   |> filter(fn: (r) => (r._field != "lux" and r._field != "lux_ref") or (minofday >= $LIGHT_WINDOW_START_MIN and minofday < $LIGHT_WINDOW_END_MIN))
                   |> group(columns: ["device", "_field"])
                   |> last()
-                  |> map(fn: (r) => ({ r with _value: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0 }))
-                  |> keep(columns: ["device", "_field", "_value"])
+                  // Age in seconds, stamped at NOW. Both parts matter:
+                  //   * _time must survive into the output, or Grafana's Flux
+                  //     datasource can't build a series and the reduce below
+                  //     silently yields NoData.
+                  //   * _time must be now(), NOT the last report time — the point
+                  //     would otherwise sit outside relativeTimeRange (600s) and be
+                  //     filtered out, so the STALEST series (the ones we care about)
+                  //     would be the ones that vanish.
+                  // Getting this wrong fails silent, not loud: see noDataState above.
+                  |> map(fn: (r) => ({ r with
+                       _value: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0,
+                       _time: now() }))
+                  |> keep(columns: ["device", "_field", "_time", "_value"])
           - refId: B
             datasourceUid: __expr__
             model:
