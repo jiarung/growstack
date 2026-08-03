@@ -145,7 +145,8 @@ share one value domain on purpose — that is what lets the two join per plant.
 
 | Flow | What | Live? |
 |---|---|---|
-| Grafana deadman alert | per `(device, field)` series silent >900 s, **then** `for: 2m` pending → Telegram. Watches **production series only** — `sim`, `staging-01` (bench board) and `weight_raw` (event-driven) are excluded | ✅ **fixed + proven 2026-07-30** — it had never fired (see gap 5) |
+| Grafana deadman — sensors | per `(device, field)` series silent >900 s, **then** `for: 2m` → Telegram. Watches **production series only** — `sim`, `staging-01` (bench board) and `weight_raw` (event-driven) are excluded | ✅ **fixed + proven 2026-07-30** — it had never fired (see gap 5) |
+| Grafana deadman — weather feed | Open-Meteo silent >1 h, **then** `for: 10m` → Telegram. One instance for the whole feed, not one per field | ✅ added 2026-08-03 (gap 6) |
 | `backup/influx-backup.sh` | InfluxDB → `/data/influx-backups`, keeps newest 14 | ✅ cron `30 19 * * *` UTC = **03:30 Taipei** |
 | `sim/publish.sh` | fake telemetry generator | ⛔ container `Exited` (intentional) |
 | `start.sh` | bring the stack up | on demand |
@@ -234,8 +235,11 @@ share one value domain on purpose — that is what lets the two join per plant.
    Fixed by polling every 5 min instead of hourly. This is a **retry budget, not a sampling
    rate**: the point timestamp comes from the payload's `current.time`, which only advances
    every 900 s, so extra polls inside one slot rewrite the same point — retries at zero
-   storage cost. Nothing watches the `weather` series, which is why an 11-hour outage was
-   found by eye; see the note below.
+   storage cost.
+
+   A second deadman rule (`deadman-weather-stale`, >1 h) now watches the feed, because
+   nothing did — which is why an 11-hour outage was found by eye. That was the third gap of
+   this shape; the other two are gaps 1 and 5.
 7. **Two older diagrams are incomplete** — `../README.md` and `README.md` both draw the stack
    without Node-RED, so neither shows C1 or C2. Prefer this file.
 

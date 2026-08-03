@@ -106,3 +106,70 @@ groups:
                 - evaluator:
                     type: gt
                     params: [900]
+
+      # Second deadman, for the one ingest path that is NOT a device: the Open-Meteo
+      # poll. It went dark for 11 h on 2026-08-03 and was noticed by eye, because the
+      # rule above only covers `air`. Separate rule rather than a broadened filter —
+      # the cadence and therefore the threshold are completely different.
+      - uid: deadman-weather-stale
+        title: Weather feed stale — Open-Meteo
+        condition: C
+        for: 10m
+        # NoData here means the weather measurement has nothing in 30 days, i.e. the
+        # feed is not merely late but gone. That must page, not read as healthy.
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Weather feed stale: no Open-Meteo data'
+          description: 'No new `weather` points for >1 h. Telegraf polls every 5 min and Open-Meteo 503s intermittently, so this means sustained failure, not a single miss — check `docker logs monitor-air-telegraf | grep 503`.'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: influxdb-monitor-air
+            model:
+              refId: A
+              datasource:
+                type: influxdb
+                uid: influxdb-monitor-air
+              query: |
+                from(bucket: "sensors")
+                  |> range(start: -30d)
+                  |> filter(fn: (r) => r._measurement == "weather")
+                  // The feed is all-or-nothing — one JSON object, every field lands
+                  // together — so collapse to ONE series instead of alerting six times
+                  // for a single outage. Same shape rules as the rule above: stamp
+                  // _time at now(), and never carry the label as `_field`.
+                  |> group()
+                  |> last()
+                  |> map(fn: (r) => ({ feed: "open-meteo", _time: now(),
+                       _value: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0 }))
+                  |> group(columns: ["feed"])
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    # 1 h = four missed 15-min slots at a 5-min poll cadence. Well
+                    # clear of the routine 503s, which now cost 5 min at most.
+                    params: [3600]
