@@ -73,7 +73,7 @@ anything that only reads the Telegraf config.
 | 1 | `monitor-air/+/telemetry` | `air` | `device` | ✅ `livingroom`, `staging-01` |
 | 2 | `monitor-air/+/light/state` | `light` | `location` ⚠️ not `device` | ✅ |
 | 3 | `monitor-air/+/spectrum` | `spectrum` | `device`, `plant`, `mode` | ✅ |
-| 4 | Open-Meteo HTTP (25.01, 121.46 — 板橋) | `weather` | `source`, `location`, `url` | ✅ |
+| 4 | Open-Meteo HTTP (25.01, 121.46 — 板橋) | `weather` | `source`, `location`, `url` | ✅ polled every 5 min for retries, stored at the API's 15-min resolution (see gap 7) |
 | 5 | `monitor-air/+/plant_weight` | `plant_weight` | `device`, `plant_id` | ✅ deployed 2026-07-29, verified end-to-end |
 | 6 | `record-photone.sh` → `influx write` | `photone` | `device`, `source`, `gain` | ✅ manual (35 points to date) |
 
@@ -225,7 +225,18 @@ share one value domain on purpose — that is what lets the two join per plant.
    `DOCKER_BUILDKIT=0` (legacy builder) or `chown` the directory. This is silent-ish: compose
    prints the error but `up -d` then happily starts the **stale image**, which is how a volume
    reset can re-seed the old flow. `add-plant.sh` will hit this too.
-6. **Two older diagrams are incomplete** — `../README.md` and `README.md` both draw the stack
+6. **Open-Meteo returns intermittent 503s, and an hourly poll has no retry.** Fixed
+   2026-08-03. Measured over 07-30..08-03: 16-21 of the 24 daily polls failed, and because
+   `inputs.http` does not retry inside an interval, each failure cost a whole hour — the panel
+   ran on 3-10 points/day instead of 24, then stopped entirely for 11 h. The same URL answers
+   200 on demand, so this is upstream flakiness at the polled instant, not an outage.
+
+   Fixed by polling every 5 min instead of hourly. This is a **retry budget, not a sampling
+   rate**: the point timestamp comes from the payload's `current.time`, which only advances
+   every 900 s, so extra polls inside one slot rewrite the same point — retries at zero
+   storage cost. Nothing watches the `weather` series, which is why an 11-hour outage was
+   found by eye; see the note below.
+7. **Two older diagrams are incomplete** — `../README.md` and `README.md` both draw the stack
    without Node-RED, so neither shows C1 or C2. Prefer this file.
 
 ## Verifying this file
