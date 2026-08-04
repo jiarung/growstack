@@ -22,8 +22,9 @@ constexpr uint32_t SETTLE_MIN_MS  = 2000;    // min after IDENTIFIED (pre-placem
 constexpr uint32_t SETTLE_TIMEOUT = 20000;
 constexpr uint32_t TAG_ABSENT_MS  = 500;     // tag gone this long before the next measurement
 constexpr uint16_t TAG_POLL_MS    = 50;      // per readPassiveTargetID poll (bounded loop latency)
-constexpr float    OLED_EMPTY_G   = 5.0f;
+constexpr float    OLED_EMPTY_G   = 10.0f;   // scale considered "empty" below this
 constexpr uint32_t OLED_SLEEP_MS  = 30000;
+constexpr uint32_t NUDGE_MS       = 8000;    // load present + unscanned this long -> "scan tag" nudge
 
 // Reliable delivery (app-level, since PubSubClient publishes QoS0): event_id + ack + retry.
 constexpr uint32_t ACK_TIMEOUT_MS = 3000;    // no ack within this -> resend the same event_id
@@ -47,7 +48,7 @@ volatile bool ackMatched = false;            // set by measureOnAck() when an ac
 // OLED
 Adafruit_SSD1306 oled(128, 64, &Wire, -1);
 bool oledOk = false, oledSleeping = false;
-uint32_t emptySince = 0;
+uint32_t emptySince = 0, loadSince = 0;   // OLED auto-off + "placed but unscanned" nudge timers
 
 // True + hex UID if a tag is present (bounded ~TAG_POLL_MS block; the bench-verified read path).
 bool readTag(char* out, size_t outsz) {
@@ -79,8 +80,9 @@ void oledRender() {
     uint32_t now = millis();
 
     WeightStats sw = hx711WindowStats();
-    if (sw.valid && sw.mean_g < OLED_EMPTY_G) { if (!emptySince) emptySince = now; }
-    else emptySince = 0;
+    bool empty = sw.valid && sw.mean_g < OLED_EMPTY_G;
+    if (empty) { if (!emptySince) emptySince = now; loadSince = 0; }
+    else       { emptySince = 0; if (!loadSince) loadSince = now; }   // loaded (or invalid) → treat as load
     if (mstate == M_IDLE && emptySince && (now - emptySince) > OLED_SLEEP_MS) {
         if (!oledSleeping) { oled.ssd1306_command(SSD1306_DISPLAYOFF); oledSleeping = true; }
         return;
@@ -99,9 +101,17 @@ void oledRender() {
     oled.setCursor(0, 0);
 
     if (mstate == M_IDLE) {
-        oled.println("Measure station");
-        oled.setCursor(0, 24); oled.setTextSize(2); oled.println("Place pot");
-        oled.setCursor(0, 46); oled.println("+ scan tag");
+        if (!loadSince) {                     // empty scale → the prompt
+            oled.println("Measure station");
+            oled.setCursor(0, 24); oled.setTextSize(2); oled.println("Place pot");
+            oled.setCursor(0, 46); oled.println("+ scan tag");
+        } else {                              // load present, not yet scanned → live weight + nudge
+            oled.println("Ready to weigh");
+            oled.setCursor(0, 22); oled.setTextSize(2);
+            if (sw.valid) { oled.print(sw.mean_g, 1); oled.println(" g"); } else oled.println("-- g");
+            oled.setTextSize(1); oled.setCursor(0, 54);
+            oled.print((now - loadSince) > NUDGE_MS ? ">> SCAN TAG to save <<" : "scan tag to save");
+        }
     } else if (mstate == M_STABILIZING) {
         oled.print("Tag "); oled.println(curUid);
         oled.setCursor(0, 22); oled.setTextSize(2);
