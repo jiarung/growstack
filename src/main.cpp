@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <ArduinoOTA.h>
 #include <esp_system.h>
 
 #include "secrets.h"
@@ -23,7 +24,18 @@ static uint32_t lastWifiAttempt = 0;
 
 // Non-blocking WiFi: kick off a connect, retry on a timer, never spin-wait.
 static void wifiEnsure() {
-    if (WiFi.status() == WL_CONNECTED) return;
+    static bool ipLogged = false;
+    if (WiFi.status() == WL_CONNECTED) {
+        // Print the IP once per connection — mDNS is unreliable on this AP, so OTA must
+        // target this IP directly: pio run -e ota -t upload --upload-port <ip>
+        if (!ipLogged) {
+            logf("[wifi] connected, IP %s (OTA: --upload-port %s)\n",
+                 WiFi.localIP().toString().c_str(), WiFi.localIP().toString().c_str());
+            ipLogged = true;
+        }
+        return;
+    }
+    ipLogged = false;
     uint32_t now = millis();
     if (lastWifiAttempt != 0 && now - lastWifiAttempt < WIFI_RETRY_MS) return;
     lastWifiAttempt = now;
@@ -70,11 +82,21 @@ void setup() {
     }
     mqttSetup();
     measureBegin();  // PN532 NFC (software SPI) for the measurement station
+
+    // OTA (flash over WiFi). Registers the espota service; becomes reachable once WiFi is up.
+    ArduinoOTA.setHostname(MQTT_DEVICE_ID);
+    ArduinoOTA.setPassword(OTA_PASSWORD);
+    ArduinoOTA.onStart([]() { logln("[ota] update starting"); });
+    ArduinoOTA.onEnd([]()   { logln("[ota] done, rebooting"); });
+    ArduinoOTA.onError([](ota_error_t e) { logf("[ota] error %u\n", (unsigned)e); });
+    ArduinoOTA.begin();
+
     wifiEnsure();  // start the first (non-blocking) connection attempt
 }
 
 void loop() {
     wifiEnsure();  // non-blocking reconnect
+    ArduinoOTA.handle();  // service OTA flash requests (no-op until WiFi is up)
     mqttLoop();    // pump client + rate-limited MQTT reconnect
     reflectLoop(); // drain reflect/cmd + advance the reflectance state machine
     hx711Poll();      // non-blocking weight sampling (reads 1 raw when the HX711 is ready)
