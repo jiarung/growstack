@@ -43,6 +43,17 @@ print(f"added: {', '.join(new)} ({len(dd['options'])} options total)")
 PY
 
 echo "Redeploying node-red (rebuild + volume reset)..."
+# BUILD FIRST, destroy second. The old order (rm container -> rm volume -> build)
+# meant a build failure left Node-RED deleted and never restarted, because `set -e`
+# aborts before the `up`. Building first makes a failure here a no-op.
+#
+# DOCKER_BUILDKIT=0 because ~/.docker/buildx is root-owned on this host (a stray
+# 2023 `sudo docker` run), so buildx dies with "mkdir .../instances: permission
+# denied" while the legacy builder is unaffected. Real fix, when you have sudo:
+#   sudo chown -R "$USER:$USER" ~/.docker
+# then this line can go.
+DOCKER_BUILDKIT=0 docker compose build node-red >/dev/null
+
 docker compose rm -sf node-red >/dev/null
 # resolve the volume name via compose (respects COMPOSE_PROJECT_NAME); tolerate
 # a missing volume (fresh host) but still fail on e.g. volume-in-use
@@ -50,7 +61,6 @@ vol="$(docker compose config --format json | python3 -c 'import sys,json; print(
 if docker volume inspect "$vol" >/dev/null 2>&1; then
   docker volume rm "$vol" >/dev/null
 fi
-docker compose build node-red >/dev/null
 docker compose up -d node-red >/dev/null
 sleep 8
 
