@@ -263,14 +263,34 @@
     },
     {
       "id": 15,
-      "title": "Plant weight (g) per plant — NFC weigh station",
+      "title": "Plant weight per plant — one value per day, vs that day's DLI",
       "type": "timeseries",
       "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 78 },
-      "fieldConfig": { "defaults": { "unit": "massg", "custom": { "drawStyle": "line", "fillOpacity": 0, "spanNulls": true, "showPoints": "always", "pointSize": 6 } }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 78 },
+      "description": "Weighing is a manual NFC-triggered act, not a continuous signal, so this aggregates to ONE median value per plant per local day rather than to an elastic window — at v.windowPeriod the same plant could show several points on a busy afternoon and none for days, which reads as noise instead of a trend. Daily DLI (right axis, lux estimate — the same figure the light controller tops up against) is overlaid so weight change can be read against the light actually delivered that day. Excludes plant_id=\"unknown\" and non-positive weights; see the table below for tags still needing ./add-tag.sh.",
+      "fieldConfig": {
+        "defaults": { "unit": "massg", "custom": { "drawStyle": "line", "fillOpacity": 0, "spanNulls": true, "showPoints": "always", "pointSize": 7 } },
+        "overrides": [
+          { "matcher": { "id": "byFrameRefID", "options": "B" }, "properties": [ { "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "none" }, { "id": "custom.drawStyle", "value": "bars" }, { "id": "custom.fillOpacity", "value": 25 }, { "id": "displayName", "value": "DLI (mol/m²/day)" } ] }
+        ]
+      },
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> group(columns: [\"plant_id\"])" }
+        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  // a pot cannot weigh <= 0 \u2014 those are tare drift with nothing on the scale\n  |> filter(fn: (r) => r._value > 0.0)\n  // \"unknown\" is not a plant: it is every unregistered tag pooled into one\n  // bucket, so a trend line through it would average unrelated objects.\n  // The table below lists them so the missing registrations stay visible.\n  |> filter(fn: (r) => r.plant_id != \"unknown\")\n  |> group(columns: [\"plant_id\"])\n  // One value per plant per LOCAL day. Weighing is a manual, bursty act \u2014\n  // several taps within a session are the same measurement repeated, so the\n  // median gives the day's figure and discards a fumbled weigh.\n  |> aggregateWindow(every: 1d, fn: median, createEmpty: false)\n  |> yield(name: \"weight\")" },
+        { "refId": "B", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> yield(name: \"DLI\")" }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "Unregistered NFC tags — need ./add-tag.sh <plant-id>",
+      "type": "table",
+      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 87 },
+      "description": "Every weigh whose tag UID is not in node-red/tag-map.json. The record is never dropped — plant_id becomes \"unknown\" and the raw uid is kept — so this table is the worklist: run ./add-tag.sh <plant-id>, tap the tag, and the next weigh lands on the right plant. Empty is the healthy state.",
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "align": "auto" } }, "overrides": [] },
+      "options": { "showHeader": true },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"uid\" and r.plant_id == \"unknown\")\n  |> keep(columns: [\"_time\", \"_value\", \"device\"])\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 25)" }
       ]
     }
   ]
