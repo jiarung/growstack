@@ -22,7 +22,7 @@ constexpr uint32_t SETTLE_MIN_MS  = 2000;    // min after IDENTIFIED (pre-placem
 constexpr uint32_t SETTLE_TIMEOUT = 20000;
 constexpr uint32_t TAG_ABSENT_MS  = 500;     // tag gone this long before the next measurement
 constexpr uint16_t TAG_POLL_MS    = 50;      // per readPassiveTargetID poll (bounded loop latency)
-constexpr float    OLED_EMPTY_G   = 10.0f;   // scale considered "empty" below this
+constexpr float    OLED_EMPTY_G   = 30.0f;   // scale considered "empty" below this
 constexpr uint32_t OLED_SLEEP_MS  = 30000;
 constexpr uint32_t NUDGE_MS       = 8000;    // load present + unscanned this long -> "scan tag" nudge
 
