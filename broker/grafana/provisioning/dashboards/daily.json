@@ -1,0 +1,100 @@
+{
+  "uid": "monitor-air-daily",
+  "title": "monitor-air — daily",
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "liveNow": false,
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "tags": ["monitor-air", "daily"],
+  "templating": { "list": [] },
+  "time": { "from": "now-30d", "to": "now" },
+  "timepicker": {},
+  "timezone": "Asia/Taipei",
+  "version": 1,
+  "weekStart": "",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Plant weight — median per plant per day",
+      "type": "timeseries",
+      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "description": "One median value per plant per LOCAL day. Weighing is a manual NFC-triggered act, so several taps in one session are the same measurement repeated — the median takes the day's figure and discards a fumbled weigh. Excludes plant_id=\"unknown\" and non-positive readings.",
+      "fieldConfig": { "defaults": { "unit": "massg", "custom": { "drawStyle": "line", "fillOpacity": 0, "spanNulls": true, "showPoints": "always", "pointSize": 7 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r._value > 0.0 and r.plant_id != \"unknown\")\n  |> group(columns: [\"plant_id\"])\n  |> aggregateWindow(every: 1d, fn: median, createEmpty: false)" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Plant weight — change per day (g/day)",
+      "type": "timeseries",
+      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 9 },
+      "description": "Day-over-day change in the daily median: the growth / water-loss signal, and the reason the weighing exists. EMPTY UNTIL A PLANT HAS BEEN WEIGHED ON TWO SEPARATE DAYS — a difference needs two points. As of 2026-08-05 only one full session exists, so this stays blank until the next one; that is accumulation, not a fault.",
+      "fieldConfig": { "defaults": { "unit": "massg", "custom": { "drawStyle": "bars", "fillOpacity": 60, "spanNulls": false } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r._value > 0.0 and r.plant_id != \"unknown\")\n  |> group(columns: [\"plant_id\"])\n  |> aggregateWindow(every: 1d, fn: median, createEmpty: false)\n  // day-over-day change: the growth / water-loss signal. Needs at least TWO\n  // days on which a plant was weighed, so it stays empty until the second session.\n  |> difference(nonNegative: false)" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "DLI per day (lux estimate)",
+      "type": "timeseries",
+      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 17 },
+      "description": "Daily light integral from the BH1750, lux/54. This is the figure the light controller tops up against (DLI_TARGET, default 4.0), so it is the one to read when asking whether the evening top-up did its job. Absolute scale is not trustworthy — lux/54 is a daylight conversion applied to an LED — so read it relatively.",
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "bars", "fillOpacity": 55 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> yield(name: \"DLI lux est.\")" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Outdoor solar & rain per day (板橋)",
+      "type": "timeseries",
+      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
+      "description": "Open-Meteo daily context. Indoor light barely tracks this — natural light measured at 1-2% of the indoor daily total on 2026-07-30 — so treat it as weather context, not as an explanation of indoor DLI.",
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [ { "matcher": { "id": "byFrameRefID", "options": "B" }, "properties": [ { "id": "custom.drawStyle", "value": "bars" }, { "id": "unit", "value": "lengthmm" }, { "id": "custom.axisPlacement", "value": "right" } ] } ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"shortwave_radiation\")\n  |> aggregateWindow(every: 1d, fn: mean, createEmpty: false)\n  |> yield(name: \"solar mean\")" },
+        { "refId": "B", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"precipitation\")\n  |> aggregateWindow(every: 1d, fn: sum, createEmpty: false)\n  |> yield(name: \"rain total\")" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Lamp — when it switched off each day",
+      "type": "timeseries",
+      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 25 },
+      "description": "Local hour of the last lamp-off. 18.5 = the base window end (18:30, no top-up); ~19.8-20.1 = the evening top-up ran and reached DLI_TARGET; 20.5 = it ran to the EXTEND_END cap without reaching target, i.e. the lamp delivered less light than usual that day. Restricted to 17:00-21:30 because light/state is retained and every Telegraf reconnect replays it as a phantom OFF.",
+      "fieldConfig": { "defaults": { "unit": "none", "min": 17, "max": 21.5, "custom": { "drawStyle": "line", "fillOpacity": 0, "showPoints": "always", "pointSize": 8, "spanNulls": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"light\" and r._field == \"on\" and r._value == 0.0)\n  |> map(fn: (r) => ({ r with _value: float(v: date.hour(t: r._time)) + float(v: date.minute(t: r._time)) / 60.0 }))\n  // Keep only plausible lamp-off times. `light/state` is RETAINED, so every\n  // Telegraf reconnect replays it and lands a phantom OFF at the restart time —\n  // one such artifact sits at 22:44 on 2026-07-30. The real switch-off is always\n  // in the evening window, so anything outside it is not a lamp event.\n  |> filter(fn: (r) => r._value >= 17.0 and r._value <= 21.5)\n  |> aggregateWindow(every: 1d, fn: last, createEmpty: false)" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Ingest completeness — points per day",
+      "type": "timeseries",
+      "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 25 },
+      "description": "Points stored per day per pipeline. This is the panel that makes a silent outage visible: the Open-Meteo 503 collapse shows here as weather dropping from ~96/day to 3-10/day between 2026-07-30 and 08-03, and the recovery back to 96 after the poll interval was cut to 5 min. A pipeline going flat is the signal — the absolute heights differ by design.",
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "bars", "fillOpacity": 50, "stacking": { "mode": "none" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "influxdb", "uid": "influxdb-monitor-air" }, "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nbase = from(bucket: \"sensors\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n\n// One representative field per measurement — counting every field would mix\n// value types in one group, which aggregateWindow rejects.\nunion(tables: [\n  base |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\"),\n  base |> filter(fn: (r) => r._measurement == \"spectrum\" and r._field == \"f555\"),\n  base |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"temperature_2m\"),\n  base |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"),\n])\n  |> group(columns: [\"_measurement\"])\n  |> aggregateWindow(every: 1d, fn: count, createEmpty: true)" }
+      ]
+    }
+  ]
+}
