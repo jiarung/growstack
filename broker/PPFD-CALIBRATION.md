@@ -1,8 +1,9 @@
 # PPFD 校準 — 現場指引
 
 把 PPFD 面板的 `CAL` 常數校成真實的 µmol·m⁻²·s⁻¹:在日光下用**同位置的
-BH1750**去交叉校準 AS7341 光譜。搭配 `calibrate-ppfd.sh` 使用。
-完整原理:`~/.claude/plans/structured-floating-sparrow.md`。
+BH1750**去交叉校準 AS7341 光譜。搭配 `calibrate-ppfd.sh` 使用。原理見下一節
+——之前這裡指向 `~/.claude/plans/` 底下的一份計畫,那個路徑不在版本控制內,
+而且該檔名後來被另一份不相干的計畫覆蓋了,所以推導改為就地寫在這份文件裡。
 
 ## 一句話原理
 
@@ -26,9 +27,18 @@ BH1750**去交叉校準 AS7341 光譜。搭配 `calibrate-ppfd.sh` 使用。
 - `lux`(BH1750 @ 0x23)= 在植物位置,**被植物燈照到**。
 - `lux_ref`(BH1750 @ 0x5C)= 約 10 cm 外,**遮掉植物燈** → 只有環境/日光。
   (`lux − lux_ref` ≈ 植物燈的貢獻。)
-- AS7341 在 **staging-01**;`lux`/`lux_ref` 目前在 **livingroom** 板上。
-  參考用的 lux 必須跟 AS7341 **同一塊板、同一位置** —— 所以要用 staging-01
-  自己的 BH1750,不是 livingroom 的。
+- **這個限制已經解除(2026-08 查證)**:AS7341 與兩顆 BH1750 現在都在
+  **`livingroom`** 這塊板上(近兩天各約 11,000 筆),`staging-01` 只剩開發時
+  偶爾上線。先前要求「參考 lux 必須跟 AS7341 同一塊板」的顧慮不再存在,直接
+  用 `livingroom` 自己的 `lux` 即可。
+- 驗證哪塊板上有哪些感測器,不要憑印象:
+
+  ```bash
+  docker exec monitor-air-influxdb influx query --org monitor-air '
+  from(bucket:"sensors") |> range(start:-2d)
+    |> filter(fn:(r)=> r._measurement=="spectrum" and r._field=="f555")
+    |> group(columns:["device"]) |> count()'
+  ```
 
 ## 什麼時候做
 

@@ -18,6 +18,20 @@ found below (cross-sensor aim, missing white-NIR). Perfect for **relative
 monitoring** (each plant vs its own baseline over time) — which is what detects
 health *changes*.
 
+> **Status 2026-08-06 — blocked on hardware, not on this plan.** The AS7263 does
+> not currently aim at a leaf, so a re-scan would produce the same empty NIR the
+> constraints below describe. The optics/mount are being redesigned; nothing here
+> is actionable until that lands, and the first reflectance data taken afterwards
+> is the real baseline.
+>
+> Two things settled since this was written, both reinforcing the AS7263-only
+> choice: the AS7341 has **no band between 680 nm and its broad NIR channel**, so
+> NDRE and CIre are not merely inconvenient on it but impossible; and the 47
+> plant-tagged reflectance readings from 2026-07-03 are unusable regardless —
+> they predate the AS7263 wiring (no `n730`) *and* a lens clean around 07-22 that
+> moved the optical path by ~2.2×, so they are not comparable with anything taken
+> later.
+
 ## Constraints found (from InfluxDB, 2026-07-22)
 1. **The 12 real cacti have NO NIR data.** Only `cactus-01`, `test-01`, `white-ref`
    ever got `net_n810`; the 2026-07-03 full scan predates the AS7263 wiring

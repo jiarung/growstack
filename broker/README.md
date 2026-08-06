@@ -1,33 +1,39 @@
 # monitor-air server stack
 
-The server side of `monitor-air`, run via Docker Compose:
+The server side of `monitor-air`, run via Docker Compose. This page covers the
+**services** — what runs, how to operate it. For **data paths** — what flows where,
+and whether each one is actually alive right now — see
+[`FLOWS.md`](FLOWS.md), which is the single owner of that picture. It used to be
+drawn here too, and the two copies drifted apart.
 
 ```mermaid
 flowchart LR
-    esp["ESP32-S3<br/>BME680 + BH1750"]
+    devices["ESP32-S3 nodes<br/>環境 / 光譜 / 秤重站"]
+    phone["phone<br/>/ui + Shortcuts"]
 
     subgraph server["this host — Docker stack"]
-        mqtt(["Mosquitto<br/>MQTT 1883"])
-        tgf["Telegraf"]
-        influx[("InfluxDB<br/>bucket: sensors")]
-        graf["Grafana"]
-        light["light service<br/>decide() / 60s"]
+        mqtt(["mosquitto<br/>MQTT 1883"])
+        nr["node-red<br/>reflectance + weigh station"]
+        tgf["telegraf"]
+        influx[("influxdb<br/>bucket: sensors")]
+        graf["grafana"]
+        light["light service<br/>decide() / 60 s"]
     end
 
-    plug["Tapo P110M<br/>plant light"]
+    meteo(["Open-Meteo"])
+    plug["Tapo P110M<br/>grow lamp"]
     teleg(["Telegram"])
-    hdd[("HDD /data")]
-    ctl["light-ctl.sh<br/>(manual / AI)"]
+    hdd[("HDD /data/influx-backups")]
 
-    esp -- "telemetry<br/>temp/hum/pressure/gas/lux" --> mqtt
-    mqtt --> tgf --> influx --> graf
-    influx -. "nightly backup" .-> hdd
-    mqtt -- "lux" --> light
-    ctl -- "cmd" --> mqtt
-    mqtt -- "cmd" --> light
-    light -- "ON / OFF" --> plug
-    light -- "state (retained)" --> mqtt
-    graf -- "deadman:<br/>sensor silent >15 min" --> teleg
+    devices <--> mqtt
+    phone --> nr
+    nr <--> mqtt
+    mqtt --> tgf
+    meteo --> tgf
+    tgf --> influx --> graf
+    mqtt --> light --> plug
+    graf -- "deadman alerts" --> teleg
+    influx -- "nightly backup" --> hdd
 ```
 
 | Service    | Role                                   | Address                         |
@@ -97,13 +103,23 @@ docker compose exec -T influxdb influx delete --bucket sensors \
 - **Topic:** `monitor-air/<device>/telemetry` (e.g. `monitor-air/sensor-01/telemetry`)
 - **Payload (JSON, all values floats):**
   ```json
-  {"temp":24.8,"hum":51.2,"pressure":1009.3,"gas":12.4,"lux":350.0}
+  {"temp":24.8,"hum":51.2,"pressure":1009.3,"gas":12.4,"lux":350.0,"lux_ref":8.1}
   ```
   Keep every field a float (`lux:350.0`, not `350`) — InfluxDB fixes a field's
   type on first write, and int/float drift causes partial write failures.
+  A sensor that fails to read omits its field rather than sending null.
+
+`lux` is the BH1750 at the plant (sees the grow lamp); `lux_ref` is a second,
+shielded BH1750 beside it (ambient only). `lux - lux_ref` is the lamp's own
+contribution.
 
 Telegraf maps this to measurement `air`, tag `device` (2nd topic segment), and
 one float field per key.
+
+`telemetry` is not the only topic — `spectrum`, `reflect/*` and `measure/*` have
+their own contracts. [`FLOWS.md`](FLOWS.md) lists every one with its measurement
+and tags; [`MEASUREMENT-STATION.md`](MEASUREMENT-STATION.md) has the weigh-station
+contract in full.
 
 ## Plant-light control
 
@@ -111,10 +127,28 @@ The `light` service reads `lux` from telemetry and switches a **Tapo P110M**
 plug (the plant light). The ESP32 knows nothing about the plug — it only
 reports lux. Decisions run here on a 60 s tick.
 
-**Rule (v1):** only turn on within a local-time window when it's dark, with a
-lux hysteresis gap to stop flapping, and a hard off in the evening. A
-dead/stale sensor fails safe to OFF. All knobs (`LUX_ON_BELOW`, `ON_START`,
-`HARD_OFF`, `MIN_HOLD`, …) live at the top of `control/light.py`.
+**The rule.** Inside a local-time window (`ON_START`–`HARD_OFF`, default
+08:00–18:30) turn on when it is dark (`lux < LUX_ON_BELOW`), off when it is bright
+(`lux > LUX_OFF_ABOVE`), and hold between the two so it cannot flap. Outside the
+window: off. A switch is held for `MIN_HOLD` before it can flip again.
+
+**Evening top-up.** After `HARD_OFF`, keep supplementing until the day's
+accumulated DLI reaches `DLI_TARGET`, capped at `LIGHT_EXTEND_END_MIN` (20:30).
+Re-checked every tick, so the lamp stops the moment the target is met rather than
+running blind to the cap. This replaced an earlier "was today dark?" threshold,
+which could not work here: natural light measures 1–2 % of the daily total, so the
+answer was the same every day. Derive `DLI_TARGET` from your own measured baseline
+— `lux/54` is a daylight conversion applied to an LED, so the absolute scale is not
+trustworthy.
+
+**On a stale or missing lux reading it does NOT simply fail off.** Inside the
+window an already-ON light is *held on* — this environment is light-deficient, so a
+dead sensor should not darken the plants. It goes off only if it was already off,
+or the window has passed.
+
+All knobs (`LUX_ON_BELOW`, `LUX_OFF_ABOVE`, `ON_START`, `HARD_OFF`, `MIN_HOLD`,
+`STALE`, …) live at the top of `control/light.py`; the window and `DLI_TARGET`
+come from `.env`.
 
 **Topics** (`<loc>` = `LIGHT_LOCATION`):
 
@@ -136,11 +170,21 @@ docker compose run --rm light python /light.py --selftest   # check decide() log
 
 ## Viewing charts
 
-Open `http://<host>:3001`, log in (`admin` / your `GF_SECURITY_ADMIN_PASSWORD`),
-open the **monitor-air** dashboard. A **sensor-freshness** table on top, then
-time-series panels (temp / humidity / pressure / gas / light), a **DLI** bar
-chart, and an **AS7341 spectrum** bar chart. The InfluxDB datasource is
-auto-provisioned (uid `influxdb-monitor-air`).
+Open `http://<host>:3001`, log in (`admin` / your `GF_SECURITY_ADMIN_PASSWORD`).
+The InfluxDB datasource and both dashboards are auto-provisioned (datasource uid
+`influxdb-monitor-air`); the provider watches the whole
+`grafana/provisioning/dashboards/` directory, so adding a `.json` there is all it
+takes to add a dashboard — no config change, no restart.
+
+| Dashboard | Grain | For |
+|---|---|---|
+| **monitor-air** | live, `now-24h` | is it working right now — sensor freshness, temp/hum/pressure/gas/light, spectrum, PPFD, reflectance, plant weight |
+| **monitor-air — daily** | one point per local day, `now-30d` | what happened each day — weight per plant and its day-over-day change, DLI, outdoor context, when the lamp switched off, and per-pipeline ingest completeness |
+
+⚠️ Every `aggregateWindow(every: 1d)` must carry `import "timezone"` +
+`option location = timezone.location(name: "Asia/Taipei")`. Without it the day
+boundary is UTC midnight — 08:00 local — which cuts straight through a working
+day. The charts still render; every number is just misfiled.
 
 The **AS7341 spectrum** panel shows the latest 8-channel ambient spectrum
 (f415 violet → f680 red, raw counts) from the `spectrum` measurement. Telegraf
@@ -187,12 +231,16 @@ count is first normalized by that channel's **datasheet irradiance responsivity
 F6=840, F7=1350, F8=1070 — the channels differ ~25× in sensitivity, so skipping
 this badly overweights yellow/red), then **photon-weighted by `λ`**. Gain and
 integration scale all channels equally, so they fold into `CAL`. The **spectral
-shape is now physically corrected; only the absolute scale is uncalibrated** —
-`CAL = 0.005` is a placeholder. Calibrate against a PAR meter:
-`CAL_new = 0.005 · (PPFD_meter / shown value)`. The AS7341 currently lives on
-`staging-01` (indoors); series are labelled by device, so it reads the plant only
-once that board moves to `livingroom`. The `lux/54` DLI stays until `CAL` is
-calibrated, then the DLI switches to the spectrum integral.
+shape is physically corrected; the absolute scale is calibrated for daylight
+only** — `CAL = 0.0017469`, derived against a co-located BH1750 in daylight (see
+[`PPFD-CALIBRATION.md`](PPFD-CALIBRATION.md)). Under the grow lamp it is still
+wrong and the correction factor is unresolved; that is what
+[`PHOTONE-CAL-PLAN.md`](PHOTONE-CAL-PLAN.md) exists to settle. Recalibrate with
+`CAL_new = CAL_old · (PPFD_meter / shown value)`.
+
+Both the `lux/54` DLI and the spectrum DLI are charted side by side, the former
+labelled LEGACY. Note that the light controller's evening top-up decides against
+the **lux estimate**, not the spectrum one.
 
 ## Monitoring / device health
 
@@ -210,17 +258,35 @@ offline. This catches per-field dropouts that the time-series panels hide.
 
 ### Deadman alert (Telegram)
 
-A provisioned Grafana alert rule (folder **Device health**) fires per
-`(device, field)` when that series has been silent for **>15 min** — one rule
-covers all current and future devices/fields automatically. 15 min sits above
-the BH1750's transient gaps, so it pages only on a genuine sustained outage;
-the 5-min table is the fine-grained view.
+Two provisioned rules in the folder **Device health**:
 
-Two exclusions in the rule's query: the `sim` test device is ignored, and the
-light fields (`lux`, `lux_ref`) are only watched **inside the plant-light
-operating window** — the BH1750 stops reporting lux in darkness, which is
-normal, so alerting on it at night would be pure noise. All other fields are
-watched 24/7.
+| Rule | Fires when | Pending |
+|---|---|---|
+| `deadman-sensor-stale` | a `(device, field)` series is silent **>900 s** | `for: 2m` → ~17 min after the last point |
+| `deadman-weather-stale` | the Open-Meteo feed is silent **>1 h** | `for: 10m` |
+
+The sensor rule covers all current and future devices/fields automatically. The
+weather rule is separate because the cadence differs by two orders of magnitude,
+and it collapses the whole feed to **one** alert instance — the six weather fields
+arrive in a single JSON object, so per-field alerting would send six messages for
+one outage.
+
+Exclusions in the sensor rule, each with a reason:
+
+- `sim` — the synthetic publisher.
+- `staging-01` — the bench board. It runs only while someone is developing on it,
+  so silence is its normal state.
+- `weight_raw` — weight became event-driven with the weigh station, so a gap means
+  nobody weighed anything, not that the scale died.
+- `lux` / `lux_ref` — watched **only inside the plant-light window**. The BH1750
+  stops reporting in darkness, which is normal.
+
+> **This alert silently did nothing for weeks.** The query dropped `_time`, so
+> Grafana saw NoData — and `noDataState: OK` reported that as healthy. Both are
+> fixed (`noDataState: NoData` now, so the rule can report its own failure), but
+> the lesson generalises: verifying that a rule *loads* is not verifying that it
+> *fires*. Test by pointing it at a series you know is stale and watching for the
+> Telegram message. `FLOWS.md` gap 5 has the full post-mortem.
 
 **The window is a single shared parameter**: `LIGHT_WINDOW_START_MIN` /
 `LIGHT_WINDOW_END_MIN` in `.env` (minutes since midnight; 480=08:00,
