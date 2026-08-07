@@ -71,7 +71,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.plant_id != \"unknown\")\n  // Reject empty-scale reads. The station publishes whatever the load cell\n  // settles on, and OLED_EMPTY_G (30 g, firmware) only blanks the DISPLAY —\n  // it does not gate publishing, so a tag scanned with nothing on the scale\n  // stores ~10-12 g against a real plant. The lightest pot here is ~120 g.\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n  // MIN, not median: on a watering day the station records twice, before and\n  // after, and those are two different physical states — not one measurement\n  // repeated. The minimum is the pre-water (\"dry end\") weight, the only series\n  // whose day-over-day difference means one thing: water the plant actually\n  // used. A median blends the two, so its difference mixes consumption with\n  // the water just added.\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.plant_id != \"unknown\")\n  // Reject empty-scale reads. The station publishes whatever the load cell\n  // settles on, and OLED_EMPTY_G (30 g, firmware) only blanks the DISPLAY —\n  // it does not gate publishing, so a tag scanned with nothing on the scale\n  // stores ~10-12 g against a real plant. The lightest pot here is ~120 g.\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n  // MIN, not median: on a watering day the station records twice, before and\n  // after, and those are two different physical states — not one measurement\n  // repeated. The minimum is the pre-water (\"dry end\") weight, the only series\n  // whose day-over-day difference means one thing: water the plant actually\n  // used. A median blends the two, so its difference mixes consumption with\n  // the water just added.\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
     }
    ]
   },
@@ -117,13 +117,13 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.plant_id != \"unknown\")\n  // Reject empty-scale reads. The station publishes whatever the load cell\n  // settles on, and OLED_EMPTY_G (30 g, firmware) only blanks the DISPLAY —\n  // it does not gate publishing, so a tag scanned with nothing on the scale\n  // stores ~10-12 g against a real plant. The lightest pot here is ~120 g.\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n  // MIN, not median: on a watering day the station records twice, before and\n  // after, and those are two different physical states — not one measurement\n  // repeated. The minimum is the pre-water (\"dry end\") weight, the only series\n  // whose day-over-day difference means one thing: water the plant actually\n  // used. A median blends the two, so its difference mixes consumption with\n  // the water just added.\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  // day-over-day change: the growth / water-loss signal. Needs at least TWO\n  // days on which a plant was weighed, so it stays empty until the second session.\n  |> difference(nonNegative: false)"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.plant_id != \"unknown\")\n  // Reject empty-scale reads. The station publishes whatever the load cell\n  // settles on, and OLED_EMPTY_G (30 g, firmware) only blanks the DISPLAY —\n  // it does not gate publishing, so a tag scanned with nothing on the scale\n  // stores ~10-12 g against a real plant. The lightest pot here is ~120 g.\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n  // MIN, not median: on a watering day the station records twice, before and\n  // after, and those are two different physical states — not one measurement\n  // repeated. The minimum is the pre-water (\"dry end\") weight, the only series\n  // whose day-over-day difference means one thing: water the plant actually\n  // used. A median blends the two, so its difference mixes consumption with\n  // the water just added.\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  // day-over-day change: the growth / water-loss signal. Needs at least TWO\n  // days on which a plant was weighed, so it stays empty until the second session.\n  |> difference(nonNegative: false)\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
     }
    ]
   },
   {
    "id": 7,
-   "title": "Water added per day (g) — post-water minus pre-water",
+   "title": "Water added (g) — jump between consecutive weighings",
    "type": "timeseries",
    "datasource": {
     "type": "influxdb",
@@ -135,7 +135,7 @@
     "x": 0,
     "y": 17
    },
-   "description": "How much water each plant received, read straight off the scale: the day's heaviest reading minus its lightest. Zero means the plant was weighed once that day — either it was not watered, or the second weighing was missed, and the two are indistinguishable from here. Pair this with the panel above: that one is what the plant SPENT, this one is what it was GIVEN.",
+   "description": "How much water each plant received, read off the scale as the jump between two consecutive weighings. Weighing before and after watering gives the exact figure. If only the post-water weighing was recorded, this falls back to the previous weighing, which measures water added MINUS whatever the plant used in between — still far better than nothing, but the two-weighing protocol is the accurate one. A day with no bar is a day nothing was watered. Pair with the panel above: that is what the plant SPENT, this is what it was GIVEN.",
    "fieldConfig": {
     "defaults": {
      "unit": "massg",
@@ -164,7 +164,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nbase = from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.plant_id != \"unknown\")\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n\n// Water added = the day's heaviest reading minus its lightest, i.e. post-water\n// minus pre-water. Order-independent on purpose: it does not matter which was\n// taken first, only that both exist. A day with a single weighing yields 0,\n// which is the truth — nothing was added, or nobody recorded it.\nhi = base |> aggregateWindow(every: 1d, fn: max, createEmpty: false)\nlo = base |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n\njoin(tables: {hi: hi, lo: lo}, on: [\"_time\", \"plant_id\"])\n  |> map(fn: (r) => ({ _time: r._time, plant_id: r.plant_id, _value: r._value_hi - r._value_lo }))\n  |> group(columns: [\"plant_id\"])"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.plant_id != \"unknown\")\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n  // Water shows up as a jump between two CONSECUTIVE weighings of the same plant,\n  // whenever they happened. That is \"same-day if available, else the previous\n  // weighing\" without branching: weigh before and after and the pair is pre->post,\n  // exact; weigh only after watering and the pair is yesterday->post, which is the\n  // best estimate available. `difference` stamps the result at the later reading,\n  // so it lands on the right day.\n  |> difference(nonNegative: false)\n  // A watering moves 20-160 g here; re-weighing an untouched pot differs by ~2-3 g.\n  // The floor separates the two, and means a day with no watering yields NO point\n  // rather than a row of zeros — this panel shows waterings, not days.\n  |> filter(fn: (r) => r._value > 10.0)\n  |> aggregateWindow(every: 1d, fn: max, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
     }
    ]
   },
@@ -209,7 +209,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> yield(name: \"DLI lux est.\")"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"DLI lux est.\")"
     }
    ]
   },
@@ -275,7 +275,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"shortwave_radiation\")\n  |> aggregateWindow(every: 1d, fn: mean, createEmpty: false)\n  |> yield(name: \"solar mean\")"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"shortwave_radiation\")\n  |> aggregateWindow(every: 1d, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"solar mean\")"
     },
     {
      "refId": "B",
@@ -283,7 +283,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"precipitation\")\n  |> aggregateWindow(every: 1d, fn: sum, createEmpty: false)\n  |> yield(name: \"rain total\")"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"precipitation\")\n  |> aggregateWindow(every: 1d, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"rain total\")"
     }
    ]
   },
@@ -333,7 +333,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"light\" and r._field == \"on\" and r._value == 0.0)\n  |> map(fn: (r) => ({ r with _value: float(v: date.hour(t: r._time)) + float(v: date.minute(t: r._time)) / 60.0 }))\n  // Keep only plausible lamp-off times. `light/state` is RETAINED, so every\n  // Telegraf reconnect replays it and lands a phantom OFF at the restart time —\n  // one such artifact sits at 22:44 on 2026-07-30. The real switch-off is always\n  // in the evening window, so anything outside it is not a lamp event.\n  |> filter(fn: (r) => r._value >= 17.0 and r._value <= 21.5)\n  |> aggregateWindow(every: 1d, fn: last, createEmpty: false)"
+     "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"light\" and r._field == \"on\" and r._value == 0.0)\n  |> map(fn: (r) => ({ r with _value: float(v: date.hour(t: r._time)) + float(v: date.minute(t: r._time)) / 60.0 }))\n  // Keep only plausible lamp-off times. `light/state` is RETAINED, so every\n  // Telegraf reconnect replays it and lands a phantom OFF at the restart time —\n  // one such artifact sits at 22:44 on 2026-07-30. The real switch-off is always\n  // in the evening window, so anything outside it is not a lamp event.\n  |> filter(fn: (r) => r._value >= 17.0 and r._value <= 21.5)\n  |> aggregateWindow(every: 1d, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"lamp off (hour of day)\")"
     }
    ]
   },
@@ -381,7 +381,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nbase = from(bucket: \"sensors\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n\n// One representative field per measurement — counting every field would mix\n// value types in one group, which aggregateWindow rejects.\nunion(tables: [\n  base |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\"),\n  base |> filter(fn: (r) => r._measurement == \"spectrum\" and r._field == \"f555\"),\n  base |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"temperature_2m\"),\n  base |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"),\n])\n  |> group(columns: [\"_measurement\"])\n  |> aggregateWindow(every: 1d, fn: count, createEmpty: true)"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nbase = from(bucket: \"sensors\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n\n// One representative field per measurement — counting every field would mix\n// value types in one group, which aggregateWindow rejects.\nunion(tables: [\n  base |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\"),\n  base |> filter(fn: (r) => r._measurement == \"spectrum\" and r._field == \"f555\"),\n  base |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"temperature_2m\"),\n  base |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"),\n])\n  |> group(columns: [\"_measurement\"])\n  |> aggregateWindow(every: 1d, fn: count, createEmpty: true)\n  |> keep(columns: [\"_time\", \"_value\", \"_measurement\"])"
     }
    ]
   }
