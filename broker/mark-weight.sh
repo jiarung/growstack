@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Re-label plant_weight records — a soft delete, so nothing is ever lost.
 #
+#   ./mark-weight.sh --at '2026-08-07 07:59:45' deleted        # one point
 #   ./mark-weight.sh --from '2026-08-06 12:00' --to '2026-08-06 13:00' suspect
 #   ./mark-weight.sh --from '2026-08-06 12:00' --to '2026-08-06 13:00' --plant cactus-01 suspect
 #   ./mark-weight.sh --from ... --to ... ok            # change your mind back
 #   ./mark-weight.sh --from ... --to ... --dry-run suspect
 #
 # Times are LOCAL (Asia/Taipei) and inclusive of --from, exclusive of --to.
+# `--at` targets a single reading: it is --from <t> --to <t+1s>. Add --plant if two
+# plants were weighed in the same second. `deleted` is the conventional label for
+# "this reading is wrong" — panels show only quality == "ok", so any other label
+# hides it, and re-running with `ok` brings it back.
 #
 # InfluxDB cannot update a tag in place, so this reads the affected points,
 # rewrites them with the new `quality` at their ORIGINAL nanosecond timestamps,
@@ -26,9 +31,10 @@ ORG="${ORG:-monitor-air}"
 BUCKET="${BUCKET:-sensors}"
 BACKUP_DIR="${BACKUP_DIR:-/data/influx-backups}"
 
-FROM=""; TO=""; PLANT=""; DRY=0; QUALITY=""
+FROM=""; TO=""; AT=""; PLANT=""; DRY=0; QUALITY=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    --at)      AT="$2";   shift 2 ;;
     --from)    FROM="$2"; shift 2 ;;
     --to)      TO="$2";   shift 2 ;;
     --plant)   PLANT="$2"; shift 2 ;;
@@ -37,17 +43,27 @@ while [ $# -gt 0 ]; do
     *)  QUALITY="$1"; shift ;;
   esac
 done
+if [ -n "$AT" ]; then
+  [ -z "$FROM$TO" ] || { echo "--at cannot be combined with --from/--to" >&2; exit 1; }
+  FROM="$AT"; TO="$AT"       # widened to [t, t+1s) below, in epoch space
+fi
 [ -n "$FROM" ] && [ -n "$TO" ] && [ -n "$QUALITY" ] || {
-  echo "usage: $(basename "$0") --from '<local time>' --to '<local time>' [--plant <id>] [--dry-run] <quality>" >&2
-  echo "       quality is a free label; panels show only 'ok'." >&2; exit 1; }
+  echo "usage: $(basename "$0") (--at '<local time>' | --from '<t>' --to '<t>') [--plant <id>] [--dry-run] <quality>" >&2
+  echo "       quality is a free label; panels show only 'ok'. Use 'deleted' to retire a bad reading." >&2; exit 1; }
 [[ "$QUALITY" =~ ^[a-z_]{1,20}$ ]] || { echo "quality must be [a-z_]{1,20}" >&2; exit 1; }
 
-# GNU date trap: `TZ=X date -d "..." -u` does NOT convert — the TZ prefix affects
-# parsing but -u then prints the wall-clock digits back unchanged, so a Taipei time
-# comes out labelled Z and the window silently misses by 8 hours. Putting TZ inside
-# the -d string is the form that actually converts.
-START_UTC="$(date -d "TZ=\"$TZ_NAME\" $FROM" -u +%Y-%m-%dT%H:%M:%SZ)"
-STOP_UTC="$(date  -d "TZ=\"$TZ_NAME\" $TO"   -u +%Y-%m-%dT%H:%M:%SZ)"
+# GNU date traps, both hit here: `TZ=X date -d "..." -u` does NOT convert (the
+# prefix affects parsing, then -u prints the same wall-clock digits back, so a
+# Taipei time comes out labelled Z and the window misses by 8 hours), and a
+# relative offset like "+1 second" re-emits in the SYSTEM zone, not $TZ_NAME.
+# Going through epoch seconds sidesteps both — the arithmetic happens on an
+# absolute instant, and the zone is applied exactly once, at parse time.
+START_EPOCH="$(date -d "TZ=\"$TZ_NAME\" $FROM" +%s)"
+STOP_EPOCH="$(date  -d "TZ=\"$TZ_NAME\" $TO"   +%s)"
+[ -n "$AT" ] && STOP_EPOCH=$((START_EPOCH + 1))
+[ "$STOP_EPOCH" -gt "$START_EPOCH" ] || { echo "--to must be after --from" >&2; exit 1; }
+START_UTC="$(date -u -d "@$START_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
+STOP_UTC="$(date  -u -d "@$STOP_EPOCH"  +%Y-%m-%dT%H:%M:%SZ)"
 PRED='_measurement="plant_weight"'
 [ -n "$PLANT" ] && PRED="$PRED AND plant_id=\"$PLANT\""
 
