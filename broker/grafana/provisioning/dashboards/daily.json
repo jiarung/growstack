@@ -77,7 +77,7 @@
   },
   {
    "id": 2,
-   "title": "Water used per day (g/day) — change in pre-water weight",
+   "title": "Water used between weighings (g) — positive = the plant drank it",
    "type": "timeseries",
    "datasource": {
     "type": "influxdb",
@@ -89,7 +89,7 @@
     "x": 0,
     "y": 9
    },
-   "description": "Day-over-day change in the daily median: the growth / water-loss signal, and the reason the weighing exists. EMPTY UNTIL A PLANT HAS BEEN WEIGHED ON TWO SEPARATE DAYS — a difference needs two points. As of 2026-08-05 only one full session exists, so this stays blank until the next one; that is accumulation, not a fault.",
+   "description": "Weight lost from one pre-water weighing to the next, sign-flipped so POSITIVE means water consumed — the normal direction. Negative means the pot gained weight without being watered, which is either measurement scatter or something to look into. ⚠ Read this cautiously for now: the changes here are a few grams on pots of 130-2200 g, and the only repeat weighing available (cactus-01, 2026-08-05) differed by 1.8 g, so the signal is not yet clearly above the noise. The three sessions so far were also at very different times of day (16:2x, 12:2x, 07:4x), and a load cell drifts with temperature. Weighing at a consistent time, and taking two readings each time, is what will make this trustworthy.",
    "fieldConfig": {
     "defaults": {
      "unit": "massg",
@@ -117,7 +117,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.plant_id != \"unknown\")\n  // Reject empty-scale reads. The station publishes whatever the load cell\n  // settles on, and OLED_EMPTY_G (30 g, firmware) only blanks the DISPLAY —\n  // it does not gate publishing, so a tag scanned with nothing on the scale\n  // stores ~10-12 g against a real plant. The lightest pot here is ~120 g.\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n  // MIN, not median: on a watering day the station records twice, before and\n  // after, and those are two different physical states — not one measurement\n  // repeated. The minimum is the pre-water (\"dry end\") weight, the only series\n  // whose day-over-day difference means one thing: water the plant actually\n  // used. A median blends the two, so its difference mixes consumption with\n  // the water just added.\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  // day-over-day change: the growth / water-loss signal. Needs at least TWO\n  // days on which a plant was weighed, so it stays empty until the second session.\n  |> difference(nonNegative: false)\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.plant_id != \"unknown\")\n  // Reject empty-scale reads. The station publishes whatever the load cell\n  // settles on, and OLED_EMPTY_G (30 g, firmware) only blanks the DISPLAY —\n  // it does not gate publishing, so a tag scanned with nothing on the scale\n  // stores ~10-12 g against a real plant. The lightest pot here is ~120 g.\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n  // MIN, not median: on a watering day the station records twice, before and\n  // after, and those are two different physical states — not one measurement\n  // repeated. The minimum is the pre-water (\"dry end\") weight, the only series\n  // whose day-over-day difference means one thing: water the plant actually\n  // used. A median blends the two, so its difference mixes consumption with\n  // the water just added.\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  // day-over-day change: the growth / water-loss signal. Needs at least TWO\n  // days on which a plant was weighed, so it stays empty until the second session.\n  |> difference(nonNegative: false)\n  // Flip the sign so the number reads as what it is called. `difference` gives\n  // the change in weight, which is NEGATIVE when the plant drinks; a panel called\n  // \"water used\" showing -7.4 g reads as \"used minus 7.4 g\". Positive here means\n  // consumed (the normal direction); negative means the pot got heavier between\n  // weighings without being watered — noise, or something worth looking at.\n  |> map(fn: (r) => ({ r with _value: -r._value }))\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
     }
    ]
   },
