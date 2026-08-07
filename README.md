@@ -55,6 +55,7 @@ shouts when something goes quiet.
 | [`broker/README.md`](broker/README.md) | server stack: setup, operation, data contract, plant-light control, backups, security |
 | [`broker/node-red/README.md`](broker/node-red/README.md) | the phone control surface and the weigh-station flow |
 | [`broker/MEASUREMENT-STATION.md`](broker/MEASUREMENT-STATION.md) | weigh-station contract: MQTT topics, ack/dedup rules, tag→plant map |
+| [`broker/QUERYING.md`](broker/QUERYING.md) | asking InfluxDB directly — query shapes, schema discovery, and the four traps that have each caused a wrong conclusion |
 
 **Calibration and analysis** — these form one chain, in order:
 
