@@ -123,7 +123,7 @@
   },
   {
    "id": 7,
-   "title": "Water added (g) — each watering, at the time it happened",
+   "title": "Water added (g) — measured, and estimated where the pre-water weighing is missing",
    "type": "timeseries",
    "datasource": {
     "type": "influxdb",
@@ -135,7 +135,7 @@
     "x": 0,
     "y": 17
    },
-   "description": "Every jump of more than 10 g between two consecutive weighings — one bar per watering, at the moment it was recorded, not one per day. Water twice in a day and you see two bars, which is the truth; the previous version kept only the largest jump per calendar day. Weighing before and after gives the exact amount; if only the post-water reading was taken, the pair becomes previous-weighing-to-post-water, which measures water added minus whatever the plant used in between.",
+   "description": "Solid bars: both weighings came from the same session, so the jump is the water and nothing else. Faded bars: no pre-water reading that session, so the pair spans a gap and the value is water added minus what the plant used in between — and across a gap real waterings and mere drift overlap in size (largest drift seen +13.0 g, smallest watering caught this way +20.2 g). Two series rather than one number because the two are not equally trustworthy. A day with no bar is a day nothing was watered.",
    "fieldConfig": {
     "defaults": {
      "unit": "massg",
@@ -146,7 +146,24 @@
       "spanNulls": false
      }
     },
-    "overrides": []
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "B"
+      },
+      "properties": [
+       {
+        "id": "custom.fillOpacity",
+        "value": 25
+       },
+       {
+        "id": "custom.lineWidth",
+        "value": 0
+       }
+      ]
+     }
+    ]
    },
    "options": {
     "legend": {
@@ -164,7 +181,15 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n  // Water shows up as a jump between two CONSECUTIVE weighings of the same plant,\n  // whenever they happened. That is \"same-day if available, else the previous\n  // weighing\" without branching: weigh before and after and the pair is pre->post,\n  // exact; weigh only after watering and the pair is yesterday->post, which is the\n  // best estimate available. `difference` stamps the result at the later reading,\n  // so it lands on the right day.\n  |> difference(nonNegative: false)\n  // A watering moves 20-160 g here; re-weighing an untouched pot differs by ~2-3 g.\n  // The floor separates the two, and means a day with no watering yields NO point\n  // rather than a row of zeros — this panel shows waterings, not days.\n  |> filter(fn: (r) => r._value > 10.0)\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> group(columns: [\"plant_id\"])\n  |> sort(columns: [\"_time\"])\n  |> map(fn: (r) => ({ r with w: r._value, t: float(v: int(v: r._time)) }))\n  |> difference(columns: [\"w\", \"t\"], nonNegative: false)\n  |> map(fn: (r) => ({ r with hours: r.t / 3600000000000.0, _value: r.w }))\n  // MEASURED: both weighings are from the same session, so the jump is the water\n  // and nothing else. Observed here: repeat weighings of an untouched pot differ\n  // by 1.8 g, every real watering is 19.5 g or more — a clean gap, so 5 g\n  // separates them with room to spare.\n  |> filter(fn: (r) => r.hours < 1.0 and r._value > 5.0)\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])\n  |> yield(name: \"measured\")"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> group(columns: [\"plant_id\"])\n  |> sort(columns: [\"_time\"])\n  |> map(fn: (r) => ({ r with w: r._value, t: float(v: int(v: r._time)) }))\n  |> difference(columns: [\"w\", \"t\"], nonNegative: false)\n  |> map(fn: (r) => ({ r with hours: r.t / 3600000000000.0, _value: r.w }))\n  // ESTIMATED: no pre-water weighing that session, so the pair spans a gap and the\n  // figure is water added MINUS whatever the plant used in between. Worse, across a\n  // gap the two populations overlap — the largest drift seen is +13.0 g and the\n  // smallest real watering caught this way is +20.2 g, barely 7 g apart. 15 g is\n  // therefore a judgement call, not a clean separation; treat these bars as a hint\n  // and fix the protocol instead (always weigh before watering).\n  |> filter(fn: (r) => r.hours >= 1.0 and r._value > 15.0)\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])\n  |> yield(name: \"estimated\")"
     }
    ]
   },
