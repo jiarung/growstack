@@ -42,8 +42,15 @@ for r in csv.reader(sys.stdin):
 if not rows:
     print("(no rows)"); raise SystemExit
 
+# Union across ALL rows, not just the first: annotated CSV emits a fresh header
+# whenever a table has different columns, so a later block can carry a column the
+# first one lacks. Taking rows[0] parsed those values and then never printed them.
 drop = {"result", "table", "_start", "_stop", ""}
-cols = [c for c in rows[0] if c not in drop]
+cols = []
+for r in rows:
+    for c in r:
+        if c not in drop and c not in cols:
+            cols.append(c)
 cols = [c for c in cols if any(r.get(c) for r in rows)]
 
 def fmt(c, v):

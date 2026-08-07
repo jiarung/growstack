@@ -132,10 +132,42 @@ echo "rewritten with quality=$QUALITY"
 
 # Only now remove the superseded copies: anything in the window that is NOT the
 # new label. Write-then-delete means a failure above would have changed nothing.
-docker exec "$CONTAINER" influx delete --org "$ORG" --bucket "$BUCKET" \
+# The token is passed explicitly and errors are NOT swallowed: a silent delete
+# failure here is the one outcome that corrupts, leaving the old copy visible
+# beside the new one so the reading appears twice with contradictory labels.
+docker exec "$CONTAINER" influx delete --org "$ORG" --bucket "$BUCKET" --token "$TOKEN" \
   --start "$START_UTC" --stop "$STOP_UTC" \
-  --predicate "$PRED AND quality!=\"$QUALITY\"" 2>/dev/null || true
-echo "old copies removed"
+  --predicate "$PRED AND quality!=\"$QUALITY\""
+
+# Trust nothing: confirm the window now holds exactly one label. A silent delete
+# failure is the one outcome that corrupts — the old copy stays visible beside the
+# new one and the reading appears twice with contradictory labels.
+read -r -d '' VERIFY <<EOF || true
+from(bucket: "$BUCKET")
+  |> range(start: $START_UTC, stop: $STOP_UTC)
+  |> filter(fn: (r) => r._measurement == "plant_weight" and r._field == "weight_g")
+  $( [ -n "$PLANT" ] && echo "|> filter(fn: (r) => r.plant_id == \"$PLANT\")" )
+  |> group(columns: ["quality"])
+  |> count()
+  |> keep(columns: ["quality", "_value"])
+EOF
+LABELS="$(docker exec -i "$CONTAINER" influx query --org "$ORG" --raw -f /dev/stdin <<<"$VERIFY" \
+  | python3 -c 'import csv,sys
+h=None; out=set()
+for r in csv.reader(sys.stdin):
+    if not r: continue
+    if r[0].startswith("#"): h=None; continue
+    if h is None: h=r; continue
+    d=dict(zip(h,r)); q=d.get("quality","")
+    if q: out.add(q)
+print(" ".join(sorted(out)))')"
+if [ "$LABELS" = "$QUALITY" ]; then
+  echo "old copies removed — window now holds only quality=$QUALITY"
+else
+  echo "WARNING: window holds quality: ${LABELS:-<none>} (expected only $QUALITY)" >&2
+  echo "         the delete may not have applied; the backup above has the original rows" >&2
+  exit 1
+fi
 # NOTE: a predicate cannot match points that LACK the tag — `quality=""` silently
 # deletes nothing, which is how a backfill once left two copies of every record.
 # Everything now carries a quality tag, so the predicate above is sufficient; if
