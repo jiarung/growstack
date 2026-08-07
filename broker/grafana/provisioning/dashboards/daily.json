@@ -29,7 +29,7 @@
  "panels": [
   {
    "id": 1,
-   "title": "Plant weight — pre-water (dry end) per plant per day",
+   "title": "Plant weight — every weighing, at the time it happened",
    "type": "timeseries",
    "datasource": {
     "type": "influxdb",
@@ -41,7 +41,7 @@
     "x": 0,
     "y": 0
    },
-   "description": "One median value per plant per LOCAL day. Weighing is a manual NFC-triggered act, so several taps in one session are the same measurement repeated — the median takes the day's figure and discards a fumbled weigh. Excludes plant_id=\"unknown\" and non-positive readings.",
+   "description": "Raw readings plotted where they actually fall in time, not bucketed into days. Weighing happens when someone is free, not on a schedule, and a pot also drifts through the day with the plant's own respiration — so a daily bucket imposed a grid the measurements do not have and hid both effects. A watering shows here as a step up, drying as the slope between steps.",
    "fieldConfig": {
     "defaults": {
      "unit": "massg",
@@ -71,13 +71,13 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.plant_id != \"unknown\")\n  // Reject empty-scale reads. The station publishes whatever the load cell\n  // settles on, and OLED_EMPTY_G (30 g, firmware) only blanks the DISPLAY —\n  // it does not gate publishing, so a tag scanned with nothing on the scale\n  // stores ~10-12 g against a real plant. The lightest pot here is ~120 g.\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n  // MIN, not median: on a watering day the station records twice, before and\n  // after, and those are two different physical states — not one measurement\n  // repeated. The minimum is the pre-water (\"dry end\") weight, the only series\n  // whose day-over-day difference means one thing: water the plant actually\n  // used. A median blends the two, so its difference mixes consumption with\n  // the water just added.\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  // quality is a soft-delete marker set by Node-RED (ok|empty) and by\n  // mark-weight.sh after the fact. Nothing is dropped from the database; the\n  // charts simply show the readings currently believed good.\n  |> filter(fn: (r) => r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> group(columns: [\"plant_id\"])\n  |> sort(columns: [\"_time\"])\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
     }
    ]
   },
   {
    "id": 2,
-   "title": "Water used between weighings (g) — positive = the plant drank it",
+   "title": "Water use rate (g/day) — normalised for the gap between weighings",
    "type": "timeseries",
    "datasource": {
     "type": "influxdb",
@@ -89,7 +89,7 @@
     "x": 0,
     "y": 9
    },
-   "description": "Weight lost from one pre-water weighing to the next, sign-flipped so POSITIVE means water consumed — the normal direction. Negative means the pot gained weight without being watered, which is either measurement scatter or something to look into. ⚠ Read this cautiously for now: the changes here are a few grams on pots of 130-2200 g, and the only repeat weighing available (cactus-01, 2026-08-05) differed by 1.8 g, so the signal is not yet clearly above the noise. The three sessions so far were also at very different times of day (16:2x, 12:2x, 07:4x), and a load cell drifts with temperature. Weighing at a consistent time, and taking two readings each time, is what will make this trustworthy.",
+   "description": "Weight lost per 24 hours, computed between consecutive weighings and divided by the actual elapsed time — so a 19-hour gap and a 3-day gap are directly comparable. Positive means the plant drank it. Pairs less than an hour apart are excluded: those are the same session, not an interval. ⚠ Still read with care — the changes are a few grams on pots of 130-2200 g, and the 2026-08-06 session appears to carry a systematic offset of about -6 g. Use mark-weight.sh to label a session suspect and it will drop out of every chart.",
    "fieldConfig": {
     "defaults": {
      "unit": "massg",
@@ -117,7 +117,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.plant_id != \"unknown\")\n  // Reject empty-scale reads. The station publishes whatever the load cell\n  // settles on, and OLED_EMPTY_G (30 g, firmware) only blanks the DISPLAY —\n  // it does not gate publishing, so a tag scanned with nothing on the scale\n  // stores ~10-12 g against a real plant. The lightest pot here is ~120 g.\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n  // MIN, not median: on a watering day the station records twice, before and\n  // after, and those are two different physical states — not one measurement\n  // repeated. The minimum is the pre-water (\"dry end\") weight, the only series\n  // whose day-over-day difference means one thing: water the plant actually\n  // used. A median blends the two, so its difference mixes consumption with\n  // the water just added.\n  |> aggregateWindow(every: 1d, fn: min, createEmpty: false)\n  // day-over-day change: the growth / water-loss signal. Needs at least TWO\n  // days on which a plant was weighed, so it stays empty until the second session.\n  |> difference(nonNegative: false)\n  // Flip the sign so the number reads as what it is called. `difference` gives\n  // the change in weight, which is NEGATIVE when the plant drinks; a panel called\n  // \"water used\" showing -7.4 g reads as \"used minus 7.4 g\". Positive here means\n  // consumed (the normal direction); negative means the pot got heavier between\n  // weighings without being watered — noise, or something worth looking at.\n  |> map(fn: (r) => ({ r with _value: -r._value }))\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  // quality is a soft-delete marker set by Node-RED (ok|empty) and by\n  // mark-weight.sh after the fact. Nothing is dropped from the database; the\n  // charts simply show the readings currently believed good.\n  |> filter(fn: (r) => r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> group(columns: [\"plant_id\"])\n  |> sort(columns: [\"_time\"])\n  |> duplicate(column: \"_value\", as: \"w\")\n  // elapsed() gives minutes since the previous reading, difference() the change in\n  // weight. Dividing one by the other turns two irregularly spaced weighings into a\n  // rate, which is the only way to compare a 19-hour gap with a 3-day one.\n  |> elapsed(unit: 1m)\n  |> difference(columns: [\"w\"], nonNegative: false)\n  // A rate only means something across a GAP. Two readings from the same session —\n  // a repeat, or the pre/post pair around watering — are minutes apart, and\n  // dividing by that produces nonsense (one such pair works out at -10512 g/day).\n  |> filter(fn: (r) => r.elapsed >= 60)\n  // Sign flipped so positive = the plant drank it.\n  |> map(fn: (r) => ({ r with _value: -r.w / (float(v: r.elapsed) / 60.0) * 24.0 }))\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
     }
    ]
   },
@@ -164,7 +164,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.plant_id != \"unknown\")\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n  // Water shows up as a jump between two CONSECUTIVE weighings of the same plant,\n  // whenever they happened. That is \"same-day if available, else the previous\n  // weighing\" without branching: weigh before and after and the pair is pre->post,\n  // exact; weigh only after watering and the pair is yesterday->post, which is the\n  // best estimate available. `difference` stamps the result at the later reading,\n  // so it lands on the right day.\n  |> difference(nonNegative: false)\n  // A watering moves 20-160 g here; re-weighing an untouched pot differs by ~2-3 g.\n  // The floor separates the two, and means a day with no watering yields NO point\n  // rather than a row of zeros — this panel shows waterings, not days.\n  |> filter(fn: (r) => r._value > 10.0)\n  |> aggregateWindow(every: 1d, fn: max, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  |> filter(fn: (r) => r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> filter(fn: (r) => r._value > 50.0)\n  |> group(columns: [\"plant_id\"])\n  // Water shows up as a jump between two CONSECUTIVE weighings of the same plant,\n  // whenever they happened. That is \"same-day if available, else the previous\n  // weighing\" without branching: weigh before and after and the pair is pre->post,\n  // exact; weigh only after watering and the pair is yesterday->post, which is the\n  // best estimate available. `difference` stamps the result at the later reading,\n  // so it lands on the right day.\n  |> difference(nonNegative: false)\n  // A watering moves 20-160 g here; re-weighing an untouched pot differs by ~2-3 g.\n  // The floor separates the two, and means a day with no watering yields NO point\n  // rather than a row of zeros — this panel shows waterings, not days.\n  |> filter(fn: (r) => r._value > 10.0)\n  |> aggregateWindow(every: 1d, fn: max, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
     }
    ]
   },

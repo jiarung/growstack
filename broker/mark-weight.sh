@@ -42,8 +42,12 @@ done
   echo "       quality is a free label; panels show only 'ok'." >&2; exit 1; }
 [[ "$QUALITY" =~ ^[a-z_]{1,20}$ ]] || { echo "quality must be [a-z_]{1,20}" >&2; exit 1; }
 
-START_UTC="$(TZ="$TZ_NAME" date -d "$FROM" -u +%Y-%m-%dT%H:%M:%SZ)"
-STOP_UTC="$(TZ="$TZ_NAME"  date -d "$TO"   -u +%Y-%m-%dT%H:%M:%SZ)"
+# GNU date trap: `TZ=X date -d "..." -u` does NOT convert — the TZ prefix affects
+# parsing but -u then prints the wall-clock digits back unchanged, so a Taipei time
+# comes out labelled Z and the window silently misses by 8 hours. Putting TZ inside
+# the -d string is the form that actually converts.
+START_UTC="$(date -d "TZ=\"$TZ_NAME\" $FROM" -u +%Y-%m-%dT%H:%M:%SZ)"
+STOP_UTC="$(date  -d "TZ=\"$TZ_NAME\" $TO"   -u +%Y-%m-%dT%H:%M:%SZ)"
 PRED='_measurement="plant_weight"'
 [ -n "$PLANT" ] && PRED="$PRED AND plant_id=\"$PLANT\""
 
@@ -115,9 +119,8 @@ echo "rewritten with quality=$QUALITY"
 docker exec "$CONTAINER" influx delete --org "$ORG" --bucket "$BUCKET" \
   --start "$START_UTC" --stop "$STOP_UTC" \
   --predicate "$PRED AND quality!=\"$QUALITY\"" 2>/dev/null || true
-# records written before the quality tag existed carry no tag, so the predicate
-# above cannot match them; clear those explicitly
-docker exec "$CONTAINER" influx delete --org "$ORG" --bucket "$BUCKET" \
-  --start "$START_UTC" --stop "$STOP_UTC" \
-  --predicate "$PRED AND quality=\"\"" 2>/dev/null || true
 echo "old copies removed"
+# NOTE: a predicate cannot match points that LACK the tag — `quality=""` silently
+# deletes nothing, which is how a backfill once left two copies of every record.
+# Everything now carries a quality tag, so the predicate above is sufficient; if
+# untagged rows ever reappear, delete the whole window and rewrite instead.
