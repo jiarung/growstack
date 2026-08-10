@@ -35,13 +35,26 @@ echo "[$(date)] influx backup -> ${HOST_BACKUP_DIR}/${STAMP}"
   --token "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN" \
   --host http://localhost:8086
 
-# --- rotate: keep newest $KEEP backup dirs on the host ---
-if [ -d "$HOST_BACKUP_DIR" ]; then
-  # list dirs newest-first, drop the first $KEEP, remove the rest
-  ls -1dt "$HOST_BACKUP_DIR"/*/ 2>/dev/null | tail -n "+$((KEEP + 1))" | while read -r old; do
+# --- rotate: keep newest $KEEP backup dirs ---
+# The deletes run INSIDE the container, not on the host. `influx backup` writes as
+# root, so the directories it creates are root-owned and a cron running as the
+# normal user cannot remove them: rotation failed with "Permission denied", set -e
+# aborted the script before "backup done", and because the only output goes to a
+# log file nobody reads, the whole thing was silent. The container is already root
+# and has the same volume at /backups, so it can delete what it created.
+ROTATED="$("$DOCKER" compose exec -T influxdb sh -c '
+  cd /backups 2>/dev/null || exit 0
+  ls -1dt */ 2>/dev/null | tail -n "+'"$((KEEP + 1))"'" | while read -r old; do
     echo "rotate: removing old backup $old"
-    rm -rf "$old"
-  done
+    rm -rf -- "$old"
+  done')"
+[ -n "$ROTATED" ] && echo "$ROTATED"
+
+# Rotation must actually have worked — a silent failure here is how the disk fills.
+LEFT="$("$DOCKER" compose exec -T influxdb sh -c 'ls -1d /backups/*/ 2>/dev/null | wc -l' | tr -d "\r")"
+if [ "${LEFT:-0}" -gt "$KEEP" ]; then
+  echo "ERROR: $LEFT backups remain, expected at most $KEEP — rotation did not apply" >&2
+  exit 1
 fi
 
 echo "[$(date)] backup done"
