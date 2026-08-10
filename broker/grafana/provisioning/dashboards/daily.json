@@ -313,6 +313,53 @@
    ]
   },
   {
+   "id": 8,
+   "title": "Alert delivery failures per hour — did the warnings actually reach you?",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 33
+   },
+   "description": "Notifications Grafana tried to send and could not. Every other panel here answers a question about the plants; this one answers whether you would have been TOLD. On 2026-08-08 delivery to Telegram failed 89 times over five hours while the deadman was firing correctly, and a 53-hour sensor outage went unnoticed for two days as a result. With a single notification channel you cannot be alerted that the channel is down — so this makes it permanent, reviewable data instead. Flat zero is healthy. Any bar means alerts were raised and never arrived: go and look at what was firing in that window.",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "min": 0,
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 70,
+      "spanNulls": false
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\n// Counter, so take the difference — and nonNegative because a Grafana restart\n// resets it to zero, which would otherwise read as a huge negative spike.\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"grafana_alerting_notifications_failed_total\")\n  |> filter(fn: (r) => r._field == \"counter\")\n  |> group(columns: [\"integration\"])\n  |> difference(nonNegative: true)\n  |> aggregateWindow(every: 1h, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"integration\"])"
+    }
+   ]
+  },
+  {
    "id": 5,
    "title": "Lamp — when it switched off each day",
    "type": "timeseries",
@@ -324,7 +371,7 @@
     "h": 7,
     "w": 12,
     "x": 0,
-    "y": 33
+    "y": 41
    },
    "description": "Local hour of the last lamp-off. 18.5 = the base window end (18:30, no top-up); ~19.8-20.1 = the evening top-up ran and reached DLI_TARGET; 20.5 = it ran to the EXTEND_END cap without reaching target, i.e. the lamp delivered less light than usual that day. Restricted to 17:00-21:30 because light/state is retained and every Telegraf reconnect replays it as a phantom OFF.",
    "fieldConfig": {
@@ -374,7 +421,7 @@
     "h": 7,
     "w": 12,
     "x": 12,
-    "y": 33
+    "y": 41
    },
    "description": "Points stored per day per pipeline. This is the panel that makes a silent outage visible: the Open-Meteo 503 collapse shows here as weather dropping from ~96/day to 3-10/day between 2026-07-30 and 08-03, and the recovery back to 96 after the poll interval was cut to 5 min. A pipeline going flat is the signal — the absolute heights differ by design.",
    "fieldConfig": {
@@ -406,7 +453,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nbase = from(bucket: \"sensors\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n\n// One representative field per measurement — counting every field would mix\n// value types in one group, which aggregateWindow rejects.\nunion(tables: [\n  base |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\"),\n  base |> filter(fn: (r) => r._measurement == \"spectrum\" and r._field == \"f555\"),\n  base |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"temperature_2m\"),\n  base |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"),\n])\n  |> group(columns: [\"_measurement\"])\n  |> aggregateWindow(every: 1d, fn: count, createEmpty: true)\n  |> keep(columns: [\"_time\", \"_value\", \"_measurement\"])"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nbase = from(bucket: \"sensors\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n\n// One representative field per measurement — counting every field would mix\n// value types in one group, which aggregateWindow rejects.\nunion(tables: [\n  base |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\"),\n  base |> filter(fn: (r) => r._measurement == \"spectrum\" and r._field == \"f555\"),\n  base |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"temperature_2m\"),\n  base |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"),\n  // The alert-delivery scrape. If this row goes flat, we have stopped being able to\n  // tell whether warnings reach anyone — the same blindness as 2026-08-08, one\n  // level up. It is absent until Grafana's first notification attempt after a\n  // restart, so a gap right after a restart is expected, not a fault.\n  base |> filter(fn: (r) => r._measurement == \"grafana_alerting_notifications_total\" and r._field == \"counter\"),\n])\n  |> group(columns: [\"_measurement\"])\n  |> aggregateWindow(every: 1d, fn: count, createEmpty: true)\n  |> keep(columns: [\"_time\", \"_value\", \"_measurement\"])"
     }
    ]
   }

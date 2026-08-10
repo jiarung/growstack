@@ -107,6 +107,76 @@ groups:
                     type: gt
                     params: [900]
 
+      # Watches the alerting path itself. It cannot warn you WHILE Telegram is down —
+      # a single channel can never announce its own failure — so its job is the
+      # retrospective one: the moment delivery recovers, this fires and tells you
+      # that warnings were raised and lost, and when. On 2026-08-08 that window was
+      # five hours and 89 dropped notifications, and the sensor outage underneath it
+      # went unnoticed for two days.
+      - uid: alert-delivery-failing
+        title: Alert delivery failing — notifications are being dropped
+        condition: C
+        for: 5m
+        # OK, unlike the deadman rules — and this one was wrong at first. The two
+        # counters carry an `integration` label, so Grafana does not create them
+        # until the first notification attempt after a restart: verified on
+        # 2026-08-10, /metrics served 220 alerting series while these two were
+        # absent entirely. NoData therefore means "Grafana restarted and has not
+        # tried to notify yet", which is benign and transient, not a failure.
+        # Treating it as an alert would fire after every restart.
+        # Scrape health is covered elsewhere: the ingest-completeness panel shows
+        # these series going flat if Telegraf stops collecting them.
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Alert delivery failing — {{ $labels.integration }}'
+          description: 'Grafana could not deliver notifications. Any alert raised while this was true never reached anyone — check what was firing in that window. Cause is usually the network path to the provider, not the token.'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: influxdb-monitor-air
+            model:
+              refId: A
+              datasource:
+                type: influxdb
+                uid: influxdb-monitor-air
+              query: |
+                from(bucket: "sensors")
+                  |> range(start: -1h)
+                  |> filter(fn: (r) => r._measurement == "grafana_alerting_notifications_failed_total")
+                  |> filter(fn: (r) => r._field == "counter")
+                  |> group(columns: ["integration"])
+                  // nonNegative: a Grafana restart zeroes the counter, and without
+                  // this that reads as a large negative and the rule goes quiet
+                  // exactly when the service has just come back.
+                  |> difference(nonNegative: true)
+                  |> sum()
+                  |> map(fn: (r) => ({ integration: r.integration, _time: now(), _value: r._value }))
+                  |> group(columns: ["integration"])
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              datasource: {type: __expr__, uid: __expr__}
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              datasource: {type: __expr__, uid: __expr__}
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+
       # Second deadman, for the one ingest path that is NOT a device: the Open-Meteo
       # poll. It went dark for 11 h on 2026-08-03 and was noticed by eye, because the
       # rule above only covers `air`. Separate rule rather than a broadened filter —
