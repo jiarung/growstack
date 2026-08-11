@@ -55,7 +55,7 @@ _extend_min = int(os.getenv("LIGHT_EXTEND_END_MIN", "1230"))   # 20:30
 EXTEND_END = dtime(_extend_min // 60, _extend_min % 60)
 DLI_TARGET = float(os.getenv("DLI_TARGET", "4.0"))  # mol·m⁻²·day⁻¹
 MIN_HOLD = 5 * 60        # after a switch, hold ≥ this (matches MANUAL_HOLD; lamp may raise own lux)
-STALE = 5 * 60           # lux older than this → fail safe OFF (dead sensor)
+STALE = 5 * 60           # lux older than this → treat as no reading (see decide())
 TICK = 60                # decision cadence, seconds
 MANUAL_HOLD = 5 * 60     # an external cmd suppresses auto for this long
 
@@ -90,10 +90,22 @@ def decide(lux, lux_at, now, current, hard_off=HARD_OFF):
     t = now.time()                         # naive local wall time
     in_window = ON_START <= t < hard_off
     if lux is None or (now.timestamp() - lux_at) > STALE:
-        # sensor dropout: this environment is light-deficient, so inside the
-        # window we HOLD an already-on light rather than fail it off; only fail
-        # safe OFF if it was already off, or we're outside the window.
-        return "ON" if (in_window and cur == "ON") else "OFF"
+        # Sensor dropout: inside the window, run the lamp. Outside it, off.
+        #
+        # This used to HOLD an already-on lamp but never start a stopped one, and
+        # that asymmetry has a failure mode that cost real plant-days: both BH1750s
+        # died at 20:58 on 2026-08-10, after the lamp had already switched off for
+        # the evening at 20:30. Every morning after, `cur` was OFF, so the lamp was
+        # never started — silently, indefinitely, with no lux to recover on.
+        #
+        # The costs are lopsided. Natural light here measures 1-2% of the daily
+        # total, so running blind costs some electricity; NOT running blind costs
+        # the plants everything, and nothing in the system says so. Run the lamp.
+        #
+        # This does not weaken the bright-day cut-off: `lux > LUX_OFF_ABOVE` needs a
+        # reading, and during a dropout there is none either way. The window still
+        # bounds it, so a lamp started blind still stops at hard_off the same day.
+        return "ON" if in_window else "OFF"
     if not in_window:
         return "OFF"                       # before window / past hard-off
     if lux < LUX_ON_BELOW:
@@ -295,10 +307,13 @@ def selftest():
     assert at(12, 0, 5000, "ON") == "ON", "boundary: exactly 5000 holds ON (not <)"
     assert at(12, 0, 5000, "OFF") == "OFF", "boundary: exactly 5000 holds OFF"
     noon = datetime(2026, 6, 25, 12, 0, tzinfo=TZ)
-    # sensor dropout inside the window holds an already-ON light (light-deficient env)
-    assert decide(50, noon.timestamp() - STALE - 1, noon, "ON") == "ON", "stale+ON in window → hold ON"
-    assert decide(None, noon.timestamp(), noon, "ON") == "ON", "no lux+ON in window → hold ON"
-    assert decide(None, noon.timestamp(), noon, "OFF") == "OFF", "dropout+OFF in window → stays OFF"
+    # sensor dropout inside the window runs the lamp, whatever it was doing before
+    assert decide(50, noon.timestamp() - STALE - 1, noon, "ON") == "ON", "stale+ON in window → ON"
+    assert decide(None, noon.timestamp(), noon, "ON") == "ON", "no lux+ON in window → ON"
+    # the regression that stranded the plants: dropout while the lamp happened to be
+    # off must still start it, or a night-time sensor failure means no light for days
+    assert decide(None, noon.timestamp(), noon, "OFF") == "ON", "dropout+OFF in window → ON"
+    assert decide(None, noon.timestamp(), noon, "OFF", dtime(20, 30)) == "ON", "dropout+OFF in extended window → ON"
     night = datetime(2026, 6, 25, 20, 0, tzinfo=TZ)
     assert decide(None, night.timestamp(), night, "ON") == "OFF", "dropout+ON outside window → OFF"
     open_t = datetime(2026, 6, 25, 8, 0, tzinfo=TZ)
