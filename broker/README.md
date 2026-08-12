@@ -142,9 +142,13 @@ answer was the same every day. Derive `DLI_TARGET` from your own measured baseli
 trustworthy.
 
 **On a stale or missing lux reading it does NOT simply fail off.** Inside the
-window an already-ON light is *held on* — this environment is light-deficient, so a
-dead sensor should not darken the plants. It goes off only if it was already off,
-or the window has passed.
+window the lamp *runs*, regardless of what it was doing before; outside it, off.
+This environment is light-deficient, so a dead sensor must not darken the plants.
+
+It used to *hold* an already-ON lamp but never start a stopped one, and that
+asymmetry cost real plant-days: both BH1750s died at 20:58 on 2026-08-10, after the
+lamp had already switched off for the evening — so every morning afterwards it was
+never started, silently and indefinitely. Do not "restore" the old behaviour.
 
 All knobs (`LUX_ON_BELOW`, `LUX_OFF_ABOVE`, `ON_START`, `HARD_OFF`, `MIN_HOLD`,
 `STALE`, …) live at the top of `control/light.py`; the window and `DLI_TARGET`
