@@ -194,6 +194,523 @@
    ]
   },
   {
+   "id": 9,
+   "title": "介質狀態 — 本次飽和重量 vs 先前場次（主指標），加水量為輔",
+   "type": "table",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 10,
+    "w": 24,
+    "x": 0,
+    "y": 25
+   },
+   "description": "介質狀態：以**澆水後的飽和重量**為主指標（不是加水量）。\n\n為什麼不用加水量當主指標：加水量約等於「澆水當下的缺水量」，取決於距上次澆水的天數與蒸散強度 —— 同樣的介質，晚兩天澆就會多加水。它衡量的是澆水行為，不是持水能力。澆水後的飽和重量才接近「這個盆能裝多少」。加水量欄位保留作為異常／行為指標。\n\n**混淆因子**：飽和重量同時包含植株本身的生長。介質流失使它下降、植株生長使它上升，兩者方向相反可能互相抵消。仙人掌生長極慢，流失應該主導，但一條持平的曲線不能直接解釋為「介質沒問題」。\n\n基準 = 先前合格澆水場次的中位數（最多取最近 3 次）。中位數而非平均，是為了對單一異常場次穩健。**n 欄必看**：n=1 時這只是兩點相減，不是趨勢。\n\n「場次」= 當日有 ≥50%(≥8/16) 植株增重 >10 g 的日子；未達此標準的日子列在「疑似異常場次」表中，不併入統計。\n\n⚠ 秤重系統的重複性至今**沒有被量過**（唯一一批固定重量讀數取自重新佈線後、校正前，量到的是施工中的機器）。本表提供的是相對比較與排序，不是可信到克的絕對值。",
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "plant_id"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "植株"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "sat_now"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "本次飽和 g"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "sat_base"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "飽和基準 g"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "sat_diff"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "飽和 diff g"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background"
+        }
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "red",
+           "value": null
+          },
+          {
+           "color": "orange",
+           "value": -5
+          },
+          {
+           "color": "text",
+           "value": -2
+          }
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "sat_pct"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "飽和 diff %"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       },
+       {
+        "id": "unit",
+        "value": "percent"
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background"
+        }
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "red",
+           "value": null
+          },
+          {
+           "color": "orange",
+           "value": -5
+          },
+          {
+           "color": "text",
+           "value": -2
+          }
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "add_now"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "本次加水 g"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "add_base"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "加水基準 g"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "steps"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "步數"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "n"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "n"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nsrc = from(bucket: \"sensors\")\n  |> range(start: -90d)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"\n       and r.quality == \"ok\" and r.plant_id != \"tare-ref\" and r.plant_id != \"unknown\")\n\ndeltas = src\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"_time\"])\n  |> difference(columns: [\"_value\"], nonNegative: false)\n  |> filter(fn: (r) => r._value > 10.0)\n  |> map(fn: (r) => ({ r with day: date.truncate(t: r._time, unit: 1d) }))\n\n// 合格澆水場次 = 當日 >=50% (>=8/16) 植株增重\nsessDays = deltas\n  |> group(columns: [\"day\", \"plant_id\"]) |> distinct(column: \"plant_id\")\n  |> group(columns: [\"day\"]) |> count(column: \"_value\")\n  |> filter(fn: (r) => r._value >= 8)\n  |> group() |> keep(columns: [\"day\"])\n\ndayArr = sessDays |> findColumn(fn: (key) => true, column: \"day\")\nS = (sessDays |> sort(columns: [\"day\"]) |> last(column: \"day\")\n      |> findRecord(fn: (key) => true, idx: 0)).day\n\n// 每株 × 每個合格場次：飽和重量、加水量、步數\nsat = src\n  |> map(fn: (r) => ({ r with day: date.truncate(t: r._time, unit: 1d) }))\n  |> filter(fn: (r) => contains(value: r.day, set: dayArr))\n  |> group(columns: [\"plant_id\", \"day\"]) |> max()\n  |> group(columns: [\"plant_id\"]) |> keep(columns: [\"plant_id\", \"day\", \"_value\"])\n  |> rename(columns: {_value: \"sat\"})\n\nadd = deltas\n  |> filter(fn: (r) => contains(value: r.day, set: dayArr))\n  |> group(columns: [\"plant_id\", \"day\"])\n  |> reduce(identity: {add: 0.0, steps: 0}, fn: (r, accumulator) =>\n       ({ add: accumulator.add + r._value, steps: accumulator.steps + 1 }))\n  |> group(columns: [\"plant_id\"]) |> keep(columns: [\"plant_id\", \"day\", \"add\", \"steps\"])\n\nper = join(tables: {s: sat, a: add}, on: [\"plant_id\", \"day\"])\n\nthis_s = per |> filter(fn: (r) => r.day == S)\n  |> map(fn: (r) => ({ plant_id: r.plant_id, sat_now: r.sat, add_now: r.add, steps: float(v: r.steps) }))\n  |> group()\n\nprior = per |> filter(fn: (r) => r.day < S)\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"day\"], desc: true) |> limit(n: 3)\n\np_sat = prior |> group(columns: [\"plant_id\"]) |> median(column: \"sat\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"sat_base\", v: r.sat })) |> group()\np_add = prior |> group(columns: [\"plant_id\"]) |> median(column: \"add\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"add_base\", v: r.add })) |> group()\np_n = prior |> group(columns: [\"plant_id\"]) |> count(column: \"sat\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"n\", v: float(v: r.sat) })) |> group()\n\nbase = union(tables: [p_sat, p_add, p_n]) |> group()\n  |> pivot(rowKey: [\"plant_id\"], columnKey: [\"k\"], valueColumn: \"v\")\n\njoin(tables: {t: this_s, b: base}, on: [\"plant_id\"])\n  |> map(fn: (r) => ({\n       plant_id: r.plant_id,\n       sat_now: r.sat_now, sat_base: r.sat_base,\n       sat_diff: r.sat_now - r.sat_base,\n       sat_pct: (r.sat_now - r.sat_base) / r.sat_base * 100.0,\n       add_now: r.add_now, add_base: r.add_base,\n       steps: r.steps, n: r.n }))\n  |> sort(columns: [\"sat_pct\"])\n  |> keep(columns: [\"plant_id\",\"sat_now\",\"sat_base\",\"sat_diff\",\"sat_pct\",\"add_now\",\"add_base\",\"steps\",\"n\"])"
+    }
+   ]
+  },
+  {
+   "id": 10,
+   "title": "該澆水了嗎 — 耗竭程度（分母為觀測範圍，非真實持水量）",
+   "type": "table",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 10,
+    "w": 24,
+    "x": 0,
+    "y": 35
+   },
+   "description": "現在該澆哪一盆。依耗竭程度排序。\n\n耗竭% = (飽和 − 現在) / (飽和 − 乾基準) × 100。\n‧ 飽和 = 最近一次合格澆水場次之後的最大重量（錨定日期欄可見）。\n‧ 乾基準 = 60 天內的第 10 百分位，**不是最小值** —— 單一錯誤的低讀數會撐大分母、壓低耗竭%，而這類雜訊已知存在。\n\n**兩個判準的差別只在門檻，分母相同**：\n‧「依你的習慣」= 耗竭 ≥100%，即已達你歷史上實際會澆水的乾度。\n‧「達觀測範圍80%」= 耗竭 ≥80%，提早提醒。\n\n⚠ 分母是**你用過的重量範圍**，不是真實的容器持水量 —— 乾介質重量從未量測。因此這裡的百分比不具備園藝上「土壤含水耗竭%」的意義，不要那樣解讀。取得真實乾基重（空盆+全乾介質）之後，分母才能換成真正的持水量。\n\n⚠「依你的習慣」是**描述性的，不是規範性的**：它只記錄你過去會在多乾時澆水。若你因為看了這張表而提早澆水，乾基準就不再更新，門檻會凍結在舊習慣上。行為改變後這個基準需要重新檢視。\n\n⚠ 錨點來自全域場次。若只澆單盆，該盆的實際飽和點會比錨點新，本表會低估其含水量 —— 「錨定日期」與「距上次澆水」兩欄使這個失效可見。",
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "plant_id"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "植株"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "now_g"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "現在 g"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "sat_g"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "飽和 g"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "dry_g"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "乾基準 g"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "depl_pct"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "耗竭 %"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       },
+       {
+        "id": "unit",
+        "value": "percent"
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background"
+        }
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "text",
+           "value": null
+          },
+          {
+           "color": "orange",
+           "value": 80
+          },
+          {
+           "color": "red",
+           "value": 100
+          }
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "habit"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "依你的習慣"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "obs80"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "達觀測範圍 80%"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "days"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "距上次澆水 d"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nsrc = (start) => from(bucket: \"sensors\")\n  |> range(start: start)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"\n       and r.quality == \"ok\" and r.plant_id != \"tare-ref\" and r.plant_id != \"unknown\")\n\n// --- 錨點：最近一個「>=50% 植株增重」的日子（不是最後一筆 >10g 差值）---\nS = (src(start: -90d)\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"_time\"])\n  |> difference(columns: [\"_value\"], nonNegative: false)\n  |> filter(fn: (r) => r._value > 10.0)\n  |> map(fn: (r) => ({ r with day: date.truncate(t: r._time, unit: 1d) }))\n  |> group(columns: [\"day\", \"plant_id\"]) |> distinct(column: \"plant_id\")\n  |> group(columns: [\"day\"]) |> count(column: \"_value\")\n  |> filter(fn: (r) => r._value >= 8)\n  |> group() |> sort(columns: [\"day\"]) |> last(column: \"day\")\n  |> findRecord(fn: (key) => true, idx: 0)).day\n\nnowW = src(start: -90d) |> group(columns: [\"plant_id\"]) |> last()\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"now\", v: r._value }))\nsatW = src(start: -90d) |> range(start: S) |> group(columns: [\"plant_id\"]) |> max()\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"sat\", v: r._value }))\ndryW = src(start: -60d) |> group(columns: [\"plant_id\"])\n  |> quantile(q: 0.1, method: \"exact_mean\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"dry\", v: r._value }))\n\nunion(tables: [nowW, satW, dryW]) |> group()\n  |> pivot(rowKey: [\"plant_id\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({ r with span: r.sat - r.dry }))\n  |> filter(fn: (r) => r.span > 5.0)\n  |> map(fn: (r) => ({\n       plant_id: r.plant_id,\n       now_g: r.now, sat_g: r.sat, dry_g: r.dry,\n       depl_pct: (r.sat - r.now) / r.span * 100.0,\n       days: float(v: int(v: now()) - int(v: S)) / 86400000000000.0 }))\n  |> map(fn: (r) => ({ r with\n       habit: if r.depl_pct >= 100.0 then \"● 該澆水\" else \"○\",\n       obs80: if r.depl_pct >= 80.0 then \"● 該澆水\" else \"○\" }))\n  |> sort(columns: [\"depl_pct\"], desc: true)\n  |> keep(columns: [\"plant_id\",\"now_g\",\"sat_g\",\"dry_g\",\"depl_pct\",\"habit\",\"obs80\",\"days\"])"
+    }
+   ]
+  },
+  {
+   "id": 11,
+   "title": "疑似異常場次 — 增重株數未達門檻者已排除統計",
+   "type": "table",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 24,
+    "x": 0,
+    "y": 45
+   },
+   "description": "pipeline 誤差的觀測窗。\n\n列出所有「有植株增重 >10 g」的日子，以及當天有幾株。澆水是全體同時發生的事件（16 株約在 26 分鐘內完成），所以：\n‧ ≥8 株 → 判定為澆水場次，納入統計。\n‧ 1–7 株 → 判定為疑似異常，**排除**在統計之外，但列在這裡讓你看見。\n\n為什麼需要這張表：2026-08-10 有 7 株同時增重、08-11 有 1 株。這些不是澆水，但若直接當成澆水事件納入基準，會嚴重扭曲比較結果（實測會使某株的比較失真成 +321%）。把它們排除但顯示出來，比靜默丟棄誠實。\n\n注意：百分比門檻無法取代這個判定 —— 08-10 的 cactus-07 增重 15.1 g 佔其盆重 10.9%，與真實澆水的比例重疊。全域同時性才是有效的判別依據。",
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "day"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "日期"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "n_plants"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "增重株數"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "verdict"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "判定"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "who"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "涉及植株"
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\njumps = from(bucket: \"sensors\")\n  |> range(start: -90d)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"\n       and r.quality == \"ok\" and r.plant_id != \"tare-ref\" and r.plant_id != \"unknown\")\n  |> group(columns: [\"plant_id\"])\n  |> sort(columns: [\"_time\"])\n  |> difference(columns: [\"_value\"], nonNegative: false)\n  |> filter(fn: (r) => r._value > 10.0)\n  |> map(fn: (r) => ({ r with day: date.truncate(t: r._time, unit: 1d) }))\n\ncounts = jumps\n  |> group(columns: [\"day\", \"plant_id\"]) |> distinct(column: \"plant_id\")\n  |> group(columns: [\"day\"]) |> count(column: \"_value\")\n  |> group() |> rename(columns: {_value: \"n_plants\"})\n\nnames = jumps\n  |> group(columns: [\"day\", \"plant_id\"]) |> distinct(column: \"plant_id\")\n  |> group(columns: [\"day\"]) |> sort(columns: [\"_value\"])\n  |> reduce(identity: {who: \"\"}, fn: (r, accumulator) => ({\n       who: if accumulator.who == \"\" then r._value else accumulator.who + \", \" + r._value }))\n  |> group()\n\njoin(tables: {c: counts, n: names}, on: [\"day\"])\n  |> map(fn: (r) => ({\n       day: r.day,\n       n_plants: r.n_plants,\n       verdict: if r.n_plants >= 8 then \"澆水場次\" else \"疑似異常 — 已排除\",\n       who: r.who }))\n  |> sort(columns: [\"day\"], desc: true)\n  |> keep(columns: [\"day\", \"n_plants\", \"verdict\", \"who\"])"
+    }
+   ]
+  },
+  {
    "id": 3,
    "title": "DLI per day (lux estimate)",
    "type": "timeseries",
@@ -205,7 +722,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 25
+    "y": 51
    },
    "description": "Daily light integral from the BH1750, lux/54. This is the figure the light controller tops up against (DLI_TARGET, default 4.0), so it is the one to read when asking whether the evening top-up did its job. Absolute scale is not trustworthy — lux/54 is a daylight conversion applied to an LED — so read it relatively.",
    "fieldConfig": {
@@ -250,7 +767,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 25
+    "y": 51
    },
    "description": "Open-Meteo daily context. Indoor light barely tracks this — natural light measured at 1-2% of the indoor daily total on 2026-07-30 — so treat it as weather context, not as an explanation of indoor DLI.",
    "fieldConfig": {
@@ -324,7 +841,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 33
+    "y": 59
    },
    "description": "Notifications Grafana tried to send and could not. Every other panel here answers a question about the plants; this one answers whether you would have been TOLD. On 2026-08-08 delivery to Telegram failed 89 times over five hours while the deadman was firing correctly, and a 53-hour sensor outage went unnoticed for two days as a result. With a single notification channel you cannot be alerted that the channel is down — so this makes it permanent, reviewable data instead. Flat zero is healthy. Any bar means alerts were raised and never arrived: go and look at what was firing in that window.",
    "fieldConfig": {
@@ -371,7 +888,7 @@
     "h": 7,
     "w": 12,
     "x": 0,
-    "y": 41
+    "y": 67
    },
    "description": "Local hour of the last lamp-off. 18.5 = the base window end (18:30, no top-up); ~19.8-20.1 = the evening top-up ran and reached DLI_TARGET; 20.5 = it ran to the EXTEND_END cap without reaching target, i.e. the lamp delivered less light than usual that day. Restricted to 17:00-21:30 because light/state is retained and every Telegraf reconnect replays it as a phantom OFF.",
    "fieldConfig": {
@@ -421,7 +938,7 @@
     "h": 7,
     "w": 12,
     "x": 12,
-    "y": 41
+    "y": 67
    },
    "description": "Points stored per day per pipeline. This is the panel that makes a silent outage visible: the Open-Meteo 503 collapse shows here as weather dropping from ~96/day to 3-10/day between 2026-07-30 and 08-03, and the recovery back to 96 after the poll interval was cut to 5 min. A pipeline going flat is the signal — the absolute heights differ by design.",
    "fieldConfig": {
