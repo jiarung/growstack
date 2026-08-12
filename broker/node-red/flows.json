@@ -193,6 +193,11 @@
     "type": "str"
    },
    {
+    "label": "tare-ref",
+    "value": "tare-ref",
+    "type": "str"
+   },
+   {
     "label": "white-ref",
     "value": "white-ref",
     "type": "str"
