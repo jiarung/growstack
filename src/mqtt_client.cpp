@@ -28,6 +28,7 @@ PubSubClient client(espClient);
 
 char topic[64] = {0};
 char spectrumTopic[72] = {0};
+char healthTopic[72]   = {0};   // monitor-air/<dev>/health — live per-sensor presence
 char clientId[48] = {0};
 bool configValid = false;
 uint32_t lastReconnectAttempt = 0;
@@ -237,6 +238,7 @@ void mqttSetup() {
     }
     snprintf(topic, sizeof(topic), "monitor-air/%s/telemetry", MQTT_DEVICE_ID);
     snprintf(spectrumTopic, sizeof(spectrumTopic), "monitor-air/%s/spectrum", MQTT_DEVICE_ID);
+    snprintf(healthTopic,   sizeof(healthTopic),   "monitor-air/%s/health", MQTT_DEVICE_ID);
     snprintf(reflectCmdTopic,    sizeof(reflectCmdTopic),    "monitor-air/%s/reflect/cmd", MQTT_DEVICE_ID);
     snprintf(reflectStateTopic,  sizeof(reflectStateTopic),  "monitor-air/%s/reflect/state", MQTT_DEVICE_ID);
     snprintf(reflectResultTopic, sizeof(reflectResultTopic), "monitor-air/%s/reflect/result", MQTT_DEVICE_ID);
@@ -359,6 +361,34 @@ bool mqttPublishSpectrum(const SpectrumReading& s) {
     } else {
         logf("[mqtt] spectrum publish FAILED: state=%d\n", client.state());
     }
+    return ok;
+}
+
+bool mqttPublishHealth(const SensorHealth& h, bool pn532, const char* resetReason) {
+    if (!mqttConnected()) return false;
+
+    // Presence as 1.0/0.0 floats (stable InfluxDB field types, like telemetry/spectrum).
+    char payload[288];
+    int n = snprintf(payload, sizeof(payload),
+        "{\"bme\":%.1f,\"lux\":%.1f,\"lux_ref\":%.1f,\"as7341\":%.1f,\"as7263\":%.1f,"
+        "\"hx711\":%.1f,\"pn532\":%.1f,\"i2c_n\":%d",
+        h.bme ? 1.0 : 0.0, h.lux ? 1.0 : 0.0, h.lux_ref ? 1.0 : 0.0, h.as7341 ? 1.0 : 0.0,
+        h.as7263 ? 1.0 : 0.0, h.hx711 ? 1.0 : 0.0, pn532 ? 1.0 : 0.0, h.i2c_n);
+    if (n < 0 || (size_t)n >= sizeof(payload)) { logln("[mqtt] health publish aborted: overflow"); return false; }
+
+    // spectrum_read_ms: OMIT when NaN (no ambient read yet) — bare `nan` is invalid JSON.
+    if (h.spectrum_read_ms == h.spectrum_read_ms) {  // false only for NaN
+        int m = snprintf(payload + n, sizeof(payload) - n, ",\"spectrum_read_ms\":%.1f", h.spectrum_read_ms);
+        if (m < 0 || (size_t)(n + m) >= sizeof(payload)) { logln("[mqtt] health publish aborted: overflow"); return false; }
+        n += m;
+    }
+    // reset reason as a STRING field (host: json_string_fields=["reset"]).
+    int m = snprintf(payload + n, sizeof(payload) - n, ",\"reset\":\"%s\"}", resetReason ? resetReason : "");
+    if (m < 0 || (size_t)(n + m) >= sizeof(payload)) { logln("[mqtt] health publish aborted: overflow"); return false; }
+
+    bool ok = client.publish(healthTopic, payload, false);  // QoS 0, not retained
+    if (ok) logf("[mqtt] published %s %s\n", healthTopic, payload);
+    else    logf("[mqtt] health publish FAILED: state=%d\n", client.state());
     return ok;
 }
 

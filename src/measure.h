@@ -12,3 +12,7 @@ void measureLoop();
 // Called by the MQTT dispatcher when a measure/ack arrives — bounded-copies the payload + flags it;
 // the actual event_id match happens in measureLoop (keeps the MQTT callback tiny).
 void measureOnAck(const uint8_t* payload, unsigned int len);
+
+// Live PN532 presence (was getFirmwareVersion() OK at begin). For the health topic; the PN532 is
+// on SPI, not I2C, so it can't be probed via the I2C bus scan.
+bool measurePn532Ok();

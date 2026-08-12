@@ -147,6 +147,8 @@ void measureOnAck(const uint8_t* payload, unsigned int len) {   // MQTT dispatch
     if ((uint32_t)(doc["event_id"] | 0) == curEventId) ackMatched = true;
 }
 
+bool measurePn532Ok() { return pn532Ok; }  // live presence for the health topic (PN532 is on SPI)
+
 void measureBegin() {
     oledBegin();
     nfc.begin();

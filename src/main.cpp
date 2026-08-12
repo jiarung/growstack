@@ -118,5 +118,9 @@ void loop() {
         SpectrumReading sp = spectrumRead();
         mqttPublishSpectrum(sp);  // own topic; no-op + no log when AS7341 absent
 #endif
+
+        // Live sensor health (gated by !reflectBusy() above, so its I2C probes never
+        // collide with a reflect read). Lets the host alert on a silent sensor dropout.
+        mqttPublishHealth(sensorsHealth(), measurePn532Ok(), resetReasonStr());
     }
 }

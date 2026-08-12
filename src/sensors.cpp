@@ -41,6 +41,8 @@ bool bh1750Ok = false;     // primary present
 bool bh1750RefOk = false;  // reference present
 bool as7341Ok = false;     // visible spectral present
 bool as7263Ok = false;     // NIR spectral present
+uint8_t bmeAddr = 0;       // I2C addr BME680 actually answered on (0 = never found); for live re-probe
+float lastSpectrumReadMs = NAN;  // duration of the last ambient AS7341 read — a bus-health canary
 
 HX711 hx711;                              // load cell ADC (weight); NOT on I2C (GPIO DT/SCK)
 constexpr uint8_t HX711_DT = 4, HX711_SCK = 5;
@@ -65,6 +67,7 @@ bool beginBme() {
             bme.setPressureOversampling(BME680_OS_4X);
             bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
             bme.setGasHeater(320, 150);  // 320 degC for 150 ms
+            bmeAddr = addr;              // remember for the live health re-probe
             logf("[sensors] BME680 ok @ 0x%02X\n", addr);
             return true;
         }
@@ -119,6 +122,30 @@ bool sensorsBegin() {
     hx711Begin();  // load cell (own GPIOs; no presence check — is_ready() gates reads)
 
     return bmeOk || bh1750Ok || bh1750RefOk || as7341Ok || as7263Ok;
+}
+
+// Live presence probe: does a device ACK this address right now? One cheap I2C start/stop.
+static bool i2cPresent(uint8_t addr) {
+    Wire.beginTransmission(addr);
+    return Wire.endTransmission() == 0;
+}
+
+// Re-probe every sensor's LIVE state (not the boot flags) so a mid-run dropout is visible.
+SensorHealth sensorsHealth() {
+    SensorHealth h;
+    h.bme     = bmeAddr ? i2cPresent(bmeAddr) : (i2cPresent(0x77) || i2cPresent(0x76));
+    h.lux     = i2cPresent(BH1750_ADDR_MAIN);
+    h.lux_ref = i2cPresent(BH1750_ADDR_REF);
+    h.as7341  = i2cPresent(0x39);
+    h.as7263  = i2cPresent(0x49);
+    h.hx711   = (hxCount > 0) && (millis() - hxLastMs) <= HX711_STALE_MS;
+    // Count only KNOWN devices (5 sensors + OLED 0x3C), NOT a full 1..126 scan: on a wedged
+    // bus every probe hits the ~50ms Wire timeout, so a full scan would block ~127×50ms ≈ 6s.
+    // All-zero here still flags a wedge (every known device NACKs at once). Bounded to ~6 probes.
+    h.i2c_n = (int)h.bme + (int)h.lux + (int)h.lux_ref + (int)h.as7341 + (int)h.as7263
+              + (i2cPresent(0x3C) ? 1 : 0);
+    h.spectrum_read_ms = lastSpectrumReadMs;
+    return h;
 }
 
 SensorReading sensorsRead() {
@@ -261,6 +288,12 @@ void hx711SerialCmd() {
                     logf("[hx711] w=%.1fg range=%.1fg n=%d win=%ums stale=%d cal=%d valid=%d\n",
                          s.mean_g, s.range_g, s.sample_count, s.window_ms,
                          (int)s.stale, (int)s.calibrated, (int)s.valid);
+                }
+                else if (buf[0] == 'h') {   // live sensor-health snapshot (presence re-probe)
+                    SensorHealth sh = sensorsHealth();
+                    logf("[health] bme=%d lux=%d lux_ref=%d as7341=%d as7263=%d hx711=%d i2c_n=%d read_ms=%.0f\n",
+                         (int)sh.bme, (int)sh.lux, (int)sh.lux_ref, (int)sh.as7341, (int)sh.as7263,
+                         (int)sh.hx711, sh.i2c_n, sh.spectrum_read_ms);
                 }
             }
             len = 0; ovf = false;
@@ -476,6 +509,7 @@ SpectrumReading spectrumRead() {
     uint32_t t0 = millis();
     bool ok = as7341.readAllChannels(ch);
     s.read_ms = (float)(millis() - t0);
+    lastSpectrumReadMs = s.read_ms;  // bus-health canary for the health topic (creeping = degrading I2C)
     if (!ok) return s;  // read failed -> invalid
 
     // readAllChannels fills 12 slots; [4] and [5] are duplicate ADCs — skip them.

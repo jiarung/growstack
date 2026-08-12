@@ -33,3 +33,8 @@ bool mqttPublishSpectrum(const SpectrumReading& s);
 // (QoS 0, not retained). Returns true if accepted by the client. The measure module holds a pending
 // copy + retries until it sees a matching measure/ack.
 bool mqttPublishMeasureEvent(const char* json);
+
+// Publish a live sensor-health snapshot to monitor-air/<device>/health (QoS 0, not retained):
+// per-sensor presence as 1.0/0.0 floats + i2c_n + spectrum_read_ms (omitted if NaN) + reset reason,
+// so the monitoring host can alert on a silent sensor dropout. Returns true if accepted.
+bool mqttPublishHealth(const SensorHealth& h, bool pn532, const char* resetReason);

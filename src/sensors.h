@@ -33,6 +33,25 @@ struct SpectrumReading {
     bool valid = false;
 };
 
+// Live per-sensor presence/health, RE-PROBED on demand (not the boot-time flags) so a
+// sensor that drops mid-run becomes visible — weight + WiFi can keep working while a
+// sensor is silently gone. I2C sensors: a fresh address ACK right now. HX711: a fresh
+// sample within the stale window. Consumed by the `health` topic (Phase 2) for host alerts.
+struct SensorHealth {
+    bool bme     = false;  // BME680  @ 0x77/0x76
+    bool lux     = false;  // BH1750  @ 0x23 (primary)
+    bool lux_ref = false;  // BH1750  @ 0x5C (reference)
+    bool as7341  = false;  // AS7341  @ 0x39 (visible spectral)
+    bool as7263  = false;  // AS7263  @ 0x49 (NIR spectral)
+    bool hx711   = false;  // load cell: a fresh sample within HX711_STALE_MS
+    int  i2c_n   = 0;      // devices ACKing on the bus right now (0 = bus wedged)
+    float spectrum_read_ms = NAN;  // last ambient AS7341 read duration — a bus-health canary
+};
+// Re-probes live each call: ~6 I2C address probes (known devices only, no full bus scan).
+// Cheap on a healthy bus; bounded to ~6×Wire-timeout if the bus is wedged. Callers on the
+// periodic path should gate it behind !reflectBusy() (like the ambient-spectrum tick).
+SensorHealth sensorsHealth();
+
 // Initialise the I2C bus and both sensors. Returns true if at least one sensor
 // came up; never blocks or halts on failure (a network device must keep running).
 bool sensorsBegin();
