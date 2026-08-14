@@ -14,14 +14,19 @@
 #
 # The two agreeing (~within 2×) is a confidence check; a big gap = investigate.
 #
-#   ./calibrate-ppfd.sh --device staging-01 --start -24h
-#   ./calibrate-ppfd.sh --device staging-01 --start 2026-07-11T00:00:00Z --stop 2026-07-11T09:00:00Z
+#   ./calibrate-ppfd.sh --start -90m --gain 4 --tint-ms 280.78
+#   ./calibrate-ppfd.sh --start 2026-07-11T00:00:00Z --stop 2026-07-11T09:00:00Z
 #   ./calibrate-ppfd.sh --datasheet-only --gain 64 --tint-ms 27.8
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---- defaults / args ----
-DEVICE="staging-01"; START="-24h"; STOP="now()"; LUX_MIN=3000; LUX_MAX=45000
+# Default device was `staging-01` — the bench board the AS7341 lived on until it
+# moved to the plant. It has not been the right answer for a while: over the 30
+# days to 2026-08-14, livingroom published 157,601 spectrum points and staging-01
+# 707, so the old default made the tool answer INSUFFICIENT DATA on a system that
+# had a month of perfectly good data.
+DEVICE="livingroom"; START="-24h"; STOP="now()"; LUX_MIN=3000; LUX_MAX=45000
 DATASHEET_ONLY=0; GAIN=""; TINT_MS=""; SAT_COUNT=65535   # set to firmware full-scale (ATIME+1)*(ASTEP+1)
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -82,8 +87,14 @@ if os.environ["DATASHEET_ONLY"] == "1":
     sys.exit(0)
 
 # --- pull 1-min means of lux + 8 channels for the device/window ---
-# (ambient spectrum carries no `saturated` field — only reflect does — so we
-#  infer saturation from raw channel counts near the ADC full-scale, --sat-count.)
+# Saturation is inferred from raw channel counts at/above --sat-count rather than
+# read from the payload. The comment here used to claim ambient carries no
+# `saturated` flag — it does, and has since firmware c9e0690 (10,883 ambient
+# points carried it in the two days to 2026-08-14). Inference is kept because it
+# is equivalent at the default full-scale AND it survives --sat-count being set
+# to a different ATIME/ASTEP, which the flag would not reflect. If you ever want
+# the flag instead, note it would have to survive the 1-min mean below: a window
+# where one reading in sixty saturates averages to 0.017, not 0.
 dev, start, stop = os.environ["DEVICE"], os.environ["START"], os.environ["STOP"]
 lux_min, lux_max = float(os.environ["LUX_MIN"]), float(os.environ["LUX_MAX"])
 chan_filter = " or ".join(f'r._field == "{c}"' for c in CH)
