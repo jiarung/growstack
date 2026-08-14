@@ -262,12 +262,19 @@ offline. This catches per-field dropouts that the time-series panels hide.
 
 ### Deadman alert (Telegram)
 
-Two provisioned rules in the folder **Device health**:
+Three provisioned rules in the folder **Device health**:
 
 | Rule | Fires when | Pending |
 |---|---|---|
-| `deadman-sensor-stale` | a `(device, field)` series is silent **>900 s** | `for: 2m` → ~17 min after the last point |
-| `deadman-weather-stale` | the Open-Meteo feed is silent **>1 h** | `for: 10m` |
+| `deadman-sensor-stale` | a `(device, field)` series is silent **>15 min** | `for: 2m` → ~17 min after the last point |
+| `deadman-weather-stale` | the Open-Meteo feed is silent **>60 min** | `for: 10m` |
+| `alert-delivery-failing` | Grafana's own notification-failure counter rose in the last hour | `for: 5m` |
+
+Both staleness queries report the age in **minutes**, so the thresholds read in the
+same unit as the notification text. That is not cosmetic: Grafana's notification
+template engine has no `humanizeDuration` (11.1.0 answers `function
+"humanizeDuration" not defined`), so a seconds-valued query cannot be turned into
+readable prose downstream. Change one, change the other.
 
 The sensor rule covers all current and future devices/fields automatically. The
 weather rule is separate because the cadence differs by two orders of magnitude,
@@ -320,6 +327,32 @@ curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
 
 The rule is declarative (in git); the contact point + route live in Grafana's DB
 (created by the script, so the bot token never enters version control).
+
+**Set `GF_SERVER_ROOT_URL` in `.env` to an address the reader's phone can reach**
+(e.g. `http://192.168.1.52:3001/`). Grafana builds every link in every
+notification from it, and unset it defaults to `http://localhost:3000/` — the
+wrong port, since the container maps `3001:3000`, and on a phone `localhost` is
+the phone. Until it is set, every link in every alert is dead.
+
+**What the notification looks like** is decided in two places, on purpose:
+
+- the **rules** own the prose. `summary` is the headline, `description` carries
+  the number, its unit and the action. Only the rule knows the unit, so only the
+  rule can write the sentence.
+- the **contact point** owns the layout — the `message` template in
+  `setup-telegram.sh`, which renders summary + description + link and nothing
+  else.
+
+Without that `message`, Grafana falls back to `default.message`: every label
+dumped as `- k = v`, plus `Value: B=22, C=1` where `C` is the threshold
+expression's own boolean, and the Silence link as 400 characters of URL-encoded
+matchers. The first 100 characters — all Telegram shows in a push preview — were
+metadata, and the actionable line came last. The template also emits **plain
+text**, which sidesteps `parse_mode` entirely (the default is HTML, so the
+`**Firing**` in Grafana's stock template arrives as literal asterisks).
+
+Notifications group by `(alertname, device)`: one message listing every dead
+field on a board, rather than six messages for one unplugged sensor.
 
 ## Backups (to the HDD)
 

@@ -147,8 +147,9 @@ share one value domain on purpose — that is what lets the two join per plant.
 
 | Flow | What | Live? |
 |---|---|---|
-| Grafana deadman — sensors | per `(device, field)` series silent >900 s, **then** `for: 2m` → Telegram. Watches **production series only** — `sim`, `staging-01` (bench board) and `weight_raw` (event-driven) are excluded | ✅ **fixed + proven 2026-07-30** — it had never fired (see gap 5) |
-| Grafana deadman — weather feed | Open-Meteo silent >1 h, **then** `for: 10m` → Telegram. One instance for the whole feed, not one per field | ✅ added 2026-08-03 (gap 6) |
+| Grafana deadman — sensors | per `(device, field)` series silent >15 min, **then** `for: 2m` → Telegram. Watches **production series only** — `sim`, `staging-01` (bench board) and `weight_raw` (event-driven) are excluded | ✅ **fixed + proven 2026-07-30** — it had never fired (see gap 5) |
+| Grafana deadman — weather feed | Open-Meteo silent >60 min, **then** `for: 10m` → Telegram. One instance for the whole feed, not one per field | ✅ added 2026-08-03 (gap 6) |
+| Grafana — alert delivery | Grafana's own notification-failure counter rose in the last hour, **then** `for: 5m` → Telegram. Retrospective by nature: one channel cannot announce its own outage while it is down | ✅ added 2026-08-09 |
 | `backup/influx-backup.sh` | InfluxDB → `/data/influx-backups`, keeps newest 14 | ✅ cron `30 19 * * *` UTC = **03:30 Taipei** |
 | `sim/publish.sh` | fake telemetry generator | ⛔ container `Exited` (intentional) |
 | `start.sh` | bring the stack up | on demand |

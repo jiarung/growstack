@@ -2,9 +2,21 @@ apiVersion: 1
 
 # Deadman: one multi-dimensional rule that fires per (device, field) when that
 # series hasn't reported for too long. New devices/fields are covered with no
-# extra config. Threshold 900s (15 min) sits comfortably above the BH1750's
-# transient gaps, so this pages only on a genuine sustained outage — the
-# dashboard's 5-min table is the fine-grained view.
+# extra config. Threshold 15 min sits comfortably above the BH1750's transient
+# gaps, so this pages only on a genuine sustained outage — the dashboard's 5-min
+# table is the fine-grained view.
+#
+# Annotations are written as SENTENCES, in Chinese, with the number and its unit
+# inline. They are the entire notification: the Telegram contact point renders
+# summary + description and nothing else, so anything the reader needs has to be
+# here. Grafana's default.message (labels dumped as `- k = v`, plus `C=1` from the
+# threshold expression) is what this replaces.
+#
+# The staleness queries below therefore report MINUTES, not seconds. The
+# notification template engine has no humanizeDuration — verified against this
+# Grafana (11.1.0), which answers `function "humanizeDuration" not defined` — so
+# the unit conversion has to happen where the number is produced. The thresholds
+# then read in the same unit as the prose (15, 60), which is the point.
 groups:
   - orgId: 1
     name: device-health
@@ -24,8 +36,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: 'Sensor silent: {{ $labels.device }} / {{ $labels.field }}'
-          description: 'No new {{ $labels.field }} from {{ $labels.device }} for >15 min — check the device / sensor.'
+          summary: '{{ $labels.device }} 的 {{ $labels.field }} 停止回報'
+          description: '已經 {{ printf "%.0f" $values.B.Value }} 分鐘沒有新資料（門檻 15 分）。檢查裝置電源與感測器接線。'
         data:
           - refId: A
             relativeTimeRange:
@@ -68,8 +80,10 @@ groups:
                   |> group(columns: ["device", "_field"])
                   |> last()
                   // Rebuild each row as a one-point series whose value is the age
-                  // in seconds. Three things here are load-bearing; each one broke
-                  // this rule silently before:
+                  // in MINUTES (ns / 60e9) — the notification prose quotes this
+                  // number directly and there is no unit conversion downstream.
+                  // Three things here are load-bearing; each one broke this rule
+                  // silently before:
                   //   * `_time` must be present, or Grafana's Flux datasource has no
                   //     series to give the reduce below and yields NoData.
                   //   * `_time` must be now(), NOT the last report time — an old
@@ -81,7 +95,7 @@ groups:
                   //     dies with "frame cannot uniquely be identified by its labels".
                   //     Carried as plain `field` — annotations use $labels.field.
                   |> map(fn: (r) => ({ device: r.device, field: r._field, _time: now(),
-                       _value: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0 }))
+                       _value: float(v: int(v: now()) - int(v: r._time)) / 60000000000.0 }))
                   |> group(columns: ["device", "field"])
           - refId: B
             datasourceUid: __expr__
@@ -105,7 +119,8 @@ groups:
               conditions:
                 - evaluator:
                     type: gt
-                    params: [900]
+                    # minutes — see the unit note at the top of this file
+                    params: [15]
 
       # Watches the alerting path itself. It cannot warn you WHILE Telegram is down —
       # a single channel can never announce its own failure — so its job is the
@@ -131,8 +146,8 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: 'Alert delivery failing — {{ $labels.integration }}'
-          description: 'Grafana could not deliver notifications. Any alert raised while this was true never reached anyone — check what was firing in that window. Cause is usually the network path to the provider, not the token.'
+          summary: '通知送不出去（{{ $labels.integration }}）'
+          description: '過去 1 小時有 {{ printf "%.0f" $values.B.Value }} 則通知投遞失敗。這段期間觸發的警報沒有任何人收到 — 回頭查那段時間的 alert 歷史。原因通常是對外網路路徑，不是 token。'
         data:
           - refId: A
             relativeTimeRange:
@@ -192,8 +207,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: 'Weather feed stale: no Open-Meteo data'
-          description: 'No new `weather` points for >1 h. Telegraf polls every 5 min and Open-Meteo 503s intermittently, so this means sustained failure, not a single miss — check `docker logs monitor-air-telegraf | grep 503`.'
+          summary: 'Open-Meteo 天氣資料中斷'
+          description: '已經 {{ printf "%.0f" $values.B.Value }} 分鐘沒有新的 weather 資料（門檻 60 分）。Telegraf 每 5 分鐘輪詢一次，Open-Meteo 偶發 503，所以這代表持續失敗而不是單次漏接 — 看 docker logs monitor-air-telegraf | grep 503。'
         data:
           - refId: A
             relativeTimeRange:
@@ -216,7 +231,7 @@ groups:
                   |> group()
                   |> last()
                   |> map(fn: (r) => ({ feed: "open-meteo", _time: now(),
-                       _value: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0 }))
+                       _value: float(v: int(v: now()) - int(v: r._time)) / 60000000000.0 }))
                   |> group(columns: ["feed"])
           - refId: B
             datasourceUid: __expr__
@@ -240,6 +255,7 @@ groups:
               conditions:
                 - evaluator:
                     type: gt
-                    # 1 h = four missed 15-min slots at a 5-min poll cadence. Well
-                    # clear of the routine 503s, which now cost 5 min at most.
-                    params: [3600]
+                    # minutes. 60 = four missed 15-min slots at a 5-min poll
+                    # cadence — well clear of the routine 503s, which now cost
+                    # 5 min at most.
+                    params: [60]

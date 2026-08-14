@@ -28,8 +28,35 @@ api() { # method path  (body on stdin)
   echo "$code"
 }
 
-cp_body=$(jq -n --arg uid "$UID_CP" --arg token "$TOKEN" --arg chatid "$CHATID" \
-  '{uid:$uid, name:"telegram", type:"telegram", settings:{bottoken:$token, chatid:$chatid}, disableResolveMessage:false}')
+# The notification body. Without this Grafana falls back to `default.message`,
+# which dumps every label as `- k = v` and prints `Value: B=22, C=1` — C being
+# the threshold expression's own boolean. The reader's first 100 characters (all
+# Telegram shows in a push preview) were metadata, and the one actionable line
+# came last. So: render the rule's own sentences and nothing else.
+#
+# The rules own the prose — summary is the headline, description carries the
+# number, its unit and what to do — because only the rule knows the unit. This
+# template stays dumb on purpose.
+#
+# Deliberately absent: the label block, the folder, and the Silence link (400
+# characters of URL-encoded matchers, for the one action you least want to hit by
+# accident on a phone). Also no timestamp — Telegram already stamps every message,
+# and Grafana's container has no TZ set, so .StartsAt would print UTC.
+#
+# GeneratorURL comes from GF_SERVER_ROOT_URL (broker/.env). Unset, it is
+# http://localhost:3000/ — wrong port, and "localhost" on a phone is the phone.
+read -r -d '' MSG <<'EOF' || true
+{{ range .Alerts.Firing }}{{ if eq .Labels.severity "critical" }}🔴{{ else }}🟡{{ end }} {{ .Annotations.summary }}
+{{ .Annotations.description }}
+{{ .GeneratorURL }}
+
+{{ end }}{{ range .Alerts.Resolved }}✅ 已恢復：{{ .Annotations.summary }}
+
+{{ end }}
+EOF
+
+cp_body=$(jq -n --arg uid "$UID_CP" --arg token "$TOKEN" --arg chatid "$CHATID" --arg msg "$MSG" \
+  '{uid:$uid, name:"telegram", type:"telegram", settings:{bottoken:$token, chatid:$chatid, message:$msg}, disableResolveMessage:false}')
 
 code=$(printf '%s' "$cp_body" | api PUT "/api/v1/provisioning/contact-points/$UID_CP")
 if [ "$code" = "404" ]; then
@@ -37,7 +64,14 @@ if [ "$code" = "404" ]; then
 fi
 case "$code" in 2*) ;; *) echo "contact point setup failed (HTTP $code): $(cat /tmp/gf_resp)" >&2; exit 1;; esac
 
-pol_body='{"receiver":"telegram","group_by":["alertname","device","_field"],"group_wait":"30s","group_interval":"5m","repeat_interval":"6h"}'
+# group_by used to list `_field`, which is not a label on anything: the deadman
+# rule deliberately carries the field name as plain `field` (carried as `_field`
+# Grafana reads it as the frame's field NAME and the rule dies — there is a
+# comment about it in rules.yaml.tmpl). So that entry silently did nothing.
+# Dropping it rather than correcting it to `field`: grouping by device means one
+# message listing every dead field on a board, instead of six messages for one
+# unplugged sensor. The template ranges over the group, so they all show.
+pol_body='{"receiver":"telegram","group_by":["alertname","device"],"group_wait":"30s","group_interval":"5m","repeat_interval":"6h"}'
 code=$(printf '%s' "$pol_body" | api PUT "/api/v1/provisioning/policies")
 case "$code" in 2*) ;; *) echo "policy setup failed (HTTP $code): $(cat /tmp/gf_resp)" >&2; exit 1;; esac
 
