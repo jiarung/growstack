@@ -903,6 +903,78 @@
      "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"uid\" and r.plant_id == \"unknown\")\n  |> keep(columns: [\"_time\", \"_value\", \"device\"])\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 25)"
     }
    ]
+  },
+  {
+   "id": 17,
+   "title": "Optical throughput under the lamp — daily medians (the ratio alert's blind spot)",
+   "description": "The lamp is a controlled reference source: this room gets 1-2% of its daily light from the sun, so during lamp hours the illumination is fixed and a daily median isolates the sensor and its optical path. The `spectrum-throughput-drift` alert watches the RATIO of these two, which cannot see COMMON-MODE degradation — 2026-08-05 to 08-08 both sensors fouled together, the lamp-window lux halved, and the ratio moved only 6.33 to 7.51. Watch for both lines falling together: that is the case the alert will not catch. Steps are expected after a window clean or a sensor swap (07-22 +4x, 07-29 +1.7x, 08-11 replacement) — note them, and re-derive the alert band and CAL afterwards.",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 95
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 0,
+      "spanNulls": false,
+      "showPoints": "always",
+      "pointSize": 6
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "BH1750 lux"
+      },
+      "properties": [
+       {
+        "id": "custom.axisPlacement",
+        "value": "right"
+       },
+       {
+        "id": "unit",
+        "value": "lux"
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n// Same inset lamp window the spectrum alert uses (09:00-18:00).\ninWindow = (t) => {\n  m = date.hour(t: t) * 60 + date.minute(t: t)\n  return m >= 540 and m < 1080\n}\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and r.device == \"livingroom\"\n       and (r._field == \"clear\" or r._field == \"saturated\"))\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.clear and r.saturated == 0.0 and r.clear < 65535.0)\n  |> filter(fn: (r) => inWindow(t: r._time))\n  |> map(fn: (r) => ({_time: r._time, _value: r.clear}))\n  |> aggregateWindow(every: 1d, fn: median, timeSrc: \"_start\", createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: r._value, _field: \"AS7341 clear\"}))\n  |> group(columns: [\"_field\"])\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n// Same inset lamp window the spectrum alert uses (09:00-18:00).\ninWindow = (t) => {\n  m = date.hour(t: t) * 60 + date.minute(t: t)\n  return m >= 540 and m < 1080\n}\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r.device == \"livingroom\" and r._field == \"lux\")\n  |> filter(fn: (r) => inWindow(t: r._time))\n  |> aggregateWindow(every: 1d, fn: median, timeSrc: \"_start\", createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: r._value, _field: \"BH1750 lux\"}))\n  |> group(columns: [\"_field\"])\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])"
+    }
+   ]
   }
  ]
 }

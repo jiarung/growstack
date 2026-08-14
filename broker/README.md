@@ -262,13 +262,38 @@ offline. This catches per-field dropouts that the time-series panels hide.
 
 ### Deadman alert (Telegram)
 
-Three provisioned rules in the folder **Device health**:
+Four provisioned rules in the folder **Device health**:
 
 | Rule | Fires when | Pending |
 |---|---|---|
 | `deadman-sensor-stale` | a `(device, field)` series is silent **>15 min** | `for: 2m` → ~17 min after the last point |
 | `deadman-weather-stale` | the Open-Meteo feed is silent **>60 min** | `for: 10m` |
 | `alert-delivery-failing` | Grafana's own notification-failure counter rose in the last hour | `for: 5m` |
+| `spectrum-throughput-drift` | AS7341 `clear` ÷ BH1750 `lux`, during lamp hours, leaves **2.5–12** | `for: 30m` |
+
+The first three ask whether data *arrives*. The fourth asks whether it is *true* —
+a different question, and the one that had never been asked. Twice in a fortnight
+this system published perfectly-formed, completely wrong numbers: 4,840 points on
+2026-08-10 topping out at 9.2 lux with the lamp on, and a ~100× collapse of the
+AS7341's visible channels on 2026-08-11 that went unnoticed for 31 h.
+
+What makes the check possible is that **the lamp is a controlled reference
+source**. This room takes 1–2% of its daily light from the sun, so during lamp
+hours the illumination is fixed and known, and two sensors in one box looking at
+it through their own quartz windows should hold a constant ratio. The ratio is a
+property of the optics alone — it does not care how bright the light was, which
+is what makes it a better witness than either sensor's absolute reading.
+
+**It has a blind spot, and the blind spot is not hypothetical.** A ratio cannot
+see *common-mode* degradation. From 2026-08-05 to 08-08 both sensors fouled
+together: the lamp-window lux halved while the ratio moved only 6.33 → 7.51.
+Panel 17 on the overview dashboard plots the two absolute lamp-window medians for
+exactly this case — **both lines falling together is the failure this alert will
+not catch.**
+
+Re-derive the band after any optical change (window clean, sensor swap, gain
+change). The baseline stepped 1.7× on 2026-07-29, and a stale threshold is
+precisely how the old `DLI < 1.5` light rule died silently after a lens clean.
 
 Both staleness queries report the age in **minutes**, so the thresholds read in the
 same unit as the notification text. That is not cosmetic: Grafana's notification

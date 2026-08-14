@@ -150,6 +150,7 @@ share one value domain on purpose — that is what lets the two join per plant.
 | Grafana deadman — sensors | per `(device, field)` series silent >15 min, **then** `for: 2m` → Telegram. Watches **production series only** — `sim`, `staging-01` (bench board) and `weight_raw` (event-driven) are excluded | ✅ **fixed + proven 2026-07-30** — it had never fired (see gap 5) |
 | Grafana deadman — weather feed | Open-Meteo silent >60 min, **then** `for: 10m` → Telegram. One instance for the whole feed, not one per field | ✅ added 2026-08-03 (gap 6) |
 | Grafana — alert delivery | Grafana's own notification-failure counter rose in the last hour, **then** `for: 5m` → Telegram. Retrospective by nature: one channel cannot announce its own outage while it is down | ✅ added 2026-08-09 |
+| Grafana — spectrum plausibility | AS7341 `clear` ÷ BH1750 `lux` during lamp hours leaves `2.5–12`, **then** `for: 30m` → Telegram. The first rule that asks whether data is **true** rather than whether it **arrived**; the lamp is a fixed reference source, so the ratio isolates the optical path. Blind to common-mode fouling — panel 17 covers that by eye | ✅ added 2026-08-14 |
 | `backup/influx-backup.sh` | InfluxDB → `/data/influx-backups`, keeps newest 14 | ✅ cron `30 19 * * *` UTC = **03:30 Taipei** |
 | `sim/publish.sh` | fake telemetry generator | ⛔ container `Exited` (intentional) |
 | `start.sh` | bring the stack up | on demand |

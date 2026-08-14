@@ -259,3 +259,152 @@ groups:
                     # cadence — well clear of the routine 503s, which now cost
                     # 5 min at most.
                     params: [60]
+
+      # The third failure class: telemetry that ARRIVES, on time, correctly
+      # formatted, and is wrong. Neither deadman above can see it. On 2026-08-10
+      # the BH1750 published 4,840 points topping out at 9.2 lux with the lamp on;
+      # on 2026-08-11 16:00 the AS7341's visible channels fell ~100x within the
+      # hour and stayed there for two days. Both feeds looked perfectly healthy.
+      #
+      # What makes a plausibility check possible here is that the lamp is a
+      # CONTROLLED REFERENCE SOURCE: this room gets almost no daylight (measured
+      # 1-2% of the daily total), so during lamp hours the illumination is fixed
+      # and known. Two sensors sit in the same box looking at it through their own
+      # quartz windows, so their RATIO is a property of the optics alone —
+      # independent of how bright the light happened to be.
+      #
+      # Ratio rather than the absolute reading, and the data decided this:
+      #   * absolute `clear` in the lamp window swings with daylight and lamp
+      #     runtime — 30,834 (08-04) vs 37,459 (08-09) is +21% of weather, not of
+      #     optics. A band loose enough to tolerate that is too loose to detect.
+      #   * the ratio over the same clean stretch (07-29..08-04) held 6.30-6.64,
+      #     +/-2.5%, and it is what correctly flagged 08-09 (14.66) as a BH1750
+      #     fault rather than a bright day.
+      #
+      # KNOWN BLIND SPOT — do not oversell this rule. A ratio cannot see
+      # COMMON-MODE degradation. 2026-08-05 to 08-08 is the proof: the lamp-window
+      # lux halved while the ratio moved only 6.33 -> 7.51, because the AS7341 was
+      # fouling alongside the BH1750 (same box, same contamination source). This
+      # rule catches DIFFERENTIAL faults. For common-mode, watch the absolute
+      # lamp-window medians on the dashboard.
+      #
+      # Replayed against history before shipping (last hour of in-window data,
+      # exactly as the rule computes it):
+      #   07-25 3.59 | 08-01 6.40 | 08-04 6.34 | 08-08 7.51   <- healthy
+      #   08-09 14.66  BH1750 dying, lux under-reads -> ratio up
+      #   08-10 NoData BH1750 at ~0 lux, divide-by-zero guard drops the rows
+      #   08-11 0.044 | 08-12 0.050  AS7341 blocked
+      #   08-13 1.19 | 08-14 1.41    after the obstruction was removed — still
+      #                              ~4.5x below baseline, i.e. NOT yet recovered
+      # Band 2.5-12.0 clears every healthy value by >=1.4x and every fault by
+      # >=1.2x. RE-DERIVE IT after any optical change (window clean, sensor swap,
+      # gain change) — the baseline stepped 1.7x on 07-29 and a stale band is how
+      # the old `DLI < 1.5` rule died silently after a lens clean.
+      - uid: spectrum-throughput-drift
+        title: Spectrometer optical throughput — AS7341 vs BH1750
+        condition: C
+        # Two sensors, one box: a fault is in one optical path, not in the light.
+        for: 30m
+        # NoData is not OK here, for the same reason as the deadman above: the
+        # query looks back 24 h for samples inside the lamp window, so it has data
+        # to chew on at 03:00 just as much as at noon. Nothing to chew on means
+        # either the spectrum feed is silent — which NO other rule covers, the
+        # sensor deadman watches `air` only — or lux has gone to zero during lamp
+        # hours. Both are the failure this rule exists for.
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: 'AS7341 的光學通量偏離基準'
+          description: 'AS7341 clear ÷ BH1750 lux = {{ printf "%.2f" $values.B.Value }}，正常區間 2.5–12（健康期實測 6.3–6.6）。兩顆感測器在同一個盒子裡看同一片光，比值只反映光路本身，與光有多亮無關。偏低＝AS7341 這側被遮擋或髒污；偏高＝BH1750 讀不到光。先開盒看石英窗有沒有被東西蓋住。'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: influxdb-monitor-air
+            model:
+              refId: A
+              datasource:
+                type: influxdb
+                uid: influxdb-monitor-air
+              query: |
+                import "date"
+                import "timezone"
+                option location = timezone.location(name: "Asia/Taipei")
+                // Inset from the lamp window so the sample never straddles a
+                // switching edge or dawn/dusk daylight. Derived from the SAME
+                // .env vars the light controller uses, so moving the lamp window
+                // moves this with it: 08:00-18:30 -> 09:00-18:00.
+                winStart = $LIGHT_WINDOW_START_MIN + 60
+                winEnd = $LIGHT_WINDOW_END_MIN - 30
+                inWindow = (t) => {
+                  m = date.hour(t: t) * 60 + date.minute(t: t)
+                  return m >= winStart and m < winEnd
+                }
+                // 24 h of lookback, not "since now": outside lamp hours this still
+                // has the most recent in-window samples to work with, so the rule
+                // evaluates around the clock instead of going NoData every night.
+                lux = from(bucket: "sensors")
+                  |> range(start: -24h)
+                  |> filter(fn: (r) => r._measurement == "air" and r.device == "livingroom" and r._field == "lux")
+                  |> filter(fn: (r) => inWindow(t: r._time))
+                  |> aggregateWindow(every: 10m, fn: median, createEmpty: false)
+                  |> keep(columns: ["_time", "_value"])
+                  |> rename(columns: {_value: "lux"})
+                clear = from(bucket: "sensors")
+                  |> range(start: -24h)
+                  |> filter(fn: (r) => r._measurement == "spectrum" and r.mode == "ambient" and r.device == "livingroom"
+                       and (r._field == "clear" or r._field == "saturated"))
+                  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+                  // A saturated channel is pinned at 65535 and carries no
+                  // information about throughput — including it would make a
+                  // blocked sensor look healthier the brighter the sun got.
+                  // (The PPFD panel omitted this and reported a 1,860 spike from
+                  // pinned samples on a day the sensor was mostly blind.)
+                  |> filter(fn: (r) => exists r.clear and r.saturated == 0.0 and r.clear < 65535.0)
+                  |> filter(fn: (r) => inWindow(t: r._time))
+                  |> map(fn: (r) => ({_time: r._time, _value: r.clear}))
+                  |> aggregateWindow(every: 10m, fn: median, createEmpty: false)
+                  |> keep(columns: ["_time", "_value"])
+                  |> rename(columns: {_value: "clear"})
+                join(tables: {a: lux, b: clear}, on: ["_time"])
+                  // Divide-by-zero guard. A BH1750 reading a flat 0 during lamp
+                  // hours drops out here and the rule reports NoData — which
+                  // fires, see noDataState. That is 2026-08-10 exactly.
+                  |> filter(fn: (r) => r.lux > 0.0)
+                  |> map(fn: (r) => ({_time: r._time, _value: r.clear / r.lux}))
+                  |> sort(columns: ["_time"])
+                  // Last hour of in-window data, median of six 10-min points:
+                  // enough to ignore a passing cloud, short enough that the
+                  // 2026-08-11 16:00 collapse is visible the same afternoon
+                  // (replayed: 0.044 on the day it happened, not the day after).
+                  |> tail(n: 6)
+                  |> median(column: "_value")
+                  // Same shape rules as every other rule in this file: stamp
+                  // _time at now() so the point lands inside relativeTimeRange,
+                  // and carry the identity as a plain label, never as `_field`.
+                  |> map(fn: (r) => ({sensor: "as7341-vs-bh1750", _time: now(), _value: r._value}))
+                  |> group(columns: ["sensor"])
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              datasource: {type: __expr__, uid: __expr__}
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              datasource: {type: __expr__, uid: __expr__}
+              expression: B
+              conditions:
+                - evaluator:
+                    # Two-sided: low = the AS7341's path is obstructed, high = the
+                    # BH1750's is. One rule, two sensors checking each other.
+                    type: outside_range
+                    params: [2.5, 12.0]
