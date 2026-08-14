@@ -260,8 +260,106 @@ groups:
                     # 5 min at most.
                     params: [60]
 
-      # The third failure class: telemetry that ARRIVES, on time, correctly
-      # formatted, and is wrong. Neither deadman above can see it. On 2026-08-10
+      # Third deadman, for the feed that can die while its own board stays healthy:
+      # the AS7341 ambient spectrum. 2026-08-14 15:44 is why it exists. The chip
+      # stopped answering on I2C; spectrumRead() began returning invalid, and
+      # mqttPublishSpectrum() drops an invalid reading — so `spectrum` went silent
+      # while `air` kept publishing every 15 s from the BME680 and BH1750 on the
+      # SAME bus. Nothing alerted, and the reason is that both other rules were
+      # looking somewhere else:
+      #   * the sensor deadman filters `_measurement == "air"`, and air was perfect.
+      #   * the throughput rule below looks back 24 h and takes the last six
+      #     in-window samples, so it keeps chewing on yesterday's numbers for a
+      #     full day after the feed stops. Its NoData is up to 24 h late.
+      # A human noticed, 50 minutes in, by asking. This makes it 15.
+      #
+      # Replayed against that outage before shipping, the query exactly as it
+      # stands with now() pinned to the replay instant:
+      #   15:50 (5 min in)   ->  5.2 min   below threshold, silent  <- no false alarm
+      #   16:30 (46 min in)  -> 45.2 min   over threshold, fires
+      # With `for: 2m` and a 1-min group interval that is a Telegram message at
+      # roughly 16:02, against 16:35 for the human who happened to ask.
+      - uid: deadman-spectrum-stale
+        title: Spectrum feed stale — AS7341 silent
+        condition: C
+        for: 2m
+        # Same reasoning as the sensor deadman: a rule whose entire job is to
+        # notice silence must never read its own empty result as healthy.
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.device }} 的 AS7341 光譜停止回報'
+          description: '已經 {{ printf "%.0f" $values.B.Value }} 分鐘沒有新的 spectrum 資料（門檻 15 分）。同一塊板子的 air（溫濕度、lux）很可能還是正常的 — AS7341 在 I2C 上沒有回應時其他感測器不受影響，telemetry 會照送，所以「板子還活著」不代表這顆沒事。看 telemetry 的間隔有沒有變長，那是每個 cycle 卡在讀取逾時上。目前韌體只在開機時探測一次 AS7341，所以通常要重開板子才會恢復。'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: influxdb-monitor-air
+            model:
+              refId: A
+              datasource:
+                type: influxdb
+                uid: influxdb-monitor-air
+              query: |
+                from(bucket: "sensors")
+                  |> range(start: -30d)
+                  |> filter(fn: (r) => r._measurement == "spectrum" and r._field == "clear")
+                  // `mode` is load-bearing. A reflectance run publishes to the SAME
+                  // measurement as mode "reflect" and holds the AS7341 while it goes,
+                  // so counting those samples would let an active bench session mask
+                  // a dead ambient feed — the one thing this rule is for.
+                  |> filter(fn: (r) => r.mode == "ambient")
+                  // Same exclusions as the sensor deadman, same reason: staging-01 is
+                  // the bench board (last ambient spectrum 2026-08-05) and silence is
+                  // its normal state; `sim` is the synthetic publisher.
+                  |> filter(fn: (r) => r.device != "sim" and r.device != "staging-01")
+                  // One field is enough: the ten channels are a single JSON publish,
+                  // they arrive together or not at all. `clear` because it is the
+                  // field the throughput rule below already depends on.
+                  |> group(columns: ["device"])
+                  |> last()
+                  // Age in MINUTES — see the unit note at the top of this file. Same
+                  // three shape rules as every deadman here: _time stamped at now(),
+                  // identity carried as a plain label, never as `_field`.
+                  |> map(fn: (r) => ({ device: r.device, _time: now(),
+                       _value: float(v: int(v: now()) - int(v: r._time)) / 60000000000.0 }))
+                  |> group(columns: ["device"])
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    # minutes. The ambient tick is every 15 s, so 15 min is 60
+                    # missed publishes — the same threshold as the sensor deadman,
+                    # and for the same reason: comfortably past any transient.
+                    # A reflectance session gates the ambient tick off, but it
+                    # gates telemetry off too (main.cpp publishes both behind one
+                    # !reflectBusy()), so a session long enough to trip this would
+                    # trip the sensor deadman first.
+                    params: [15]
+
+      # The last failure class: telemetry that ARRIVES, on time, correctly
+      # formatted, and is wrong. No deadman above can see it. On 2026-08-10
       # the BH1750 published 4,840 points topping out at 9.2 lux with the lamp on;
       # on 2026-08-11 16:00 the AS7341's visible channels fell ~100x within the
       # hour and stayed there for two days. Both feeds looked perfectly healthy.
@@ -308,9 +406,10 @@ groups:
         # NoData is not OK here, for the same reason as the deadman above: the
         # query looks back 24 h for samples inside the lamp window, so it has data
         # to chew on at 03:00 just as much as at noon. Nothing to chew on means
-        # either the spectrum feed is silent — which NO other rule covers, the
-        # sensor deadman watches `air` only — or lux has gone to zero during lamp
-        # hours. Both are the failure this rule exists for.
+        # either the spectrum feed has been silent for a whole day — deadman-
+        # spectrum-stale catches that in 15 min, this rule would only notice it
+        # 24 h later, so treat NoData here as "the deadman was ignored" — or lux
+        # has gone to zero during lamp hours. Both are failures worth firing on.
         noDataState: NoData
         execErrState: Error
         labels:
