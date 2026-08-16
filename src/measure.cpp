@@ -7,6 +7,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
+#include <WiFi.h>          // WiFi.RSSI() for the publish-timing diagnostic
 
 namespace {
 
@@ -63,8 +64,14 @@ void publishEvent() {   // (re)publish the current pending event (same event_id 
     char json[96];
     snprintf(json, sizeof(json), "{\"event_id\":%lu,\"uid\":\"%s\",\"weight_g\":%.1f}",
              (unsigned long)curEventId, curUid, lastWeight);
+    uint32_t t0 = millis();
     mqttPublishMeasureEvent(json);
+    uint32_t dt = millis() - t0;
     pubMs = millis();
+    // DIAG: measure-event publish duration + signal — the weight-station path is where the
+    // freeze was seen; a long dt here + low rssi points at WiFi send blocking.
+    logf("[measure] publish event_id=%lu took %lums rssi=%d\n",
+         (unsigned long)curEventId, (unsigned long)dt, WiFi.RSSI());
 }
 
 void oledBegin() {

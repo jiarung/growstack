@@ -95,6 +95,7 @@ void setup() {
 }
 
 void loop() {
+    uint32_t loopT0 = millis();  // DIAG: catch a stalled iteration (WiFi/I2C/SPI block)
     wifiEnsure();  // non-blocking reconnect
     ArduinoOTA.handle();  // service OTA flash requests (no-op until WiFi is up)
     mqttLoop();    // pump client + rate-limited MQTT reconnect
@@ -112,7 +113,11 @@ void loop() {
         // fields or a publish fails. A failed/empty cycle just waits for the next.
         lastPublish = now;
         SensorReading r = sensorsRead();
+        uint32_t tPub = millis();
         mqttPublish(r);  // logs success / failure / empty-skip internally
+        uint32_t dtPub = millis() - tPub;
+        // DIAG: a slow telemetry publish = WiFi send blocking (weak signal / retransmits).
+        if (dtPub > 200) logf("[net] telemetry publish slow: %lums rssi=%d\n", (unsigned long)dtPub, WiFi.RSSI());
 
 #if PUBLISH_AMBIENT_SPECTRUM
         SpectrumReading sp = spectrumRead();
@@ -123,4 +128,10 @@ void loop() {
         // collide with a reflect read). Lets the host alert on a silent sensor dropout.
         mqttPublishHealth(sensorsHealth(), measurePn532Ok(), resetReasonStr());
     }
+
+    // DIAG: flag a stalled loop iteration (normal max ~700ms on the 15s publish tick).
+    // >2s = something blocked — WiFi send, a wedged I2C bus (OLED/AS7341), or PN532 SPI.
+    uint32_t loopDt = millis() - loopT0;
+    if (loopDt > 2000) logf("[loop] SLOW %lums rssi=%d wifi=%d — a stall (WiFi/I2C/SPI block?)\n",
+                            (unsigned long)loopDt, WiFi.RSSI(), (int)WiFi.status());
 }

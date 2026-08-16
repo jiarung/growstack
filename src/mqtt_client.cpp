@@ -315,7 +315,9 @@ bool mqttPublish(const SensorReading& r) {
                  addField("pressure", r.pressure, r.pressureValid) &&
                  addField("gas", r.gas, r.gasValid) &&
                  addField("lux", r.lux, r.luxValid) &&
-                 addField("lux_ref", r.lux_ref, r.lux_refValid);
+                 addField("lux_ref", r.lux_ref, r.lux_refValid) &&
+                 // DIAG: WiFi signal (dBm) — correlate weak rssi with freezes/gaps on Grafana.
+                 addField("rssi", (float)WiFi.RSSI(), WiFi.status() == WL_CONNECTED);
     if (!built || n + 2 > cap) {  // +2: closing '}' and NUL
         logln("[mqtt] publish aborted: payload overflow");
         return false;
