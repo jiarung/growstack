@@ -17,6 +17,23 @@
 #   ./calibrate-ppfd.sh --start -90m --gain 4 --tint-ms 280.78
 #   ./calibrate-ppfd.sh --start 2026-07-11T00:00:00Z --stop 2026-07-11T09:00:00Z
 #   ./calibrate-ppfd.sh --datasheet-only --gain 64 --tint-ms 27.8
+#
+# --emit adds ONE machine-readable line at the very end, InfluxDB line protocol,
+# for a scheduled caller to pipe into `influx write`. Grep it out with ^ppfd_cal
+# rather than tailing, so the human output above it can grow without breaking you.
+#
+#   ./calibrate-ppfd.sh --start -90m --emit | grep '^ppfd_cal'
+#   ppfd_cal,device=livingroom n_kept=45,lux_lo=3200,...,valid=1
+#
+# It emits on EVERY exit path, including the two guardrail bail-outs, carrying
+# valid=0 and whatever partial metrics exist. A day with no usable light has to
+# land in the series as a zero, not as a missing point — otherwise "the window
+# has been too dark for a month" renders as an empty chart, which reads as
+# "nothing wrong" instead of "nothing measured".
+#
+# Deliberately NO timestamp: line protocol without one is stamped at write time.
+# A daily caller should append its own, pinned to the window's date, so a re-run
+# overwrites that day instead of adding a second point for it.
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -28,6 +45,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # had a month of perfectly good data.
 DEVICE="livingroom"; START="-24h"; STOP="now()"; LUX_MIN=3000; LUX_MAX=45000
 DATASHEET_ONLY=0; GAIN=""; TINT_MS=""; SAT_COUNT=65535   # set to firmware full-scale (ATIME+1)*(ASTEP+1)
+EMIT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --device)   DEVICE="${2:?--device needs a value}"; shift 2;;
@@ -39,6 +57,7 @@ while [ $# -gt 0 ]; do
     --tint-ms)  TINT_MS="${2:?--tint-ms needs a value}"; shift 2;;
     --sat-count) SAT_COUNT="${2:?--sat-count needs a value}"; shift 2;;
     --datasheet-only) DATASHEET_ONLY=1; shift;;
+    --emit)     EMIT=1; shift;;
     *) echo "unknown arg: $1" >&2; exit 1;;
   esac
 done
@@ -49,7 +68,7 @@ TOKEN="$(grep -E '^DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=' "$DIR/.env" 2>/dev/null | 
 
 DEVICE="$DEVICE" START="$START" STOP="$STOP" LUX_MIN="$LUX_MIN" LUX_MAX="$LUX_MAX" \
 DATASHEET_ONLY="$DATASHEET_ONLY" GAIN="$GAIN" TINT_MS="$TINT_MS" SAT_COUNT="$SAT_COUNT" \
-INFLUX_TOKEN="$TOKEN" python3 - <<'PY'
+EMIT="$EMIT" INFLUX_TOKEN="$TOKEN" python3 - <<'PY'
 import os, subprocess, csv, io, statistics, sys
 
 # --- AS7341 constants (must match the PPFD panel in air.json) ---
@@ -143,17 +162,48 @@ print(f"\nwindow {start} → {stop}, device {dev}")
 print(f"minutes: {n_total} total | dropped: {n_sat} sat(≥{sat_count:g}), {n_clamp} ≥clamp, "
       f"{n_range} <lux-min, {n_partial} partial | kept {len(kept)}")
 
+luxes = [k[1] for k in kept]   # hoisted: the bail-outs below emit lux_lo/lux_hi too
+lux_lo = min(luxes) if luxes else None
+lux_hi = max(luxes) if luxes else None
+
+# --- machine-readable line for a scheduled caller (--emit) ---
+# Called on EVERY exit path below, bail-outs included — see the --emit note in the
+# header for why a dark day must land as valid=0 rather than as a missing point.
+# Two things are deliberate:
+#   * every field is written as a bare float (no `i` suffix). n_kept is a count,
+#     but typing it as an integer would make the series fail to write on the first
+#     day it disagreed with an earlier float — the same int/float conflict the
+#     telemetry contract avoids by making every number a float.
+#   * non-finite values are dropped, not written. r2 is nan when ss_tot is 0, and
+#     a bare `nan` is not valid line protocol — it would reject the whole point,
+#     losing valid=0 exactly on the broken days this is meant to record.
+def emit(valid, **kv):
+    if os.environ.get("EMIT") != "1":
+        return
+    fields = {"n_kept": float(len(kept))}
+    for k, v in kv.items():
+        if v is None:
+            continue
+        v = float(v)
+        if v != v or v in (float("inf"), float("-inf")):
+            continue
+        fields[k] = v
+    fields["valid"] = 1.0 if valid else 0.0
+    body = ",".join(f"{k}={v:.10g}" for k, v in fields.items())
+    print(f"ppfd_cal,device={dev} {body}")
+
 # --- guardrails ---
 MIN_N, MIN_LUX_SPAN, MAX_DRIFT_PCT = 20, 2.0, 30.0
 if len(kept) < MIN_N:
     print(f"\nINSUFFICIENT DATA: kept {len(kept)} < {MIN_N} usable minutes. "
-          f"Need a daylight window (AS7341 outdoors, below clamp, plant light off)."); sys.exit(0)
+          f"Need a daylight window (AS7341 outdoors, below clamp, plant light off).")
+    emit(False, lux_lo=lux_lo, lux_hi=lux_hi); sys.exit(0)
 
-luxes = [k[1] for k in kept]
 lux_span = max(luxes) / max(min(luxes), 1e-9)
 if lux_span < MIN_LUX_SPAN:
     print(f"\nLUX SPAN TOO NARROW: {min(luxes):.0f}–{max(luxes):.0f} ({lux_span:.1f}×) < {MIN_LUX_SPAN}×. "
-          f"Gather a spread of brightness (partial cloud / a few hours)."); sys.exit(0)
+          f"Gather a spread of brightness (partial cloud / a few hours).")
+    emit(False, lux_lo=lux_lo, lux_hi=lux_hi); sys.exit(0)
 
 # --- fit: OLS through origin + median ratio ---
 xs = [k[2] for k in kept]; ys = [k[1]/LUX_TO_PPFD for k in kept]; ratios = [k[3] for k in kept]
@@ -187,4 +237,15 @@ if drift_pct > MAX_DRIFT_PCT:
           f"Re-mount sensors co-planar/unobstructed and re-gather before trusting CAL.")
 else:
     print(f"\n→ paste into the PPFD panel (air.json id 9): CAL = {cal_ols:.5g}")
+
+# valid=1 means the FIT is clean — enough minutes, enough brightness spread, and a
+# ratio that does not slide with brightness. It does NOT mean the optics are sound.
+# A uniform attenuation (fouled window, oxidised diffuser) scales every sample by
+# the same factor: the ratio stays flat, R² stays high, and this reports valid=1
+# while quietly baking the loss into CAL. The check that catches that is the
+# AS7341-vs-BH1750 throughput ratio, which is NOT gated here on purpose — its
+# healthy band has to be re-derived after any optical change, and the sensor block
+# is being relocated. Re-derive the band first, then gate on it here.
+emit(drift_pct <= MAX_DRIFT_PCT, cal_ols=cal_ols, cal_med=cal_med, r2=r2,
+     drift_pct=drift_pct, spread_pct=spread_pct, lux_lo=lux_lo, lux_hi=lux_hi)
 PY
