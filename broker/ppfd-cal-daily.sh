@@ -10,8 +10,9 @@
 #
 # THE WINDOW is derived, not hardcoded: it ends when the plant light comes on and
 # starts WIN_MIN minutes before that. With LIGHT_WINDOW_START_MIN=480 that is
-# 07:00-08:00 local. Deriving it from the same .env var the light controller uses
-# means moving the lamp window moves this with it — the alert rules already do
+# 07:00-08:00 local. Deriving it from the same .env vars the light controller uses
+# (LIGHT_WINDOW_START_MIN and LIGHT_TZ — the minute is meaningless without the
+# zone) means moving the lamp window moves this with it — the alert rules already do
 # this for the same reason, and a calibration window that silently overlaps lamp
 # hours would fit daylight coefficients to lamp light.
 #
@@ -26,7 +27,6 @@ cd "$DIR"
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 
-TZ_NAME="${TZ_NAME:-Asia/Taipei}"
 DEVICE="${DEVICE:-livingroom}"
 WIN_MIN="${WIN_MIN:-60}"          # length of the pre-lamp window, minutes
 LUX_MIN="${LUX_MIN:-3000}"        # brightness floor; see calibrate-ppfd.sh
@@ -37,7 +37,17 @@ ORG="${ORG:-monitor-air}"
 BUCKET="${BUCKET:-sensors}"
 
 # take the bare value: tolerate surrounding quotes, whitespace and inline comments
-START_MIN="$(sed -nE 's/^LIGHT_WINDOW_START_MIN=[[:space:]]*"?([0-9]+).*/\1/p' "$DIR/.env" 2>/dev/null | head -1 || true)"
+envval() { sed -nE "s/^$1=[[:space:]]*\"?([^\"#[:space:]]+).*/\1/p" "$DIR/.env" 2>/dev/null | head -1 || true; }
+
+# BOTH of these must be the vars the light controller reads (LIGHT_TZ and
+# LIGHT_WINDOW_START_MIN), not just the minute. Deriving the right minute in the
+# wrong timezone is not a partial win — it puts the window straight back inside
+# lamp hours, which is the single failure this derivation exists to prevent.
+# The first version hardcoded Asia/Taipei here and only agreed with the
+# controller by coincidence; .env has set LIGHT_TZ all along.
+TZ_NAME="${TZ_NAME:-$(envval LIGHT_TZ)}"
+TZ_NAME="${TZ_NAME:-Asia/Taipei}"
+START_MIN="$(envval LIGHT_WINDOW_START_MIN)"
 START_MIN="${START_MIN:-480}"
 [ "$START_MIN" -gt "$WIN_MIN" ] || { echo "lamp starts at $START_MIN min — no room for a ${WIN_MIN}min window before it" >&2; exit 1; }
 W0_MIN=$(( START_MIN - WIN_MIN ))
