@@ -39,7 +39,7 @@
     "x": 0,
     "y": 0
    },
-   "description": "Each cell = seconds since that device's field last arrived. A red cell with green neighbours = that sensor dropped (e.g. BH1750 lux); a whole red row = the device is offline. New devices add rows, new sensors add columns automatically. Thresholds align with the controller's STALE=5min. The `as7341` column is the ambient spectrum feed, which lives in its own measurement rather than in `air`; it is here because without it a dead AS7341 left every other cell green for the whole outage (2026-08-14 and 08-16). A reflectance run pauses the ambient tick, but it pauses telemetry too, so during one the entire row ages together instead of that column alone \u2014 a lone red `as7341` really is the sensor.",
+   "description": "Each cell = seconds since that device's field last arrived. A red cell with green neighbours = that sensor dropped (e.g. BH1750 lux); a whole red row = the device is offline. New devices add rows, new sensors add columns automatically. Thresholds align with the controller's STALE=5min. The `as7341` column is the ambient spectrum feed, which lives in its own measurement rather than in `air`; it is here because without it a dead AS7341 left every other cell green for the whole outage (2026-08-14 and 08-16). A reflectance run pauses the ambient tick, but it pauses telemetry too, so during one the entire row ages together instead of that column alone — a lone red `as7341` really is the sensor.",
    "fieldConfig": {
     "defaults": {
      "unit": "s",
@@ -973,6 +973,85 @@
       "uid": "influxdb-monitor-air"
      },
      "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n// Same inset lamp window the spectrum alert uses (09:00-18:00).\ninWindow = (t) => {\n  m = date.hour(t: t) * 60 + date.minute(t: t)\n  return m >= 540 and m < 1080\n}\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r.device == \"livingroom\" and r._field == \"lux\")\n  |> filter(fn: (r) => inWindow(t: r._time))\n  |> aggregateWindow(every: 1d, fn: median, timeSrc: \"_start\", createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: r._value, _field: \"BH1750 lux\"}))\n  |> group(columns: [\"_field\"])\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])"
+    }
+   ]
+  },
+  {
+   "id": 18,
+   "title": "WiFi 訊號 vs 發送間隔 — 停頓是不是訊號造成的",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 103
+   },
+   "description": "韌體 5d683f8 加的診斷欄位，目的寫在它自己的註解裡：correlate weak rssi with freezes/gaps。所以這裡不只畫訊號，而是把訊號和發送間隔疊在同一條時間軸上 —— 兩者同時出現異常，才是「WiFi 送出時卡住」的證據。\n\n左軸 RSSI (dBm，取窗內最差值)：> -67 可靠、-67～-80 邊緣、< -80 差。\n右軸 發送間隔 (秒，取窗內最長)：正常 15 秒；抬高 = 那一輪 loop 卡住了。\n\n判讀：間隔尖峰同時伴隨 RSSI 下陷 → 網路送出阻塞；間隔尖峰而 RSSI 平穩 → 卡在別的地方（I2C、SPI、HX711），跟 WiFi 無關。後者正是 2026-08-14 到 08-16 AS7341 掉線時的樣子，發送間隔從 15 秒變成 17.5 秒而訊號完全沒動。\n\n間隔取自 rssi 自己的樣本間距，因為韌體只在 WiFi 連線時才寫這個欄位，等於每次成功發送必然有它。",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "dBm",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "spanNulls": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "B"
+      },
+      "properties": [
+       {
+        "id": "custom.axisPlacement",
+        "value": "right"
+       },
+       {
+        "id": "unit",
+        "value": "s"
+       },
+       {
+        "id": "custom.drawStyle",
+        "value": "bars"
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 60
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"rssi\" and r.device == \"livingroom\")\n  // min, not mean: for a link-quality diagnostic the WORST value in the window is\n  // the event. A 30-second drop to -85 averaged against a good hour disappears.\n  |> aggregateWindow(every: v.windowPeriod, fn: min, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"RSSI (dBm, worst in window)\")"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"rssi\" and r.device == \"livingroom\")\n  // The gap between rssi samples IS the gap between telemetry publishes, because\n  // the firmware only adds this field when WiFi is connected — so it is present on\n  // every successful publish, by construction. Using temp instead would be\n  // fragile: the BME680 vanished from the payload for 20 hours on 2026-08-15\n  // while the board kept publishing perfectly well.\n  |> elapsed(unit: 1s)\n  |> map(fn: (r) => ({_time: r._time, _value: float(v: r.elapsed)}))\n  |> aggregateWindow(every: v.windowPeriod, fn: max, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"發送間隔 (s, 最長)\")"
     }
    ]
   }
