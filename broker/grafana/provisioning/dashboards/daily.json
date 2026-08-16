@@ -973,6 +973,151 @@
      "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nbase = from(bucket: \"sensors\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n\n// One representative field per measurement — counting every field would mix\n// value types in one group, which aggregateWindow rejects.\nunion(tables: [\n  base |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\"),\n  base |> filter(fn: (r) => r._measurement == \"spectrum\" and r._field == \"f555\"),\n  base |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"temperature_2m\"),\n  base |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"),\n  // The alert-delivery scrape. If this row goes flat, we have stopped being able to\n  // tell whether warnings reach anyone — the same blindness as 2026-08-08, one\n  // level up. It is absent until Grafana's first notification attempt after a\n  // restart, so a gap right after a restart is expected, not a fault.\n  base |> filter(fn: (r) => r._measurement == \"grafana_alerting_notifications_total\" and r._field == \"counter\"),\n])\n  |> group(columns: [\"_measurement\"])\n  |> aggregateWindow(every: 1d, fn: count, createEmpty: true)\n  |> keep(columns: [\"_time\", \"_value\", \"_measurement\"])"
     }
    ]
+  },
+  {
+   "id": 12,
+   "title": "PPFD 校準候選值 — 每日 CAL (OLS)",
+   "type": "timeseries",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 74
+   },
+   "description": "ppfd-cal-daily.sh 每天在開燈前的日光窗（07:00–08:00，由 LIGHT_WINDOW_START_MIN 推導）擬合出來的候選 CAL，只畫通過驗收的日子。橫線是面板目前實際採用的 CAL = 0.0017469。\n\n這是漂移監測值，不是權威值：參考來源是 BH1750 lux 經 Apogee 日光係數換算，不是 PAR 計。候選值連續數日穩定且明顯偏離橫線，才是人工更新 air.json 面板 9/11/12 的訊號 —— 絕不自動套用，見 PPFD-CALIBRATION.md。\n\n重要限制：均勻衰減（鏡片髒污、光罩氧化）會等比縮放每一個樣本，比值保持平坦、R² 依然漂亮，於是這裡照樣給出 valid=1，把光路損失烤進 CAL。抓得到那種故障的是 AS7341÷BH1750 通量比，在 spectrum-throughput-drift 告警裡。",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 6,
+     "custom": {
+      "drawStyle": "points",
+      "pointSize": 8,
+      "lineWidth": 1,
+      "showPoints": "always",
+      "thresholdsStyle": {
+       "mode": "line"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.0017469
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"ppfd_cal\" and r.device == \"livingroom\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  // Only days the fit actually passed. A valid=0 day has no meaningful cal_ols —\n  // plotting it would put a number on the chart that the run itself rejected.\n  // Why a day is missing is the neighbouring table's job, not this one's.\n  |> filter(fn: (r) => r.valid == 1.0 and exists r.cal_ols)\n  |> map(fn: (r) => ({_time: r._time, _value: r.cal_ols}))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"候選 CAL (OLS)\")"
+    }
+   ]
+  },
+  {
+   "id": 13,
+   "title": "校準品質 — 為什麼某一天沒有值",
+   "type": "table",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 74
+   },
+   "description": "每日一列，包含被判定為不可用的日子 —— 那正是重點。腳本在資料不足或亮度跨度不足時也會寫入 valid=0，否則「這個窗已經太暗一個月了」會呈現成一張空圖，而空圖讀起來像沒事，不像沒量到。\n\nvalid=0 的常見原因，對照 calibrate-ppfd.sh 的三道驗收：\n  n_kept < 20      可用分鐘數不足（多半是整段低於 lux-min）\n  lux_hi/lux_lo < 2  亮度跨度不足，擬合沒有槓桿\n  drift_pct > 30   比值隨亮度漂移，幾何或光譜被污染\n\nR² 高不是通過條件：比值隨亮度漂的時候 R² 一樣可以很漂亮。",
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "cal_ols"
+      },
+      "properties": [
+       {
+        "id": "decimals",
+        "value": 6
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "valid"
+      },
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background"
+        }
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "red",
+           "value": null
+          },
+          {
+           "color": "green",
+           "value": 1
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"ppfd_cal\" and r.device == \"livingroom\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> sort(columns: [\"_time\"], desc: true)\n  |> keep(columns: [\"_time\", \"valid\", \"n_kept\", \"lux_lo\", \"lux_hi\", \"cal_ols\", \"r2\", \"drift_pct\"])",
+     "format": "table"
+    }
+   ]
   }
  ]
 }
