@@ -39,7 +39,7 @@
     "x": 0,
     "y": 0
    },
-   "description": "Each cell = seconds since that device's field last arrived. A red cell with green neighbours = that sensor dropped (e.g. BH1750 lux); a whole red row = the device is offline. New devices add rows, new sensors add columns automatically. Thresholds align with the controller's STALE=5min.",
+   "description": "Each cell = seconds since that device's field last arrived. A red cell with green neighbours = that sensor dropped (e.g. BH1750 lux); a whole red row = the device is offline. New devices add rows, new sensors add columns automatically. Thresholds align with the controller's STALE=5min. The `as7341` column is the ambient spectrum feed, which lives in its own measurement rather than in `air`; it is here because without it a dead AS7341 left every other cell green for the whole outage (2026-08-14 and 08-16). A reflectance run pauses the ambient tick, but it pauses telemetry too, so during one the entire row ages together instead of that column alone \u2014 a lone red `as7341` really is the sensor.",
    "fieldConfig": {
     "defaults": {
      "unit": "s",
@@ -94,7 +94,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "from(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"air\" and r.device != \"sim\")\n  |> group(columns: [\"device\", \"_field\"])\n  |> last()\n  |> map(fn: (r) => ({ r with _value: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0 }))\n  |> group()\n  |> keep(columns: [\"device\", \"_field\", \"_value\"])\n  |> pivot(rowKey: [\"device\"], columnKey: [\"_field\"], valueColumn: \"_value\")"
+     "query": "// Age in seconds. Shared by both streams so the two cannot drift apart.\nage = (t) => float(v: int(v: now()) - int(v: t)) / 1000000000.0\n\nair = from(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"air\" and r.device != \"sim\")\n  |> group(columns: [\"device\", \"_field\"])\n  |> last()\n  |> map(fn: (r) => ({ device: r.device, _field: r._field, _value: age(t: r._time) }))\n\n// The AS7341 publishes to its own measurement, so a query that stopped at `air`\n// could never show it. That is not hypothetical: on 2026-08-14 and again on\n// 08-16 the spectrum feed went silent for 32 minutes while every cell in this\n// table stayed green. A dropped sensor showing as green is the one outcome this\n// panel exists to prevent.\n//\n// `mode` is load-bearing. A reflectance run writes to the SAME measurement as\n// mode \"reflect\" and holds the sensor while it goes, so counting those samples\n// would let an active bench session hide a dead ambient feed.\n//\n// One column rather than ten: the channels are a single JSON publish, they\n// arrive together or not at all, so `clear` stands in for all of them.\nspectrum = from(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\"\n       and r._field == \"clear\" and r.device != \"sim\")\n  |> group(columns: [\"device\"])\n  |> last()\n  |> map(fn: (r) => ({ device: r.device, _field: \"as7341\", _value: age(t: r._time) }))\n\nunion(tables: [air, spectrum])\n  |> group()\n  |> keep(columns: [\"device\", \"_field\", \"_value\"])\n  |> pivot(rowKey: [\"device\"], columnKey: [\"_field\"], valueColumn: \"_value\")"
     }
    ]
   },
