@@ -6,11 +6,18 @@
 #
 #   ./ppfd-cal-daily.sh              # today's window, write the point
 #   ./ppfd-cal-daily.sh --dry-run    # print what would be written, write nothing
+#   ./ppfd-cal-daily.sh --window pre-lamp   # the default, named explicitly
 #   LUX_MIN=1500 ./ppfd-cal-daily.sh # tighten the brightness floor for one run
+#   SKIP=1 ./ppfd-cal-daily.sh       # record the day as skipped without fitting
 #
 # THE WINDOW is derived, not hardcoded: it ends when the plant light comes on and
-# starts WIN_MIN minutes before that. With LIGHT_WINDOW_START_MIN=480 that is
-# 07:00-08:00 local. Deriving it from the same .env vars the light controller uses
+# starts SPAN_MIN minutes before that. With LIGHT_WINDOW_START_MIN=480 and the
+# default 120-minute span that is 06:00-08:00 local.
+#
+# This window is FREE: the lamp is off on its own schedule, so nothing here ever
+# touches it, and the measurement costs the plant no supplemental light. That is
+# why it is the daily default rather than the brighter solar-noon window, which
+# would have to switch the lamp off and spend DLI the budget does not have. Deriving it from the same .env vars the light controller uses
 # (LIGHT_WINDOW_START_MIN and LIGHT_TZ — the minute is meaningless without the
 # zone) means moving the lamp window moves this with it — the alert rules already do
 # this for the same reason, and a calibration window that silently overlaps lamp
@@ -25,15 +32,31 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
-
-DEVICE="${DEVICE:-livingroom}"
 # The pre-lamp window is the only mode so far; Stage 5 adds the solar-noon one.
 # In this mode the lamp is off because the schedule says so, not because we asked
 # it to be, so there is nothing to verify — lamp_off_ok is 1 by construction.
 WINDOW_MODE="pre-lamp"
 LAMP_OFF_OK=1
-WIN_MIN="${WIN_MIN:-60}"          # length of the pre-lamp window, minutes
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; shift;;
+    --window)  WINDOW_MODE="${2:?--window needs a value}"; shift 2;;
+    *) echo "unknown arg: $1" >&2; exit 1;;
+  esac
+done
+case "$WINDOW_MODE" in
+  pre-lamp) ;;
+  *) echo "unknown --window mode: $WINDOW_MODE (only pre-lamp so far)" >&2; exit 1;;
+esac
+
+DEVICE="${DEVICE:-livingroom}"
+# Window length. 120 comes from measuring both on 2026-08-17: 120 minutes keeps 57
+# samples at drift 20%, 60 keeps 45 at drift 17%, and the two fits land 1.4% apart
+# — well inside every gate either way. 120 is the choice because the >=20-minute
+# gate is the one with the least margin, and samples are what buy margin there.
+# Shorten it if drift creeps toward the 30% limit as the season moves.
+SPAN_MIN="${SPAN_MIN:-120}"
 # Brightness floor. calibrate-ppfd.sh defaults to 3000, which is right for the
 # balcony daylight it was written for and unreachable here: measured 2026-08-17,
 # this window spans 230-877 lux even after the sensor block moved to the window.
@@ -74,8 +97,8 @@ TZ_NAME="${TZ_NAME:-$(envval LIGHT_TZ)}"
 TZ_NAME="${TZ_NAME:-Asia/Taipei}"
 START_MIN="$(envval LIGHT_WINDOW_START_MIN)"
 START_MIN="${START_MIN:-480}"
-[ "$START_MIN" -gt "$WIN_MIN" ] || { echo "lamp starts at $START_MIN min — no room for a ${WIN_MIN}min window before it" >&2; exit 1; }
-W0_MIN=$(( START_MIN - WIN_MIN ))
+[ "$START_MIN" -gt "$SPAN_MIN" ] || { echo "lamp starts at $START_MIN min — no room for a ${SPAN_MIN}min window before it" >&2; exit 1; }
+W0_MIN=$(( START_MIN - SPAN_MIN ))
 
 hhmm() { printf '%02d:%02d' $(( $1 / 60 )) $(( $1 % 60 )); }
 DAY="$(TZ="$TZ_NAME" date +%Y-%m-%d)"
@@ -97,10 +120,10 @@ STOP_UTC="$(date -u -d "@$W1_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
 TS_NS="${W0_EPOCH}000000000"
 
 # The conversion above is the one thing here that fails silently and plausibly, so
-# it gets a self-check rather than a comment: the window must be WIN_MIN long and
+# it gets a self-check rather than a comment: the window must be SPAN_MIN long and
 # must land where the local clock says it does.
-[ $(( W1_EPOCH - W0_EPOCH )) -eq $(( WIN_MIN * 60 )) ] \
-  || { echo "window is $(( (W1_EPOCH-W0_EPOCH)/60 ))min, expected ${WIN_MIN}min" >&2; exit 1; }
+[ $(( W1_EPOCH - W0_EPOCH )) -eq $(( SPAN_MIN * 60 )) ] \
+  || { echo "window is $(( (W1_EPOCH-W0_EPOCH)/60 ))min, expected ${SPAN_MIN}min" >&2; exit 1; }
 [ "$(TZ="$TZ_NAME" date -d "@$W0_EPOCH" +%H:%M)" = "$(hhmm "$W0_MIN")" ] \
   || { echo "window start is $(TZ="$TZ_NAME" date -d "@$W0_EPOCH" +%H:%M) $TZ_NAME, expected $(hhmm "$W0_MIN")" >&2; exit 1; }
 
