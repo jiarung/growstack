@@ -6,7 +6,7 @@
 #
 #   ./ppfd-cal-daily.sh              # today's window, write the point
 #   ./ppfd-cal-daily.sh --dry-run    # print what would be written, write nothing
-#   LUX_MIN=1500 ./ppfd-cal-daily.sh # loosen the brightness floor for one run
+#   LUX_MIN=1500 ./ppfd-cal-daily.sh # tighten the brightness floor for one run
 #
 # THE WINDOW is derived, not hardcoded: it ends when the plant light comes on and
 # starts WIN_MIN minutes before that. With LIGHT_WINDOW_START_MIN=480 that is
@@ -29,7 +29,27 @@ DRY_RUN=0
 
 DEVICE="${DEVICE:-livingroom}"
 WIN_MIN="${WIN_MIN:-60}"          # length of the pre-lamp window, minutes
-LUX_MIN="${LUX_MIN:-3000}"        # brightness floor; see calibrate-ppfd.sh
+# Brightness floor. calibrate-ppfd.sh defaults to 3000, which is right for the
+# balcony daylight it was written for and unreachable here: measured 2026-08-17,
+# this window spans 230-877 lux even after the sensor block moved to the window.
+# At 3000 the series is valid=0 every single day, which is a pipeline that cannot
+# ever answer the question it was built for.
+#
+# 300 is chosen from that measurement, not picked round: it keeps 45 of 60 minutes
+# with a 2.9x brightness span, clearing both the >=20-minute and >=2x gates with
+# margin, while still dropping the darkest samples. Raising it to 500 keeps only
+# 15 minutes and fails.
+#
+# The obvious alternative — move the window to 09:00-10:00, where daylight peaks
+# at ~1800 lux — was rejected on 2026-08-17: the lamp already runs to its 20:30
+# extension cap EVERY day and still lands at DLI 3.0-3.9 against a target of 4.0,
+# so there is no lamp time to give back. Re-open that option if the DLI budget
+# ever goes into surplus.
+#
+# This is a monitoring floor, not a quality claim. A fit from a few hundred lux of
+# indirect morning light carries more error than the +/-15-20% the method already
+# admits to; treat the output as drift, never as an absolute anchor.
+LUX_MIN="${LUX_MIN:-300}"
 GAIN="${GAIN:-4}"                 # firmware ambient gain (AMBIENT_GAIN, sensors.cpp)
 TINT_MS="${TINT_MS:-280.78}"      # (ATIME+1)*(ASTEP+1)*2.78us
 CONTAINER="${CONTAINER:-monitor-air-influxdb}"
