@@ -21,12 +21,13 @@ rather than iterating to the solar-noon instant it computes. Over the ~2 minute
 gap the declination moves ~0.0006 deg; deliberately not corrected.
 """
 import argparse
+import contextlib
 import datetime as dt
 import math
 import os
 import re
 import sys
-from zoneinfo import ZoneInfo
+import time
 
 ENV = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 
@@ -46,6 +47,28 @@ def envval(key, default):
     except OSError:
         pass
     return default
+
+
+@contextlib.contextmanager
+def _in_zone(name):
+    """Do local-time conversions in `name`, then put TZ back where it was.
+
+    zoneinfo would read better, but it landed in Python 3.9 and the system
+    interpreter here is 3.8. That only surfaced when the script ran under cron's
+    minimal environment — an interactive shell had a newer python earlier on PATH,
+    which hid it completely.
+    """
+    prev = os.environ.get("TZ")
+    os.environ["TZ"] = name
+    time.tzset()
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = prev
+        time.tzset()
 
 
 def _jday(d):
@@ -94,18 +117,18 @@ def solar_noon(date=None):
     """Return (aware datetime of solar noon, max altitude in degrees)."""
     lat = float(envval("WEATHER_LAT", "25.01"))
     lon = float(envval("WEATHER_LON", "121.46"))
-    zone = ZoneInfo(envval("LIGHT_TZ", "Asia/Taipei"))
 
-    d = date or dt.datetime.now(zone).date()
-    midnight = dt.datetime(d.year, d.month, d.day, tzinfo=zone)
-    # The NOAA expression wants the zone as a fixed hour offset. Take it from the
-    # zone itself on this date rather than hardcoding +8, so the value tracks
-    # whatever LIGHT_TZ says — including a zone that observes DST.
-    tz_hours = midnight.utcoffset().total_seconds() / 3600.0
-
-    eot, dec = _sun(d, tz_hours)
-    minutes = 720.0 - 4.0 * lon - eot + tz_hours * 60.0
-    return midnight + dt.timedelta(minutes=minutes), 90.0 - abs(lat - dec)
+    with _in_zone(envval("LIGHT_TZ", "Asia/Taipei")):
+        d = date or dt.date.fromtimestamp(time.time())
+        midnight = time.mktime((d.year, d.month, d.day, 0, 0, 0, 0, 0, -1))
+        # The NOAA expression wants the zone as a fixed hour offset. Read it off
+        # the zone on this date rather than hardcoding +8, so it tracks whatever
+        # LIGHT_TZ says, DST included.
+        tz_hours = time.localtime(midnight).tm_gmtoff / 3600.0
+        eot, dec = _sun(d, tz_hours)
+        epoch = midnight + (720.0 - 4.0 * lon - eot + tz_hours * 60.0) * 60.0
+        local = time.localtime(epoch)
+    return epoch, local, 90.0 - abs(lat - dec)
 
 
 def main(argv=None):
@@ -115,14 +138,15 @@ def main(argv=None):
     p.add_argument("date", nargs="?", help="YYYY-MM-DD (default: today, in LIGHT_TZ)")
     a = p.parse_args(argv)
 
-    d = dt.date.fromisoformat(a.date) if a.date else None
-    when, alt = solar_noon(d)
+    d = dt.date(*map(int, a.date.split("-"))) if a.date else None
+    epoch, local, alt = solar_noon(d)
 
     if a.noon_epoch:
-        print(int(when.timestamp()))
+        print(int(epoch))
     else:
         print("%s  solar noon %s  max altitude %.2f deg (%.2f from zenith)"
-              % (when.date().isoformat(), when.strftime("%H:%M:%S"), alt, 90.0 - alt))
+              % (time.strftime("%Y-%m-%d", local), time.strftime("%H:%M:%S", local),
+                 alt, 90.0 - alt))
     return 0
 
 

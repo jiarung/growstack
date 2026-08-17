@@ -26,3 +26,7 @@ broker/photone-log.csv
 
 # Written daily by the influx-backup cron (see broker/README.md)
 broker/backup/backup.log
+
+# Python bytecode (solar-noon.py gets imported by tests)
+__pycache__/
+*.pyc
