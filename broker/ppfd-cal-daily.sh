@@ -28,6 +28,11 @@ DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 
 DEVICE="${DEVICE:-livingroom}"
+# The pre-lamp window is the only mode so far; Stage 5 adds the solar-noon one.
+# In this mode the lamp is off because the schedule says so, not because we asked
+# it to be, so there is nothing to verify — lamp_off_ok is 1 by construction.
+WINDOW_MODE="pre-lamp"
+LAMP_OFF_OK=1
 WIN_MIN="${WIN_MIN:-60}"          # length of the pre-lamp window, minutes
 # Brightness floor. calibrate-ppfd.sh defaults to 3000, which is right for the
 # balcony daylight it was written for and unreachable here: measured 2026-08-17,
@@ -101,16 +106,47 @@ TS_NS="${W0_EPOCH}000000000"
 
 echo "=== ppfd-cal-daily $DAY  window $(hhmm "$W0_MIN")-$(hhmm "$START_MIN") $TZ_NAME  ($START_UTC → $STOP_UTC) ==="
 
-# The human report goes to stderr so cron's log keeps it; stdout carries only the
-# line protocol, which is what we parse. Grep for the prefix rather than tailing:
-# the report above it is free to grow.
-LINE="$(./calibrate-ppfd.sh --device "$DEVICE" --start "$START_UTC" --stop "$STOP_UTC" \
-          --lux-min "$LUX_MIN" --gain "$GAIN" --tint-ms "$TINT_MS" --emit \
-        | tee /dev/stderr | grep '^ppfd_cal' || true)"
+# ---- point assembly ----
+# This layer owns it, not calibrate-ppfd.sh. That script knows exactly one thing:
+# what a window of data fits to. Which window we picked, whether we skipped the
+# day, and whether the lamp really went off are facts only the orchestrator has —
+# and on a skipped day calibrate-ppfd.sh is never even called, so it could not
+# report them anyway.
 
-[ -n "$LINE" ] || { echo "calibrate-ppfd.sh emitted no ppfd_cal line — not writing" >&2; exit 1; }
+# window_mode is a TAG, not a field. As a field the two modes would share one
+# series and stay apart only by having different window-start timestamps, which
+# is a coincidence rather than a design — and InfluxDB's field-union would let
+# them overwrite each other the moment those coincided. As a tag each mode is its
+# own series with its own idempotent timestamp.
+add_tag() {   # <line> <key> <value>  — insert into the tag set (before the first space)
+  printf '%s,%s=%s %s' "${1%% *}" "$2" "$3" "${1#* }"
+}
 
-POINT="$LINE $TS_NS"
+# skipped / lamp_off_ok are written on EVERY run, never omitted. emit() drops
+# None-valued fields, and field-union means an omitted field leaves the previous
+# value sitting at the same timestamp — where it reads as this run's result.
+assemble() {  # <base-line> <skipped> <lamp_off_ok>
+  printf '%s,skipped=%s,lamp_off_ok=%s' "$(add_tag "$1" window_mode "$WINDOW_MODE")" "$2" "$3"
+}
+
+if [ "${SKIP:-0}" = "1" ]; then
+  # Skipped: no fit was attempted, so there is nothing for calibrate-ppfd.sh to
+  # say. The day still has to land in the series — a gap reads as "nothing wrong"
+  # rather than "not measured", which is the whole reason --emit exists.
+  echo "SKIP=1 — not fitting, recording the day as skipped" >&2
+  POINT="$(assemble "ppfd_cal,device=$DEVICE n_kept=0,valid=0" 1 0) $TS_NS"
+else
+  # The human report goes to stderr so cron's log keeps it; stdout carries only the
+  # line protocol, which is what we parse. Grep for the prefix rather than tailing:
+  # the report above it is free to grow.
+  LINE="$(./calibrate-ppfd.sh --device "$DEVICE" --start "$START_UTC" --stop "$STOP_UTC" \
+            --lux-min "$LUX_MIN" --gain "$GAIN" --tint-ms "$TINT_MS" --emit \
+          | tee /dev/stderr | grep '^ppfd_cal' || true)"
+
+  [ -n "$LINE" ] || { echo "calibrate-ppfd.sh emitted no ppfd_cal line — not writing" >&2; exit 1; }
+
+  POINT="$(assemble "$LINE" 0 "$LAMP_OFF_OK") $TS_NS"
+fi
 if [ "$DRY_RUN" = "1" ]; then
   echo "--dry-run, would write:"
   echo "  $POINT"
