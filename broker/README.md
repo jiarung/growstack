@@ -168,7 +168,7 @@ come from `.env`.
 ```bash
 docker compose up -d --build light            # start it
 docker compose run --rm light python /light.py --selftest   # check decide() logic
-# manual switch (via the MQTT command seam — pauses auto control ~2h):
+# manual switch (via the MQTT command seam — pauses auto control ~5 min):
 ./light-ctl.sh on        # or: off | status
 ```
 
@@ -378,6 +378,35 @@ text**, which sidesteps `parse_mode` entirely (the default is HTML, so the
 
 Notifications group by `(alertname, device)`: one message listing every dead
 field on a board, rather than six messages for one unplugged sensor.
+
+## Daily PPFD calibration (cron)
+
+`ppfd-cal-daily.sh` fits a candidate `CAL` every morning over the pre-lamp
+daylight window and writes one point to the `ppfd_cal` measurement. The window is
+derived from `LIGHT_WINDOW_START_MIN` and `LIGHT_TZ` — it ends when the lamp comes
+on and starts `SPAN_MIN` (default 120) minutes earlier, so 06:00–08:00 today.
+Nothing in that path touches the lamp; the window is free.
+
+**This schedule is not in version control** — cron never is. If you rebuild the
+host, recreate it by hand:
+
+```cron
+15 0 * * * /home/jiarung/monitor-air/broker/ppfd-cal-daily.sh >> /tmp/ppfd-cal-daily.log 2>&1
+```
+
+Two things about that line are load-bearing:
+
+- **`15 0` is UTC.** This host runs `Etc/UTC` (`timedatectl`), so it fires at
+  08:15 Asia/Taipei, fifteen minutes after the window closes. Written as `15 8`
+  it would run at 16:15 local — the day's window would still be complete, so the
+  point would look perfectly fine while arriving eight hours late.
+- **No `--window` argument**, so it runs the default `pre-lamp` mode. The
+  `noon` mode switches the lamp off and spends DLI the plant does not have
+  spare; it is a manual, occasional check, never scheduled.
+
+Read the series with the two panels at the bottom of the **monitor-air — daily**
+dashboard, and see `PPFD-CAL-ROUTINE-PLAN.md` for what the numbers mean and the
+review step before any `CAL` is actually adopted.
 
 ## Backups (to the HDD)
 
