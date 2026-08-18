@@ -291,7 +291,7 @@ groups:
           severity: warning
         annotations:
           summary: '{{ $labels.device }} 的 AS7341 光譜停止回報'
-          description: '已經 {{ printf "%.0f" $values.B.Value }} 分鐘沒有新的 spectrum 資料（門檻 15 分）。同一塊板子的 air（溫濕度、lux）很可能還是正常的 — AS7341 在 I2C 上沒有回應時其他感測器不受影響，telemetry 會照送，所以「板子還活著」不代表這顆沒事。看 telemetry 的間隔有沒有變長，那是每個 cycle 卡在讀取逾時上。目前韌體只在開機時探測一次 AS7341，所以通常要重開板子才會恢復。'
+          description: '已經 {{ printf "%.0f" $values.B.Value }} 分鐘沒有新的 spectrum 資料（門檻 15 分）。修法：用 Tapo app 把名為 sensor 的插座（192.168.50.52）關掉再開，實測有效。同一塊板子的 air（溫濕度、lux）很可能還是正常的 — AS7341 卡住時其他感測器照跑，所以「板子還活著」不代表這顆沒事。它偶爾會自己好（最久等過 51 分鐘），但不可靠，等不如直接斷電。附帶一提：這個故障會讓通道讀出 65535，看起來像被光打滿，其實不是 — 分辨方法是 spectrum_read_ms，正常是 610ms，卡住時會掉到 44–336ms，代表積分根本沒跑完。'
         data:
           - refId: A
             relativeTimeRange:
