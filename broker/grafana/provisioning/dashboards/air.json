@@ -100,7 +100,7 @@
   },
   {
    "id": 1,
-   "title": "Temperature (°C) — 室內 vs 室外",
+   "title": "Temperature (°C) — 陽台 vs 區域",
    "type": "timeseries",
    "datasource": {
     "type": "influxdb",
@@ -173,14 +173,14 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"temperature_2m\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"板橋 室外 (Open-Meteo)\")"
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"temperature_2m\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"板橋 區域 (Open-Meteo)\")"
     }
    ],
-   "description": "室內是這塊板子的 BME680，室外是 Open-Meteo 的板橋網格值 —— 同一張圖才看得出「這個位置比外面熱/濕多少」，那是感測器搬到窗邊之後才有意義的問題。\n\n兩條線的取樣率差三個數量級：室內每 15 秒，室外每小時。所以 spanNulls 只開在室外那條（虛線）。**室內那條刻意不開** —— 開了之後感測器掉線會被畫成一條平滑直線而不是缺口，而 BME680 在 2026-08-15 就消失過 20 小時。缺口要看得見。"
+   "description": "BME680 量的是這座陽台本身的空氣，Open-Meteo 是板橋網格的區域值。**這不是室內外對比** —— 整套設備就在戶外，只是位於有雨遮的窄巷中，所以兩條線都是室外，差的是微氣候。溫差主要來自窄巷的日曬蓄熱與通風不良，不是牆或隔熱。\n\n兩條線的取樣率差三個數量級：陽台每 15 秒，區域每小時。所以 spanNulls 只開在區域那條（虛線）。**陽台那條刻意不開** —— 開了之後感測器掉線會被畫成一條平滑直線而不是缺口，而 BME680 在 2026-08-15 就消失過 20 小時。缺口要看得見。"
   },
   {
    "id": 2,
-   "title": "Humidity (%) — 室內 vs 室外",
+   "title": "Humidity (%) — 陽台 vs 區域",
    "type": "timeseries",
    "datasource": {
     "type": "influxdb",
@@ -253,10 +253,10 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"relative_humidity_2m\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"板橋 室外 (Open-Meteo)\")"
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"weather\" and r._field == \"relative_humidity_2m\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"板橋 區域 (Open-Meteo)\")"
     }
    ],
-   "description": "室內是這塊板子的 BME680，室外是 Open-Meteo 的板橋網格值 —— 同一張圖才看得出「這個位置比外面熱/濕多少」，那是感測器搬到窗邊之後才有意義的問題。\n\n兩條線的取樣率差三個數量級：室內每 15 秒，室外每小時。所以 spanNulls 只開在室外那條（虛線）。**室內那條刻意不開** —— 開了之後感測器掉線會被畫成一條平滑直線而不是缺口，而 BME680 在 2026-08-15 就消失過 20 小時。缺口要看得見。"
+   "description": "BME680 量的是這座陽台本身的空氣，Open-Meteo 是板橋網格的區域值。**這不是室內外對比** —— 整套設備就在戶外有雨遮的窄巷中。兩條線接近是預期的；持續偏離代表這個角落的通風或蓄熱與區域不同，值得注意的是它對板子和接點的凝結風險。\n\n兩條線的取樣率差三個數量級：陽台每 15 秒，區域每小時。所以 spanNulls 只開在區域那條（虛線）。**陽台那條刻意不開** —— 開了之後感測器掉線會被畫成一條平滑直線而不是缺口，而 BME680 在 2026-08-15 就消失過 20 小時。缺口要看得見。"
   },
   {
    "id": 3,

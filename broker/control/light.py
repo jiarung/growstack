@@ -36,9 +36,14 @@ HARD_OFF = dtime(_end_min // 60, _end_min % 60)      # at/after this → force O
 # the deadman gate. DLI comes from InfluxDB (survives restarts, reuses the panel's
 # computation).
 #
-# Why a target and not a "was today dark?" threshold: this room gets almost no
+# Why a target and not a "was today dark?" threshold: this SITE gets almost no
 # usable daylight — measured 2026-07-30, natural light is 1-2% of the daily total
-# (0.02-0.07 of ~3.5 mol), and indoor lux does not track outdoor solar at all. So
+# (0.02-0.07 of ~3.5 mol), and the measured lux does not track outdoor solar at
+# all. NOT because this is indoors — the rig sits on an outdoor balcony in a
+# narrow alley under a rain cover, so the sky is blocked by the cover and the
+# walls. That distinction matters: a room is fixed, a sun patch is not. Moving
+# the sensor block on 2026-08-16 took the pre-lamp window from ~250 lux to 1,800
+# at its 09:00-09:30 peak. So
 # "is today dark" has the same answer every day and a threshold on it only ever
 # encodes a fixed extend-or-not, while silently breaking whenever the lamp or the
 # sensor changes scale (which is exactly what happened: a lens clean on ~2026-07-23
