@@ -47,7 +47,7 @@ option location = timezone.location(name: "Asia/Taipei")
 src = (start) => from(bucket: "sensors")
   |> range(start: start)
   |> filter(fn: (r) => r._measurement == "plant_weight" and r._field == "weight_g"
-       and r.quality == "ok" and r.plant_id != "tare-ref" and r.plant_id != "unknown")
+       and r.quality == "ok" and r.plant_id != "unknown")
 
 S = (src(start: -90d)
   |> group(columns: ["plant_id"]) |> sort(columns: ["_time"])
@@ -87,8 +87,6 @@ tmp, tag_map_path, prefix = sys.argv[1], sys.argv[2], sys.argv[3]
 uid_to_plant = json.load(open(tag_map_path))
 plant_to_uids = {}
 for uid, plant in uid_to_plant.items():
-    if plant == "tare-ref":
-        continue
     plant_to_uids.setdefault(plant, []).append(uid)
 
 rows, hdr = [], None
