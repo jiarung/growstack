@@ -408,6 +408,35 @@ Read the series with the two panels at the bottom of the **monitor-air — daily
 dashboard, and see `PPFD-CAL-ROUTINE-PLAN.md` for what the numbers mean and the
 review step before any `CAL` is actually adopted.
 
+## Weigh-station reference values (cron)
+
+`publish-weight-ref.sh` gives the station's OLED the figure it shows while you
+hold a pot: how far this plant has fallen from its last full watering. It writes
+one retained MQTT message per tag —
+
+```
+monitor-air/ref/weight/<uid>  {"plant_id":…,"sat_g":…,"dry_g":…,"anchor_day":…}
+```
+
+— where `sat_g` is the plant's peak since the last qualifying watering session (a
+day on which >=8 plants gained >10 g) and `dry_g` is its 10th percentile over 60
+days. Those move whenever anyone weighs anything, so it runs hourly:
+
+```cron
+5 * * * * /home/jiarung/monitor-air/broker/publish-weight-ref.sh >> /tmp/publish-weight-ref.log 2>&1
+```
+
+**Cron is not in version control** — see `FLOWS.md`. Write the path out in full;
+the entry that lived here until 2026-08-22 still had a literal `/home/<user>/`
+placeholder and a log path under `/data/` that does not exist, so it had never
+run once. Nothing alerts on that: the references simply go stale, and a stale
+reference looks exactly like a current one on a 128x64 display. When they were
+finally refreshed by hand, the anchor day jumped from 2026-08-15 to 2026-08-21.
+
+If a tag has no retained reference the OLED shows no water figures for it, which
+is a useful way to spot a plant that is registered in `tag-map.json` but has no
+usable weight history yet.
+
 ## Backups (to the HDD)
 
 Live data sits on the SSD (named volume `influxdb-data`); backups go to the HDD
