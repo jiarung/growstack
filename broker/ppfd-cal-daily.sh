@@ -169,7 +169,7 @@ if [ "$WINDOW_MODE" = "noon" ] && [ "$DRY_RUN" = "0" ]; then
     # you re-analyse a day, and it is honest: it cannot claim the lamp was off.
     echo "window already over — fitting recorded data, no lamp action" >&2
   else
-    REF="$(docker exec -i "$CONTAINER" influx query --org "$ORG" --raw -f /dev/stdin <<FLUX 2>/dev/null | awk -F, '!/^#/ && NF>3 && \$0 !~ /_value/ { v=\$NF } END { gsub(/\r/,"",v); print v }'
+    REF="$(docker exec -i "$CONTAINER" influx query --org "$ORG" --raw -f /dev/stdin <<FLUX 2>/dev/null | awk -F, '!/^#/ && NF>3 && $0 !~ /_value/ { v=$NF } END { gsub(/\r/,"",v); print v }'
 from(bucket: "$BUCKET")
   |> range(start: -5m)
   |> filter(fn: (r) => r._measurement == "air" and r.device == "$DEVICE" and r._field == "lux_ref")
