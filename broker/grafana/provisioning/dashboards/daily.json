@@ -29,7 +29,7 @@
  "panels": [
   {
    "id": 1,
-   "title": "Plant weight — every weighing, at the time it happened",
+   "title": "Plant weight — every weighing, at the time it happened, against the day's light",
    "type": "timeseries",
    "datasource": {
     "type": "influxdb",
@@ -41,7 +41,7 @@
     "x": 0,
     "y": 0
    },
-   "description": "Raw readings plotted where they actually fall in time, not bucketed into days. Weighing happens when someone is free, not on a schedule, and a pot also drifts through the day with the plant's own respiration — so a daily bucket imposed a grid the measurements do not have and hid both effects. A watering shows here as a step up, drying as the slope between steps.",
+   "description": "Raw readings plotted where they actually fall in time, not bucketed into days. Weighing happens when someone is free, not on a schedule, and a pot also drifts through the day with the plant's own respiration — so a daily bucket imposed a grid the measurements do not have and hid both effects. A watering shows here as a step up, drying as the slope between steps.\n\n背後的長條是當天的 DLI（右軸，lux/54），從 air.json 的「每日一值 vs DLI」面板搬過來的**概念** —— 但沒有搬它的做法。那張把重量壓成每日中位數，正是本面板上面那段話反對的日分桶；水量的問題是「這株今天喝了多少」，而分桶會把答案本身抹掉。\n\n所以重量維持原始時間戳，只把光量疊在後面。要看的是：**亮的日子，兩次秤重之間的下滑斜率是不是比較陡。** 那是耗水對光反應的直接證據，不需要先算出任何速率。\n\nDLI 用 lux/54 而不是光譜法，因為那是燈控實際依據的同一條線（`DLI_TARGET=4.0`），而光譜法目前對還在漂的 CAL 是線性相依的 —— 見 air.json 的 DLI 面板。",
    "fieldConfig": {
     "defaults": {
      "unit": "massg",
@@ -53,7 +53,40 @@
       "pointSize": 7
      }
     },
-    "overrides": []
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "B"
+      },
+      "properties": [
+       {
+        "id": "custom.axisPlacement",
+        "value": "right"
+       },
+       {
+        "id": "unit",
+        "value": "none"
+       },
+       {
+        "id": "custom.drawStyle",
+        "value": "bars"
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 20
+       },
+       {
+        "id": "custom.lineWidth",
+        "value": 0
+       },
+       {
+        "id": "displayName",
+        "value": "DLI (mol/m²/day)"
+       }
+      ]
+     }
+    ]
    },
    "options": {
     "legend": {
@@ -72,6 +105,14 @@
       "uid": "influxdb-monitor-air"
      },
      "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  // quality is a soft-delete marker set by Node-RED (ok|empty) and by\n  // mark-weight.sh after the fact. Nothing is dropped from the database; the\n  // charts simply show the readings currently believed good.\n  |> filter(fn: (r) => r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> group(columns: [\"plant_id\"])\n  |> sort(columns: [\"_time\"])\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"DLI (mol/m²/day)\")"
     }
    ]
   },

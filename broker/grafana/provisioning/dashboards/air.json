@@ -838,91 +838,6 @@
    ]
   },
   {
-   "id": 15,
-   "title": "Plant weight per plant — one value per day, vs that day's DLI",
-   "type": "timeseries",
-   "datasource": {
-    "type": "influxdb",
-    "uid": "influxdb-monitor-air"
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 24,
-    "x": 0,
-    "y": 70
-   },
-   "description": "Weighing is a manual NFC-triggered act, not a continuous signal, so this aggregates to ONE median value per plant per local day rather than to an elastic window — at v.windowPeriod the same plant could show several points on a busy afternoon and none for days, which reads as noise instead of a trend. Daily DLI (right axis, lux estimate — the same figure the light controller tops up against) is overlaid so weight change can be read against the light actually delivered that day. Excludes plant_id=\"unknown\" and non-positive weights; see the table below for tags still needing ./add-tag.sh.",
-   "fieldConfig": {
-    "defaults": {
-     "unit": "massg",
-     "custom": {
-      "drawStyle": "line",
-      "fillOpacity": 0,
-      "spanNulls": true,
-      "showPoints": "always",
-      "pointSize": 7
-     }
-    },
-    "overrides": [
-     {
-      "matcher": {
-       "id": "byFrameRefID",
-       "options": "B"
-      },
-      "properties": [
-       {
-        "id": "custom.axisPlacement",
-        "value": "right"
-       },
-       {
-        "id": "unit",
-        "value": "none"
-       },
-       {
-        "id": "custom.drawStyle",
-        "value": "bars"
-       },
-       {
-        "id": "custom.fillOpacity",
-        "value": 25
-       },
-       {
-        "id": "displayName",
-        "value": "DLI (mol/m²/day)"
-       }
-      ]
-     }
-    ]
-   },
-   "options": {
-    "legend": {
-     "displayMode": "list",
-     "placement": "bottom"
-    },
-    "tooltip": {
-     "mode": "multi"
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "influxdb-monitor-air"
-     },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\")\n  // a pot cannot weigh <= 0 — those are tare drift with nothing on the scale\n  |> filter(fn: (r) => r._value > 0.0)\n  // \"unknown\" is not a plant: it is every unregistered tag pooled into one\n  // bucket, so a trend line through it would average unrelated objects.\n  // The table below lists them so the missing registrations stay visible.\n  // Same soft-delete filter as the daily dashboard. Without it a reading retired\n  // with mark-weight.sh stays visible here, so the two dashboards disagree about\n  // what the data is — the worst outcome for a marker whose whole point is that\n  // one decision applies everywhere.\n  |> filter(fn: (r) => r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> group(columns: [\"plant_id\"])\n  // One value per plant per LOCAL day. Weighing is a manual, bursty act —\n  // several taps within a session are the same measurement repeated, so the\n  // median gives the day's figure and discards a fumbled weigh.\n  |> aggregateWindow(every: 1d, fn: median, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])\n  |> yield(name: \"weight\")"
-    },
-    {
-     "refId": "B",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "influxdb-monitor-air"
-     },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])\n  |> yield(name: \"DLI\")"
-    }
-   ]
-  },
-  {
    "id": 16,
    "title": "Unregistered NFC tags — need ./add-tag.sh <plant-id>",
    "type": "table",
@@ -934,7 +849,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 79
+    "y": 70
    },
    "description": "Every weigh whose tag UID is not in node-red/tag-map.json. The record is never dropped — plant_id becomes \"unknown\" and the raw uid is kept — so this table is the worklist: run ./add-tag.sh <plant-id>, tap the tag, and the next weigh lands on the right plant. Empty is the healthy state.",
    "fieldConfig": {
@@ -973,7 +888,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 87
+    "y": 78
    },
    "fieldConfig": {
     "defaults": {
@@ -1044,7 +959,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 95
+    "y": 86
    },
    "description": "韌體 5d683f8 加的診斷欄位，目的寫在它自己的註解裡：correlate weak rssi with freezes/gaps。所以這裡不只畫訊號，而是把訊號和發送間隔疊在同一條時間軸上 —— 兩者同時出現異常，才是「WiFi 送出時卡住」的證據。\n\n左軸 RSSI (dBm，取窗內最差值)：> -67 可靠、-67～-80 邊緣、< -80 差。\n右軸 發送間隔 (秒，取窗內最長)：正常 15 秒；抬高 = 那一輪 loop 卡住了。\n\n判讀：間隔尖峰同時伴隨 RSSI 下陷 → 網路送出阻塞；間隔尖峰而 RSSI 平穩 → 卡在別的地方（I2C、SPI、HX711），跟 WiFi 無關。後者正是 2026-08-14 到 08-16 AS7341 掉線時的樣子，發送間隔從 15 秒變成 17.5 秒而訊號完全沒動。\n\n間隔取自 rssi 自己的樣本間距，因為韌體只在 WiFi 連線時才寫這個欄位，等於每次成功發送必然有它。",
    "fieldConfig": {
