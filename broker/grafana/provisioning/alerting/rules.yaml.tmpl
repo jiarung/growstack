@@ -358,6 +358,97 @@ groups:
                     # trip the sensor deadman first.
                     params: [15]
 
+      # Between the deadman and the throughput check sits a third state that
+      # neither can see: the sensor keeps publishing, on time, and every value is
+      # garbage. On 2026-08-22 the AS7341 spent six hours emitting 65535 on every
+      # channel every 15 s. The deadman stayed quiet — correctly, it watches for
+      # SILENCE and there was none. 932 junk samples, no alert from the rule whose
+      # name is about this sensor.
+      #
+      # spectrum_read_ms is what separates the two, and it does it independently
+      # of how much light there is, which no ratio can. A healthy read is two SMUX
+      # cycles at ATIME=100/ASTEP=999, so ~610 ms whether it is midnight or noon.
+      # A stuck read returns early because the integration never completed.
+      #
+      # Measured over the 10 days to 2026-08-22, 15-minute medians:
+      #   healthy   870 windows, ALL within 608-613 ms   (+/-0.4%, remarkably tight)
+      #   stuck      32 windows, highest 414.5 ms
+      #   timeout     1 window, 3996 ms
+      # Hence a two-sided 500-700 band: 21% clear of the healthy floor, 17% clear
+      # of the worst stuck window, and it still catches the timeout mode above.
+      # One-sided would have missed 2026-08-16's 7,894 and 17,255 ms reads.
+      #
+      # The MEDIAN, not the mean: a handful of bad samples in a window is the
+      # transient the other two rules already handle and it self-recovers. This
+      # rule is for the sustained case, where most of the window is bad. The cost
+      # of that choice is symmetric — after a power cycle the window still holds
+      # the bad samples, so it keeps firing for up to 15 more minutes. Measured
+      # right after the 2026-08-22 fix: recovered reads were 609-611 while the
+      # window median still said 434. Do not read a lingering alert as a failed
+      # repair; check spectrum_read_ms directly.
+      - uid: spectrum-read-time-fault
+        title: Spectrum reads are wrong — AS7341 publishing garbage
+        condition: C
+        for: 5m
+        # OK, unlike the two deadmen either side of it. No data is not wrong data:
+        # silence is deadman-spectrum-stale's job, and firing both for one fault is
+        # how a pager stops being read.
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.device }} 的 AS7341 讀值不可信'
+          description: 'spectrum_read_ms 中位數 {{ printf "%.0f" $values.B.Value }} ms，正常是 610（健康期實測 608–613）。資料還在每 15 秒送，但積分沒跑完，通道會讀出 65535 —— 看起來像被光打滿，其實不是。這種狀態 deadman 抓不到，因為它只看有沒有資料。修法：用 Tapo app 把名為 sensor 的插座（192.168.50.52）關掉再開。判讀細節見 PPFD-CALIBRATION.md 的「韌體設定」。'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 1200
+              to: 0
+            datasourceUid: influxdb-monitor-air
+            model:
+              refId: A
+              datasource:
+                type: influxdb
+                uid: influxdb-monitor-air
+              query: |
+                from(bucket: "sensors")
+                  |> range(start: -15m)
+                  |> filter(fn: (r) => r._measurement == "spectrum" and r.mode == "ambient"
+                       and r._field == "spectrum_read_ms"
+                       and r.device != "sim" and r.device != "staging-01")
+                  |> group(columns: ["device"])
+                  |> median()
+                  // Same three shape rules as every other rule in this file: stamp
+                  // _time at now() so the point lands inside relativeTimeRange, and
+                  // carry the identity as a plain label, never as `_field`.
+                  |> map(fn: (r) => ({ device: r.device, _time: now(), _value: r._value }))
+                  |> group(columns: ["device"])
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              conditions:
+                - evaluator:
+                    # Two-sided: low = integration cut short, high = bus timeout.
+                    type: outside_range
+                    params: [500, 700]
+
       # The last failure class: telemetry that ARRIVES, on time, correctly
       # formatted, and is wrong. No deadman above can see it. On 2026-08-10
       # the BH1750 published 4,840 points topping out at 9.2 lux with the lamp on;
