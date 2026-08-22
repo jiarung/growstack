@@ -394,7 +394,7 @@
   },
   {
    "id": 7,
-   "title": "DLI — daily light integral (mol/m²/day, lux est. — LEGACY)",
+   "title": "DLI — daily light integral (mol/m²/day) — lux 法 vs 光譜法",
    "type": "timeseries",
    "datasource": {
     "type": "influxdb",
@@ -406,7 +406,7 @@
     "x": 12,
     "y": 22
    },
-   "description": "Estimated Daily Light Integral, last 7 days. PPFD ≈ lux/54 (daylight-spectrum approximation — NOT a true PAR measurement; an AS7341 spectral sensor would give real PAR). Integrated per local (Asia/Taipei) day. Underestimates across lux dropouts; today's bar is partial.",
+   "description": "同一件事的兩種算法，放同一個軸上比較 —— 因為它們的**比值**才是現在該看的東西。\n\n**lux/54**（實心）：BH1750 的照度除以 Apogee 日光係數再積分。尺度可疑 —— 54 是為太陽光定的，套在 LED 植物燈上沒有物理依據。但它穩定，而且**這就是燈控實際依據的數字**：`light.py` 的 `todays_dli()` 與 `DLI_TARGET=4.0` 都在這條線上，兩者同一把尺，所以「今天達標沒」這個判斷是自洽的。\n\n**光譜 PPFD**（虛線）：AS7341 八個 PAR 通道積分，物理上才是真正的 PAR。但它對 `CAL` 是純線性的（`DLI = CAL × ∫S dt`），而 CAL 目前還在漂：2026-08 量到 0.00133–0.00195，同一天晨窗與過中天就差 47%。面板現用 07-16 的 0.0017469。\n\n所以現況是反過來的：**lux 法不精確但可靠，光譜法原理正確但暫時不能當絕對值讀。**兩條線的比值近 6 天在 0.50–0.68 之間游走，那個游走本身就是 CAL 尚未定案的證據。詳見 PPFD-CAL-ROUTINE-PLAN.md。",
    "fieldConfig": {
     "defaults": {
      "unit": "none",
@@ -417,7 +417,30 @@
       "lineWidth": 1
      }
     },
-    "overrides": []
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "B"
+      },
+      "properties": [
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "fill": "dash",
+         "dash": [
+          10,
+          10
+         ]
+        }
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       }
+      ]
+     }
+    ]
    },
    "options": {
     "legend": {
@@ -435,54 +458,15 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\", \"device\"])\n  |> yield(name: \"DLI\")"
-    }
-   ]
-  },
-  {
-   "id": 11,
-   "title": "DLI — daily light integral (mol/m²/day, spectrum PPFD — real PAR)",
-   "type": "timeseries",
-   "datasource": {
-    "type": "influxdb",
-    "uid": "influxdb-monitor-air"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 0,
-    "y": 46
-   },
-   "description": "Real-PAR Daily Light Integral, last 7 days: the spectrum PPFD (CAL·Σ(countᵢ/Rᵢ·λᵢ), CAL=0.0017469 at ambient gain 4×) integrated per local (Asia/Taipei) day. Unlike lux/54 it counts the red/blue grow lamp correctly (lux undercounts it ~2–3×). Series by device — represents the PLANT's DLI only once the AS7341 is co-located at livingroom; BLANK while staging-01 is offline / not publishing ambient spectrum. The legacy lux/54 DLI panel is kept alongside for continuity until this one is trusted.",
-   "fieldConfig": {
-    "defaults": {
-     "unit": "none",
-     "decimals": 2,
-     "custom": {
-      "drawStyle": "bars",
-      "fillOpacity": 70,
-      "lineWidth": 1
-     }
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"lux/54（控制器依據）\")"
     },
-    "overrides": []
-   },
-   "options": {
-    "legend": {
-     "displayMode": "list",
-     "placement": "bottom"
-    },
-    "tooltip": {
-     "mode": "single"
-    }
-   },
-   "targets": [
     {
-     "refId": "A",
+     "refId": "B",
      "datasource": {
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\nCAL = 0.0017469\n\nfrom(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and (r._field == \"f415\" or r._field == \"f445\" or r._field == \"f480\" or r._field == \"f515\" or r._field == \"f555\" or r._field == \"f590\" or r._field == \"f630\" or r._field == \"f680\" or r._field == \"saturated\"))\n  |> pivot(rowKey: [\"_time\", \"device\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.f415 and exists r.f445 and exists r.f480 and exists r.f515 and exists r.f555 and exists r.f590 and exists r.f630 and exists r.f680)\n  |> filter(fn: (r) => (not exists r.saturated or r.saturated == 0.0) and r.f415 < 65535.0 and r.f445 < 65535.0 and r.f480 < 65535.0 and r.f515 < 65535.0 and r.f555 < 65535.0 and r.f590 < 65535.0 and r.f630 < 65535.0 and r.f680 < 65535.0)\n  |> map(fn: (r) => ({ _time: r._time, device: r.device, _value: CAL * (r.f415/55.0*415.0 + r.f445/110.0*445.0 + r.f480/210.0*480.0 + r.f515/390.0*515.0 + r.f555/590.0*555.0 + r.f590/840.0*590.0 + r.f630/1350.0*630.0 + r.f680/1070.0*680.0) }))\n  |> group(columns: [\"device\"])\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\", \"device\"])\n  |> yield(name: \"DLI_spectrum\")"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\nCAL = 0.0017469\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and r.device == \"livingroom\"\n       and (r._field == \"f415\" or r._field == \"f445\" or r._field == \"f480\" or r._field == \"f515\"\n         or r._field == \"f555\" or r._field == \"f590\" or r._field == \"f630\" or r._field == \"f680\"\n         or r._field == \"saturated\"))\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.f415 and exists r.f445 and exists r.f480 and exists r.f515\n       and exists r.f555 and exists r.f590 and exists r.f630 and exists r.f680)\n  // 65535 is the I2C read-failure value, not light. Without this the fault mode\n  // renders as a huge PPFD spike and inflates the day's integral.\n  |> filter(fn: (r) => (not exists r.saturated or r.saturated == 0.0)\n       and r.f415 < 65535.0 and r.f445 < 65535.0 and r.f480 < 65535.0 and r.f515 < 65535.0\n       and r.f555 < 65535.0 and r.f590 < 65535.0 and r.f630 < 65535.0 and r.f680 < 65535.0)\n  |> map(fn: (r) => ({ _time: r._time, _value: CAL * (r.f415/55.0*415.0 + r.f445/110.0*445.0\n       + r.f480/210.0*480.0 + r.f515/390.0*515.0 + r.f555/590.0*555.0 + r.f590/840.0*590.0\n       + r.f630/1350.0*630.0 + r.f680/1070.0*680.0) }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"光譜 PPFD (CAL=0.0017469)\")"
     }
    ]
   },
@@ -640,7 +624,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 54
+    "y": 46
    },
    "description": "Spectrum-derived PPFD (line, CAL=0.0017469) with Photone ground-truth readings overlaid as points (coloured by source). A Photone dot sitting off the line = the spectrum CAL's error at that light. Empty until Photone readings are recorded (planned record-photone.sh; see broker/PHOTONE-CAL-PLAN.md).",
    "fieldConfig": {
@@ -711,7 +695,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 62
+    "y": 54
    },
    "description": "Each Photone reading vs the co-timed sensor values stored with it (no dashboard-side time-join): photone / spectrum PPFD / lux÷54, plus k_spec = photone/spectrum (the spectrum CAL correction for that light) and k_lux = photone/(lux÷54). daylight k should be ~1 (validates CAL); lamp k_spec is the unresolved lamp correction. n = paired sample count. Empty until Photone readings are recorded (planned record-photone.sh; see broker/PHOTONE-CAL-PLAN.md).",
    "fieldConfig": {
@@ -750,7 +734,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 70
+    "y": 62
    },
    "description": "Hourly local outdoor weather from Open-Meteo (新北板橋). Precipitation (mm, bars) + cloud cover (%) on the left; shortwave solar radiation (W/m², right axis) is the outdoor driver of indoor DLI. Rainy/cloudy hours → low solar → low DLI — compare against the DLI panels above.",
    "fieldConfig": {
@@ -865,7 +849,7 @@
     "h": 9,
     "w": 24,
     "x": 0,
-    "y": 78
+    "y": 70
    },
    "description": "Weighing is a manual NFC-triggered act, not a continuous signal, so this aggregates to ONE median value per plant per local day rather than to an elastic window — at v.windowPeriod the same plant could show several points on a busy afternoon and none for days, which reads as noise instead of a trend. Daily DLI (right axis, lux estimate — the same figure the light controller tops up against) is overlaid so weight change can be read against the light actually delivered that day. Excludes plant_id=\"unknown\" and non-positive weights; see the table below for tags still needing ./add-tag.sh.",
    "fieldConfig": {
@@ -950,7 +934,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 87
+    "y": 79
    },
    "description": "Every weigh whose tag UID is not in node-red/tag-map.json. The record is never dropped — plant_id becomes \"unknown\" and the raw uid is kept — so this table is the worklist: run ./add-tag.sh <plant-id>, tap the tag, and the next weigh lands on the right plant. Empty is the healthy state.",
    "fieldConfig": {
@@ -989,7 +973,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 95
+    "y": 87
    },
    "fieldConfig": {
     "defaults": {
@@ -1060,7 +1044,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 103
+    "y": 95
    },
    "description": "韌體 5d683f8 加的診斷欄位，目的寫在它自己的註解裡：correlate weak rssi with freezes/gaps。所以這裡不只畫訊號，而是把訊號和發送間隔疊在同一條時間軸上 —— 兩者同時出現異常，才是「WiFi 送出時卡住」的證據。\n\n左軸 RSSI (dBm，取窗內最差值)：> -67 可靠、-67～-80 邊緣、< -80 差。\n右軸 發送間隔 (秒，取窗內最長)：正常 15 秒；抬高 = 那一輪 loop 卡住了。\n\n判讀：間隔尖峰同時伴隨 RSSI 下陷 → 網路送出阻塞；間隔尖峰而 RSSI 平穩 → 卡在別的地方（I2C、SPI、HX711），跟 WiFi 無關。後者正是 2026-08-14 到 08-16 AS7341 掉線時的樣子，發送間隔從 15 秒變成 17.5 秒而訊號完全沒動。\n\n間隔取自 rssi 自己的樣本間距，因為韌體只在 WiFi 連線時才寫這個欄位，等於每次成功發送必然有它。",
    "fieldConfig": {
