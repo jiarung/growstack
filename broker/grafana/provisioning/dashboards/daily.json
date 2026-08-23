@@ -753,7 +753,7 @@
   },
   {
    "id": 3,
-   "title": "DLI per day (lux estimate)",
+   "title": "DLI per day vs 目標 — 還有多少停燈餘裕",
    "type": "timeseries",
    "datasource": {
     "type": "influxdb",
@@ -765,16 +765,66 @@
     "x": 0,
     "y": 51
    },
-   "description": "Daily light integral from the BH1750, lux/54. This is the figure the light controller tops up against (DLI_TARGET, default 4.0), so it is the one to read when asking whether the evening top-up did its job. Absolute scale is not trustworthy — lux/54 is a daylight conversion applied to an LED — so read it relatively.",
+   "description": "Daily light integral from the BH1750, lux/54. This is the figure the light controller tops up against (DLI_TARGET, default 4.0), so it is the one to read when asking whether the evening top-up did its job. Absolute scale is not trustworthy — lux/54 is a daylight conversion applied to an LED — so read it relatively.\n\n橫線是 `DLI_TARGET`（broker/.env，目前 4）。低於目標的長條是橘色，達標是綠色 —— 所以「今天補夠了沒」一眼就看得出來，不必再去對照關燈時刻那張。\n\n**細線是其中免費的日光**（遮燈的 lux_ref 積分）。總量減去它就是燈實際做的工。兩者分開之後才看得出達標是靠天還是靠電。\n\n這張要回答的實際問題是：**今天負擔得起一次停燈校準嗎。** 過中天停燈 30 分鐘約花 0.165 mol（實測燈約 0.33 mol/h），所以長條高出橫線 0.165 以上，那天就有餘裕。\n\n先前根據「每天都跑到 20:30 上限」推論補光是赤字 —— 2026-08-18~23 的實測推翻了它：六天有三天達標。這張面板就是為了不要再用印象判斷這件事。",
    "fieldConfig": {
     "defaults": {
      "unit": "none",
      "custom": {
       "drawStyle": "bars",
-      "fillOpacity": 55
+      "fillOpacity": 55,
+      "thresholdsStyle": {
+       "mode": "line"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "orange",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 4.0
+       }
+      ]
      }
     },
-    "overrides": []
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "B"
+      },
+      "properties": [
+       {
+        "id": "custom.drawStyle",
+        "value": "line"
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       },
+       {
+        "id": "custom.lineWidth",
+        "value": 2
+       },
+       {
+        "id": "custom.thresholdsStyle",
+        "value": {
+         "mode": "off"
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "semi-dark-blue"
+        }
+       }
+      ]
+     }
+    ]
    },
    "options": {
     "legend": {
@@ -793,6 +843,14 @@
       "uid": "influxdb-monitor-air"
      },
      "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"DLI lux est.\")"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\n// lux_ref is the shielded BH1750, so this is daylight alone — the part of the\n// day's total that costs nothing. total minus this is what the lamp had to do.\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux_ref\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"其中免費的日光\")"
     }
    ]
   },
