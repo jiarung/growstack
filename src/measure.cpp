@@ -1,6 +1,7 @@
 #include "measure.h"
 #include "sensors.h"       // hx711WindowStats()
 #include "mqtt_client.h"   // mqttPublishMeasureEvent()
+#include "weight_ref.h"    // cached {sat_g, dry_g} per tag -> the "used %" line
 #include "log.h"
 #include <Adafruit_PN532.h>
 #include <Wire.h>
@@ -81,6 +82,23 @@ void oledBegin() {
     logf("[measure] OLED %s\n", oledOk ? "ready" : "begin FAILED");
 }
 
+// "-165g  used 87%" at y=44 — current weight against the retained watering ref for
+// this tag: grams short of the last full watering, and how much of the observed
+// water span (sat-dry, span>5g guaranteed by the cache) is gone. Drawn only with a
+// calibrated scale — raw counts must never meet a gram baseline — and a cached ref;
+// otherwise the line is simply absent, and the screens look exactly as before.
+void oledRefLine(float w, bool calibrated) {
+    float sat, dry;
+    if (!calibrated || !weightRefLookup(curUid, &sat, &dry)) return;
+    char line[24];
+    if (w > sat) snprintf(line, sizeof(line), "+%.0fg  wet", (double)(w - sat));
+    else snprintf(line, sizeof(line), "-%.0fg  used %.0f%%",
+                  (double)(sat - w), (double)((sat - w) / (sat - dry) * 100.0f));
+    oled.setTextSize(1);
+    oled.setCursor(0, 44);
+    oled.print(line);
+}
+
 // Render the workflow; render on a state change, else throttle to ~3 Hz. Auto-off when empty + idle.
 void oledRender() {
     if (!oledOk) return;
@@ -123,18 +141,20 @@ void oledRender() {
         oled.print("Tag "); oled.println(curUid);
         oled.setCursor(0, 22); oled.setTextSize(2);
         if (sw.valid) { oled.print(sw.mean_g, 1); oled.println(" g"); } else oled.println("-- g");
+        if (sw.valid) oledRefLine(sw.mean_g, sw.calibrated);
         oled.setTextSize(1); oled.setCursor(0, 54); oled.print("stabilizing r=");
         if (sw.valid) oled.print(sw.range_g, 1);
     } else if (mstate == M_AWAIT_ACK) {
         oled.print("Tag "); oled.println(curUid);
         oled.setCursor(0, 22); oled.setTextSize(2); oled.print(lastWeight, 1); oled.println(" g");
+        oledRefLine(lastWeight, sw.calibrated);
         oled.setTextSize(1); oled.setCursor(0, 54); oled.print("sending");
         for (int i = 0; i < retries; i++) oled.print('.');
     } else {  // M_DONE
         oled.print("Tag "); oled.println(curUid);
         oled.setCursor(0, 22); oled.setTextSize(2);
         if (doneResult == R_UNSTABLE) oled.println("UNSTABLE");
-        else { oled.print(lastWeight, 1); oled.println(" g"); }
+        else { oled.print(lastWeight, 1); oled.println(" g"); oledRefLine(lastWeight, sw.calibrated); }
         oled.setTextSize(1); oled.setCursor(0, 54);
         oled.println(doneResult == R_SENT   ? "sent OK - remove tag" :
                      doneResult == R_UNSENT ? "UNSENT - remove tag"  : "unstable - remove tag");

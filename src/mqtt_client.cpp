@@ -10,6 +10,7 @@
 #include "secrets.h"
 #include "log.h"
 #include "measure.h"
+#include "weight_ref.h"
 
 namespace {
 
@@ -46,6 +47,11 @@ char reflectAvailTopic[96]  = {0};
 // Measurement station: ESP publishes event_raw; Node-RED (Phase 3) enriches + acks.
 char measureEventTopic[96]  = {0};   // ESP -> monitor-air/<dev>/measure/event_raw
 char measureAckTopic[96]    = {0};   // Node-RED -> monitor-air/<dev>/measure/ack  (device subscribes)
+
+// Per-plant watering references (publish-weight-ref.sh -> retained, GLOBAL topic —
+// not per-device, so staging and production boards share the same refs).
+constexpr char WEIGHT_REF_PREFIX[] = "monitor-air/ref/weight/";
+constexpr char WEIGHT_REF_FILTER[] = "monitor-air/ref/weight/+";
 
 enum ReflectState { REFLECT_IDLE, REFLECT_MEASURING };
 ReflectState reflectState = REFLECT_IDLE;
@@ -99,6 +105,12 @@ void onMqttMessage(char* t, uint8_t* payload, unsigned int len) {
     }
     if (strcmp(t, measureAckTopic) == 0) {
         measureOnAck(payload, len);  // bounded-copy + flag; matched in measureLoop()
+        return;
+    }
+    if (strncmp(t, WEIGHT_REF_PREFIX, sizeof(WEIGHT_REF_PREFIX) - 1) == 0) {
+        // Parse-on-arrival, like the acks: a (re)connect delivers ~17 retained refs
+        // in one client.loop() batch, so a single-slot mailbox would drop 16 of them.
+        weightRefOnMessage(t + sizeof(WEIGHT_REF_PREFIX) - 1, payload, len);
         return;
     }
 }
@@ -196,6 +208,7 @@ void handleReflectCmd(const char* raw) {
 void onConnected() {
     client.subscribe(reflectCmdTopic, 1);
     client.subscribe(measureAckTopic, 1);               // measurement-station acks
+    client.subscribe(WEIGHT_REF_FILTER, 1);             // retained watering refs -> cache
     client.publish(reflectAvailTopic, "online", true);  // retained
     publishReflectState();                              // current state (idle on boot)
 }
