@@ -16,6 +16,7 @@ static inline bool finiteF(float v) {
 #include "as7341_diag.h"    // serial 'd' — failure-state forensic over direct Wire
 #include "mqtt_client.h"    // reflectBusy(): the forensic must not preempt a reflect read
 #include "measure.h"        // measureBusy(): nor stall a weigh onto a stale HX711 window
+#include "leaf_probe.h"     // serial 'p' — leaf-absorption checker TIA readout (mV)
 #include <AS726X.h>
 #include <HX711.h>
 #include <Preferences.h>
@@ -124,6 +125,7 @@ bool sensorsBegin() {
     }
 
     hx711Begin();  // load cell (own GPIOs; no presence check — is_ready() gates reads)
+    leafProbeBegin();  // leaf-absorption checker: LED pin low, ADC needs no setup
 
     return bmeOk || bh1750Ok || bh1750RefOk || as7341Ok || as7263Ok;
 }
@@ -321,6 +323,14 @@ void hx711SerialCmd() {
                     logf("[health] bme=%d lux=%d lux_ref=%d as7341=%d as7263=%d hx711=%d i2c_n=%d read_ms=%.0f\n",
                          (int)sh.bme, (int)sh.lux, (int)sh.lux_ref, (int)sh.as7341, (int)sh.as7263,
                          (int)sh.hx711, sh.i2c_n, sh.spectrum_read_ms);
+                }
+                else if (buf[0] == 'p') {   // leaf-probe TIA output (BPW34+LM358 on GPIO8), in mV
+                    logf("[leaf] %lu mV\n", (unsigned long)leafProbeMilliVolts());
+                }
+                else if (buf[0] == 'L') {   // leaf-probe LED: L1 on / L0 off (GPIO7, 940nm via 150R)
+                    bool on = buf[1] == '1';
+                    leafLedSet(on);
+                    logf("[leaf] LED %s\n", on ? "ON" : "off");
                 }
                 else if (buf[0] == 'd') {   // AS7341 failure-state forensic (run DURING the bad state)
                     if (reflectBusy())      logln("[diag] busy: reflect in progress — try again");
