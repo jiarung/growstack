@@ -32,6 +32,7 @@ constexpr uint8_t I2C_SCL = 18;
 // but shielded from the grow lamp -> lux_ref; lux - lux_ref ≈ the lamp's share).
 constexpr uint8_t BH1750_ADDR_MAIN = 0x23;
 constexpr uint8_t BH1750_ADDR_REF  = 0x5C;
+constexpr uint8_t AS7341_ADDR      = 0x39;
 
 Adafruit_BME680 bme;
 BH1750 lightMeter;     // primary    @ 0x23 -> lux
@@ -133,13 +134,36 @@ static bool i2cPresent(uint8_t addr) {
     return Wire.endTransmission() == 0;
 }
 
+// Single source of truth for "is the AS7341 answering", shared by EVERY read path
+// (ambient, reflect one-shot, burst) — a per-path static would let a recovery slip
+// past whichever path wasn't the first to notice (e.g. a PUBLISH_AMBIENT_SPECTRUM=0
+// build that only ever reflects). On the NACK->ACK transition the chip has been
+// through a power event and its registers are NOT trusted: the ambient profile is
+// re-asserted and the LED forced off — a reflect-lit LED must not survive recovery.
+static bool as7341Responsive = true;
+static bool as7341Gate() {
+    if (!i2cPresent(AS7341_ADDR)) {
+        if (as7341Responsive) logln("[sensors] AS7341 off the bus — reads gated until it answers");
+        as7341Responsive = false;
+        return false;
+    }
+    if (!as7341Responsive) {
+        logln("[sensors] AS7341 back on the bus — re-asserting config");
+        as7341.setATIME(100);
+        as7341.setASTEP(999);       // ambient profile (mirrors sensorsBegin)
+        as7341.enableLED(false);
+        as7341Responsive = true;
+    }
+    return true;
+}
+
 // Re-probe every sensor's LIVE state (not the boot flags) so a mid-run dropout is visible.
 SensorHealth sensorsHealth() {
     SensorHealth h;
     h.bme     = bmeAddr ? i2cPresent(bmeAddr) : (i2cPresent(0x77) || i2cPresent(0x76));
     h.lux     = i2cPresent(BH1750_ADDR_MAIN);
     h.lux_ref = i2cPresent(BH1750_ADDR_REF);
-    h.as7341  = i2cPresent(0x39);
+    h.as7341  = i2cPresent(AS7341_ADDR);
     h.as7263  = i2cPresent(0x49);
     h.hx711   = (hxCount > 0) && (millis() - hxLastMs) <= HX711_STALE_MS;
     // Count only KNOWN devices (5 sensors + OLED 0x3C), NOT a full 1..126 scan: on a wedged
@@ -363,7 +387,9 @@ bool readNirBlocking(uint16_t* buf) {
 }  // namespace
 
 bool reflectStart() {
-    if (!as7341Ok) { rphase = RP_IDLE; return false; }  // no visible sensor -> can't measure
+    // Gate + recovery: a NACKing chip walked through the ~25-transaction reflect
+    // sequence stalls the loop for tens of seconds per phase — fail as "no_sensor".
+    if (!as7341Ok || !as7341Gate()) { rphase = RP_IDLE; return false; }
     rStart = millis();
     as7341.setGain(REFLECT_GAIN);         // reclaim 64x from ambient's low gain
     as7341.enableLED(false);              // dark: LED off (both sensors)
@@ -376,6 +402,11 @@ bool reflectStart() {
 
 ReflectStatus reflectPoll(ReflectReading* out) {
     if (!as7341Ok || rphase == RP_IDLE) return REFLECT_NA;
+    // Mid-flight dropout: the driver's data-ready check misreads a NACK as "ready"
+    // and would walk the channel-read + SMUX sequence on Wire timeouts. Probe first
+    // and bail WITHOUT any as7341.* cleanup — on a NACKing chip there is no LED to
+    // turn off, and every driver call is another walk through the timeouts.
+    if (!as7341Gate()) { rphase = RP_IDLE; return REFLECT_NA; }
     bool timeout = (millis() - rPhaseStart > REFLECT_PHASE_TIMEOUT_MS);
 
     if (rphase == RP_DARK) {
@@ -438,7 +469,7 @@ uint32_t bSampleStart = 0;   // current lit read start (for read_ms)
 }  // namespace
 
 bool reflectBurstStart() {
-    if (!as7341Ok) { bphase = BURST_IDLE; return false; }
+    if (!as7341Ok || !as7341Gate()) { bphase = BURST_IDLE; return false; }
     as7341.setGain(REFLECT_GAIN);   // reclaim 64x from ambient's low gain
     as7341.enableLED(false);   // dark0: LED off
     as7341.startReading();
@@ -449,6 +480,7 @@ bool reflectBurstStart() {
 
 ReflectStatus reflectBurstPoll(ReflectReading* out) {
     if (!as7341Ok || bphase == BURST_IDLE) return REFLECT_NA;
+    if (!as7341Gate()) { bphase = BURST_IDLE; return REFLECT_NA; }   // see reflectPoll
 
     if (bphase == BURST_DARK0) {
         if (as7341.checkReadingProgress()) {
@@ -495,30 +527,81 @@ void reflectBurstNext() {
 }
 
 void reflectBurstEnd() {
-    as7341.enableLED(false);
+    // LED-off only if the chip answers: a NACKing chip has no LED on, and the driver
+    // call would just walk Wire timeouts. Recovery re-asserts LED-off regardless.
+    if (i2cPresent(AS7341_ADDR)) as7341.enableLED(false);
     bphase = BURST_IDLE;
 }
 
 void reflectAbort() {
-    as7341.enableLED(false);
+    if (i2cPresent(AS7341_ADDR)) as7341.enableLED(false);
     rphase = RP_IDLE;
     bphase = BURST_IDLE;
 }
 
+// Containment for the two OBSERVED AS7341 failure signatures (root cause is electrical
+// and under investigation — this only keeps a sick chip from poisoning the station):
+//
+// Mode B, off the bus (address NACK): readAllChannels must not run. The driver's
+// data-ready check misreads an I2C failure as "ready" (BusIO returns 0xFFFFFFFF), so
+// instead of hanging it walks the whole sequence with per-transaction timeouts —
+// 2026-08-25: spectrum_read_ms=16190, freezing HX711/measure/OLED every publish cycle.
+// A ~1ms address probe (same op the health topic uses) gates the read.
+//
+// Mode A, answering but reset/latched (nonsense values, read_ms 220-471 vs ~610
+// healthy): the completed read's wall-time is checked against what ATIME=100/ASTEP=999
+// predicts (~562ms integration + overhead). Off-window -> reading invalidated, and the
+// ambient config is re-asserted once per offence: if the chip brownout-reset to POR
+// defaults, that recovers it by the next cycle; if it is latched, writes are futile but
+// each costs ~1ms and the bad data stays quarantined either way.
+//
+// The window judges data plausibility AFTER the read; the deadline bounds the read
+// ITSELF — the driver's own readAllChannels waits on AVALID forever, so a chip that
+// ACKs but never completes an integration would hang the loop for good. read_ms is
+// wall-clock, so a busy system (OTA, WiFi) can push a legitimate read past the max:
+// that costs one dropped-but-honest sample, the right trade for a quarantine.
+constexpr float    SPECTRUM_READ_MIN_MS      = 500.0f;
+constexpr float    SPECTRUM_READ_MAX_MS      = 1200.0f;
+constexpr uint32_t SPECTRUM_READ_DEADLINE_MS = 3000;
+
 SpectrumReading spectrumRead() {
     SpectrumReading s;
     if (!as7341Ok) return s;  // fail-open: valid stays false
+    if (!as7341Gate()) {      // Mode B gate (+ config recovery on the way back up)
+        lastSpectrumReadMs = NAN;   // health shows "no read", not a stale-looking number
+        return s;
+    }
 
-    // Blocking ~0.5s (two SMUX cycles). Fine at the publish cadence; bounding it
-    // is a hardening item (matters mainly if the bus wedges or for reflectance).
-    // Time it: a creeping read_ms is an early warning of a degrading I2C connection.
+    // Same two-SMUX-cycle sequence as the driver's readAllChannels, via its
+    // non-blocking API: a deadline instead of the forever-wait, and a per-poll
+    // address probe so a mid-read dropout exits on the next poll instead of
+    // walking the rest of the sequence on Wire timeouts (the observed 16s stall).
     uint16_t ch[12];
     as7341.setGain(AMBIENT_GAIN);   // low gain: daylight would saturate reflect's 64x
     uint32_t t0 = millis();
-    bool ok = as7341.readAllChannels(ch);
+    as7341.startReading();
+    bool ok = false;
+    while (millis() - t0 < SPECTRUM_READ_DEADLINE_MS) {
+        if (!i2cPresent(AS7341_ADDR)) { as7341Responsive = false; break; }
+        if (as7341.checkReadingProgress()) { ok = true; break; }
+        delay(2);
+    }
     s.read_ms = (float)(millis() - t0);
     lastSpectrumReadMs = s.read_ms;  // bus-health canary for the health topic (creeping = degrading I2C)
-    if (!ok) return s;  // read failed -> invalid
+    if (!ok) {
+        logf("[sensors] AS7341 ambient read aborted after %.0fms (%s)\n", s.read_ms,
+             as7341Responsive ? "deadline" : "dropped off the bus");
+        return s;
+    }
+    as7341.getAllChannels(ch);
+
+    if (s.read_ms < SPECTRUM_READ_MIN_MS || s.read_ms > SPECTRUM_READ_MAX_MS) {   // Mode A gate
+        logf("[sensors] AS7341 read_ms=%.0f outside [%.0f,%.0f] — reading dropped, config re-asserted\n",
+             s.read_ms, SPECTRUM_READ_MIN_MS, SPECTRUM_READ_MAX_MS);
+        as7341.setATIME(100);
+        as7341.setASTEP(999);
+        return s;   // valid stays false: wrongly-timed data never reaches the wire
+    }
 
     // readAllChannels fills 12 slots; [4] and [5] are duplicate ADCs — skip them.
     s.f415 = ch[0];  s.f445 = ch[1];  s.f480 = ch[2];  s.f515 = ch[3];
