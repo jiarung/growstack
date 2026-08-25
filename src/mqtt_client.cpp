@@ -11,6 +11,7 @@
 #include "log.h"
 #include "measure.h"
 #include "weight_ref.h"
+#include "as7341_diag.h"
 
 namespace {
 
@@ -52,6 +53,14 @@ char measureAckTopic[96]    = {0};   // Node-RED -> monitor-air/<dev>/measure/ac
 // not per-device, so staging and production boards share the same refs).
 constexpr char WEIGHT_REF_PREFIX[] = "monitor-air/ref/weight/";
 constexpr char WEIGHT_REF_FILTER[] = "monitor-air/ref/weight/+";
+
+// Remote forensics: publish "as7341" to diag/cmd and every [diag] line comes back on
+// diag/out — so a failure can be captured without touching the station (this failure
+// mode leaves WiFi alive; power must NOT be cycled before the evidence is taken).
+char diagCmdTopic[96] = {0};   // monitor-air/<dev>/diag/cmd  (device subscribes)
+char diagOutTopic[96] = {0};   // monitor-air/<dev>/diag/out
+volatile bool diagPending = false;
+char diagCmd[24] = {0};        // requested diag name, bounded-copied in the callback
 
 enum ReflectState { REFLECT_IDLE, REFLECT_MEASURING };
 ReflectState reflectState = REFLECT_IDLE;
@@ -113,6 +122,43 @@ void onMqttMessage(char* t, uint8_t* payload, unsigned int len) {
         weightRefOnMessage(t + sizeof(WEIGHT_REF_PREFIX) - 1, payload, len);
         return;
     }
+    if (strcmp(t, diagCmdTopic) == 0) {
+        // Flag only — the forensic blocks ~1s and must NOT run inside client.loop().
+        if (diagPending) return;
+        size_t n = len < sizeof(diagCmd) - 1 ? len : sizeof(diagCmd) - 1;
+        memcpy(diagCmd, payload, n);
+        diagCmd[n] = '\0';
+        diagPending = true;
+        return;
+    }
+}
+
+// Drain a queued diag request. Runs from mqttLoop (main loop context, connected).
+// A forensic is evidence-at-a-moment, not a job: if the sensor is busy the request is
+// REFUSED (told to retry), never queued — a run minutes after the trigger would rewrite
+// config/SMUX and capture a state that no longer matches what the operator saw.
+void diagDrain() {
+    if (!diagPending) return;
+    diagPending = false;
+    auto reply = [](const char* msg) { logf("%s\n", msg); client.publish(diagOutTopic, msg, false); };
+
+    if (strcmp(diagCmd, "as7341") != 0) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "[diag] unknown cmd \"%s\" (try: as7341)", diagCmd);
+        reply(msg);
+        return;
+    }
+    if (reflectBusy())  { reply("[diag] busy: reflect measurement in progress — retry"); return; }
+    if (measureBusy())  { reply("[diag] busy: weigh in progress — retry"); return; }
+
+    // Cooldown: the trigger topic is open on the LAN and the run blocks the main loop —
+    // repeat-fire must not be able to starve measurement.
+    static uint32_t lastRun = 0;
+    uint32_t now = millis();
+    if (lastRun != 0 && now - lastRun < 30000) { reply("[diag] cooldown (30s) — retry"); return; }
+    lastRun = now;
+
+    as7341DiagRun();   // blocking ~1s normally; the MQTT sink self-disables on first failure
 }
 
 // reflect/state: QoS0 RETAINED, current device state only (idle|measuring).
@@ -209,6 +255,7 @@ void onConnected() {
     client.subscribe(reflectCmdTopic, 1);
     client.subscribe(measureAckTopic, 1);               // measurement-station acks
     client.subscribe(WEIGHT_REF_FILTER, 1);             // retained watering refs -> cache
+    client.subscribe(diagCmdTopic, 1);                  // remote forensic trigger
     client.publish(reflectAvailTopic, "online", true);  // retained
     publishReflectState();                              // current state (idle on boot)
 }
@@ -258,6 +305,8 @@ void mqttSetup() {
     snprintf(reflectAvailTopic,  sizeof(reflectAvailTopic),  "monitor-air/%s/reflect/availability", MQTT_DEVICE_ID);
     snprintf(measureEventTopic,  sizeof(measureEventTopic),  "monitor-air/%s/measure/event_raw", MQTT_DEVICE_ID);
     snprintf(measureAckTopic,    sizeof(measureAckTopic),    "monitor-air/%s/measure/ack", MQTT_DEVICE_ID);
+    snprintf(diagCmdTopic,       sizeof(diagCmdTopic),       "monitor-air/%s/diag/cmd", MQTT_DEVICE_ID);
+    snprintf(diagOutTopic,       sizeof(diagOutTopic),       "monitor-air/%s/diag/out", MQTT_DEVICE_ID);
     snprintf(clientId, sizeof(clientId), "monitor-air-%s", MQTT_DEVICE_ID);
     configValid = true;
 
@@ -276,6 +325,7 @@ void mqttLoop() {
 
     if (client.connected()) {
         client.loop();  // keeps keepalive/PINGREQ alive between publishes
+        diagDrain();    // AFTER loop: a queued forensic runs in main-loop context
         return;
     }
 
@@ -288,6 +338,11 @@ void mqttLoop() {
 
 bool mqttConnected() {
     return configValid && client.connected();
+}
+
+bool mqttPublishDiagLine(const char* line) {
+    if (!mqttConnected()) return false;   // serial sink still has the line
+    return client.publish(diagOutTopic, line, false);  // QoS0, not retained
 }
 
 bool mqttPublishMeasureEvent(const char* json) {

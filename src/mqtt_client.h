@@ -38,3 +38,7 @@ bool mqttPublishMeasureEvent(const char* json);
 // per-sensor presence as 1.0/0.0 floats + i2c_n + spectrum_read_ms (omitted if NaN) + reset reason,
 // so the monitoring host can alert on a silent sensor dropout. Returns true if accepted.
 bool mqttPublishHealth(const SensorHealth& h, bool pn532, const char* resetReason);
+
+// Publish one line of forensic output to monitor-air/<device>/diag/out (QoS 0, not
+// retained). No-op when disconnected — the serial sink still has every line.
+bool mqttPublishDiagLine(const char* line);

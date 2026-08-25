@@ -176,6 +176,8 @@ void measureOnAck(const uint8_t* payload, unsigned int len) {   // MQTT dispatch
 
 bool measurePn532Ok() { return pn532Ok; }  // live presence for the health topic (PN532 is on SPI)
 
+bool measureBusy() { return mstate == M_STABILIZING || mstate == M_AWAIT_ACK; }
+
 void measureBegin() {
     oledBegin();
     nfc.begin();

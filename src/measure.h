@@ -16,3 +16,8 @@ void measureOnAck(const uint8_t* payload, unsigned int len);
 // Live PN532 presence (was getFirmwareVersion() OK at begin). For the health topic; the PN532 is
 // on SPI, not I2C, so it can't be probed via the I2C bus scan.
 bool measurePn532Ok();
+
+// True while a weigh is actively depending on fresh HX711 samples (STABILIZING/AWAIT_ACK).
+// A blocking diagnostic paused here would let the stability gate settle on a stale window
+// and report a pre-pause weight — callers must refuse to block while this is true.
+bool measureBusy();

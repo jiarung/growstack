@@ -13,6 +13,9 @@ static inline bool finiteF(float v) {
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
 #include <Adafruit_AS7341.h>
+#include "as7341_diag.h"    // serial 'd' — failure-state forensic over direct Wire
+#include "mqtt_client.h"    // reflectBusy(): the forensic must not preempt a reflect read
+#include "measure.h"        // measureBusy(): nor stall a weigh onto a stale HX711 window
 #include <AS726X.h>
 #include <HX711.h>
 #include <Preferences.h>
@@ -294,6 +297,11 @@ void hx711SerialCmd() {
                     logf("[health] bme=%d lux=%d lux_ref=%d as7341=%d as7263=%d hx711=%d i2c_n=%d read_ms=%.0f\n",
                          (int)sh.bme, (int)sh.lux, (int)sh.lux_ref, (int)sh.as7341, (int)sh.as7263,
                          (int)sh.hx711, sh.i2c_n, sh.spectrum_read_ms);
+                }
+                else if (buf[0] == 'd') {   // AS7341 failure-state forensic (run DURING the bad state)
+                    if (reflectBusy())      logln("[diag] busy: reflect in progress — try again");
+                    else if (measureBusy()) logln("[diag] busy: weigh in progress — try again");
+                    else as7341DiagRun();
                 }
             }
             len = 0; ovf = false;
