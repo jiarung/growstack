@@ -4,6 +4,12 @@
 #   ./add-tag.sh cactus-14              # tap the tag when prompted (uid read off MQTT)
 #   ./add-tag.sh cactus-16 cactus-17    # several: it prompts for each in turn
 #   ./add-tag.sh 00A8635C cactus-14     # or give the uid yourself (one plant only)
+#   WAIT=900 ./add-tag.sh cactus-16     # longer than the default 5 minutes
+#
+# WAIT is a CEILING per tap, not a delay — a tap ends the wait immediately. It
+# defaults to 5 minutes because the walk to the pots is the slow part and it
+# happens once; taps after the first are seconds apart. 60s was the old default
+# and it was shorter than the walk.
 #
 # Binding several tags is one command, not one console trip per pot: it asks for
 # each id in order and waits for that tag's tap. Every pairing is confirmed at the
@@ -64,7 +70,8 @@ for plant in "${PLANTS[@]}"; do
   # still acks and records the measurement as usual (it'll log plant_id=unknown once).
   if [ -z "$uid" ]; then
     echo
-    echo "==> $plant: tap its NFC tag on the station now (waiting ${WAIT:=60}s)..."
+    echo "==> $plant: tap its NFC tag on the station now"
+    echo "    (waiting up to $(( ${WAIT:=300} / 60 ))m — override with WAIT=<seconds>)"
     err="$(mktemp)"
     evt="$(docker compose exec -T mosquitto \
              mosquitto_sub -t 'monitor-air/+/measure/event_raw' -C 1 -W "$WAIT" 2>"$err")" || true
