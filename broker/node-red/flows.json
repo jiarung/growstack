@@ -203,6 +203,11 @@
     "type": "str"
    },
    {
+    "label": "cactus-15b",
+    "value": "cactus-15b",
+    "type": "str"
+   },
+   {
     "label": "white-ref",
     "value": "white-ref",
     "type": "str"
