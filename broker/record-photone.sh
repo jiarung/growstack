@@ -13,10 +13,17 @@
 # v2 (k-model Phase A): `source` is DERIVED from the actual lamp state at the
 # measurement instant (Influx light.on lookback; seed rows are trusted plug
 # observations) × solar altitude — not typed, not inferred from the clock.
-# `--source` is now an override that must either match the derivation or carry
-# an UNKNOWN lamp state; overrides are flagged on the point. Placement SOP is
-# implied by source: daylight = Photone at the lux_ref sensor (colocated);
-# lamp/mixed = at the marked canopy spot.
+# `--source` must match the derivation, with exactly two exceptions:
+#   (a) lamp state UNKNOWN — --source is then required and flagged
+#       source_override=1;
+#   (b) derived mixed + --source daylight — the REF-ANCHOR refinement (not an
+#       override, not flagged): the daylight field measured at the lux_ref spot,
+#       which never sees the grow lamp. The row is tagged daylight with
+#       lamp_state=1 kept truthful; its lamp-lit fields (lux_at, channels)
+#       become -1 sentinels, so it carries lux_ref evidence only.
+# Any other mismatch aborts. Placement SOP is implied by source: daylight =
+# Photone at the lux_ref sensor (colocated); lamp/mixed = at the marked canopy
+# spot.
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -36,15 +43,17 @@ REQUIRED:
 
 OPTIONAL:
   --lux <v>         Photone lux reading (preferred estimator input for luxScale)
-  --ref-pair        the Photone is at the lux_ref spot. lux_ref NEVER sees the grow
-                    lamp (system invariant: sensors.h / FIRMWARE.md / 遮燈 DLI), so
-                    this pairing is valid in ANY daytime, lamp on or off. Under
-                    lamp-on (mixed) the row carries REF evidence only: lux_at and
-                    the 8 channels are lamp-lit and stored as -1 sentinels.
-                    Requires --lux and daylight (rejected at night).
-  --source <s>      OVERRIDE the derived source (daylight|lamp|mixed). Refused if
-                    it contradicts a known lamp state; required if lamp state is
-                    UNKNOWN. Overrides are flagged (source_override=1).
+  --source <s>      daylight | lamp | mixed. Normally derived — pass it only for:
+                    (a) lamp state UNKNOWN: required, flagged source_override=1;
+                    (b) REF ANCHOR under a lit lamp: `--source daylight` while the
+                    derivation says mixed = "Photone at the lux_ref spot, measuring
+                    the daylight field". lux_ref never sees the grow lamp (system
+                    invariant: sensors.h / FIRMWARE.md / 遮燈 DLI), so this pairing
+                    is valid any daytime; the lamp-lit streams (lux_at + channels)
+                    are stored as -1 sentinels and the row carries ref evidence
+                    only (needs --lux; lamp_state=1 on the row keeps the room
+                    context truthful). Any other mismatch with the derivation
+                    aborts.
   --device <name>   sensor device to pair with           (default: livingroom)
   --at <t>          when taken (window ±2m): now | -8m | "YYYY-MM-DD HH:MM" (Taipei)
                     | RFC3339 with Z (UTC). bare/no-zone time = Taipei.  (default: now)
@@ -69,13 +78,12 @@ EOF
 # ---- defaults / args ----
 PPFD=""; SOURCE=""; LUX=""; DEVICE="livingroom"; AT="now"; NOTE=""
 GAIN="4x"; TINT_MS="280.78"; CAL="0.0017469"; WINDOW_MIN="2"; DRY_RUN=0; SELF_CHECK=0
-CONFIG_OVERRIDE=0; REF_PAIR=0
+CONFIG_OVERRIDE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --ppfd)      PPFD="${2:?--ppfd needs a value}"; shift 2;;
     --source)    SOURCE="${2:?--source needs a value}"; shift 2;;
     --lux)       LUX="${2:?--lux needs a value}"; shift 2;;
-    --ref-pair)  REF_PAIR=1; shift;;
     --device)    DEVICE="${2:?--device needs a value}"; shift 2;;
     --at)        AT="${2:?--at needs a value}"; shift 2;;
     --note)      NOTE="${2:?--note needs a value}"; shift 2;;
@@ -98,7 +106,6 @@ ENV_LIGHT_LOCATION="$(grep -E '^LIGHT_LOCATION=' "$DIR/.env" 2>/dev/null | head 
 PPFD="$PPFD" SOURCE="$SOURCE" LUX="$LUX" DEVICE="$DEVICE" AT="$AT" NOTE="$NOTE" \
 GAIN="$GAIN" TINT_MS="$TINT_MS" CAL="$CAL" WINDOW_MIN="$WINDOW_MIN" \
 DRY_RUN="$DRY_RUN" SELF_CHECK="$SELF_CHECK" CONFIG_OVERRIDE="$CONFIG_OVERRIDE" \
-REF_PAIR="$REF_PAIR" \
 ENV_LIGHT_LOCATION="$ENV_LIGHT_LOCATION" DIR="$DIR" INFLUX_TOKEN="$TOKEN" python3 - <<'PY'
 import os, sys, json, math, subprocess, csv, io, statistics
 from collections import Counter
@@ -157,9 +164,9 @@ def streams_of(n_spec, n_lux, lux_cv, config_split, n_ref, ref_cv, ref_only=Fals
     the stability proxy for the plant-position field, which the colocated
     AS7341 shares (spectrum has no CV of its own), so instability there
     refuses the spectrum stream too. A config change mid-window poisons only
-    the spectrum identity. ref_only (ref-pair under lamp-on): the lamp-lit
-    streams carry no daylight evidence regardless of their quality.
-    paired = any stream stands."""
+    the spectrum identity. ref_only (daylight recorded under a lit lamp — the
+    ref-anchor row): the lamp-lit streams carry no daylight evidence
+    regardless of their quality. paired = any stream stands."""
     lux_stable = lux_cv <= MAX_CV
     spec_ok = n_spec >= MIN_N and not config_split and lux_stable
     lux_ok  = n_lux >= MIN_N and lux_stable
@@ -168,19 +175,23 @@ def streams_of(n_spec, n_lux, lux_cv, config_split, n_ref, ref_cv, ref_only=Fals
         spec_ok = lux_ok = False
     return (spec_ok or lux_ok or ref_ok), spec_ok, lux_ok, ref_ok
 
-def refpair_route(source, has_photone_lux):
-    """--ref-pair semantics -> (reject_reason|None, ref_only).
+def reconcile(derived, source_arg, has_lux):
+    """(derived source, --source arg, has Photone lux) -> (source, ref_only, err).
 
-    lux_ref NEVER sees the grow lamp (system invariant: sensors.h:14,
-    FIRMWARE.md, the 遮燈 DLI ledger integrates lux_ref through lamp hours), so
-    a Photone reading at the ref spot is daylight evidence regardless of lamp
-    state. Under lamp-on (source=mixed) the OTHER streams (main lux, AS7341)
-    ARE lamp-lit — the row must carry ref evidence only. Pure (selftested)."""
-    if not has_photone_lux:
-        return "--ref-pair needs --lux (the pairing IS Photone lux ÷ lux_ref)", False
-    if source == "lamp":
-        return "ref pairing needs daylight — the ref spot sees no lamp light", False
-    return None, source == "mixed"
+    source names the MEASURED FIELD; placement is its function (blueprint:
+    daylight = Photone at the ref spot — no separate position/flag exists).
+    One refinement is legal: derived mixed + --source daylight = the daylight
+    field measured at the lamp-free ref spot (lux_ref never sees the grow lamp
+    — system invariant: sensors.h:14, FIRMWARE.md, the 遮燈 DLI ledger). Such a
+    row is demoted to ref-only evidence; the room context stays truthful via
+    lamp_state=1 on the row. Any other mismatch aborts (err="contradiction").
+    err in {None, "need-lux", "contradiction"}. Pure (selftested)."""
+    if not source_arg or source_arg == derived:
+        return derived, False, None
+    if derived == "mixed" and source_arg == "daylight":
+        if not has_lux: return None, False, "need-lux"
+        return "daylight", True, None
+    return None, False, "contradiction"
 
 def derive_source(lamp_state, sun_alt):
     """Blueprint source table. Returns (source|None, reject_reason|None).
@@ -239,14 +250,33 @@ if os.environ["SELF_CHECK"] == "1":
         "ref-only demotes the lamp-lit streams regardless of their quality"
     assert streams_of(5, 5, 0.05, False, 2, 0.0, ref_only=True)[0] is False, \
         "ref-only with a bad ref stream has no evidence at all"
-    # ref-pair routing: lamp state must not gate the ref target (lux_ref never
-    # sees the lamp); lamp-on daytime = ref evidence only; night = nothing there
-    assert refpair_route("daylight", True) == (None, False), "daylight ref-pair = normal row"
-    assert refpair_route("mixed", True)    == (None, True),  "lamp-on daytime -> ref-only row"
-    assert refpair_route("lamp", True)[0] is not None,  "night ref-pair must reject"
-    assert refpair_route("mixed", False)[0] is not None, "ref-pair without --lux must reject"
+    # source reconciliation — the FULL 3×4 decision table (derived × --source):
+    # matching or absent --source passes through; the ONE legal refinement is
+    # derived mixed + --source daylight (= ref anchor, the ref spot never sees
+    # the lamp); everything else contradicts and aborts. The UNKNOWN branch
+    # lives before reconcile (derive_source(-1,·)=(None,None), asserted above;
+    # the inline require---source/override path is integration-tested).
+    CONTRA = (None, False, "contradiction")
+    RECON_TABLE = {
+        ("daylight", ""):         ("daylight", False, None),
+        ("daylight", "daylight"): ("daylight", False, None),
+        ("daylight", "lamp"):     CONTRA,
+        ("daylight", "mixed"):    CONTRA,
+        ("lamp", ""):             ("lamp", False, None),
+        ("lamp", "lamp"):         ("lamp", False, None),
+        ("lamp", "daylight"):     CONTRA,   # no daylight field at night
+        ("lamp", "mixed"):        CONTRA,
+        ("mixed", ""):            ("mixed", False, None),
+        ("mixed", "mixed"):       ("mixed", False, None),
+        ("mixed", "daylight"):    ("daylight", True, None),  # ref-anchor refinement
+        ("mixed", "lamp"):        CONTRA,
+    }
+    for (d, a), want in RECON_TABLE.items():
+        assert reconcile(d, a, True) == want, f"reconcile({d!r}, {a!r}) != {want}"
+    assert reconcile("mixed", "daylight", False) == (None, False, "need-lux"), \
+        "ref anchor needs --lux"
     print("self-check OK (S_of, spec_ppfd, k math, source table, station-map, "
-          "lamp-state, config identity, per-stream pairing, ref-pair routing)")
+          "lamp-state, config identity, per-stream pairing, source reconciliation)")
     sys.exit(0)
 
 # ---------- validate ----------
@@ -273,7 +303,6 @@ if lux_in is not None and (not math.isfinite(lux_in) or lux_in <= 0):
 cal = farg("--cal","CAL"); tint = farg("--tint-ms","TINT_MS"); win = farg("--window","WINDOW_MIN")
 gain = os.environ["GAIN"]
 config_override = os.environ["CONFIG_OVERRIDE"] == "1"
-ref_pair = os.environ["REF_PAIR"] == "1"
 note = os.environ["NOTE"].replace("\n"," ").replace("\r"," ")
 dry = os.environ["DRY_RUN"] == "1"
 
@@ -365,26 +394,22 @@ sun_alt = float(alt_out.stdout.strip())
 # ---------- derive source; reconcile with --source ----------
 derived, reject = derive_source(lamp_state, sun_alt)
 if reject: die(f"measurement rejected: {reject} (lamp_state={lamp_state}, sun_alt={sun_alt:.1f})")
-source_override = 0
+source_override, ref_only = 0, False
 if derived is None:                    # lamp state UNKNOWN
     if not source_arg:
         die(f"lamp state UNKNOWN at {at:%Y-%m-%dT%H:%M:%SZ} (no light row within "
             f"{LAMP_STALE_H}h for location {light_location!r}) — pass an explicit "
             f"--source to override (it will be flagged source_override=1)")
     source, source_override = source_arg, 1
-elif source_arg and source_arg != derived:
-    die(f"--source {source_arg!r} contradicts the derived source {derived!r} "
-        f"(lamp_state={lamp_state} @ {lamp_row_ts}, sun_alt={sun_alt:.1f}) — "
-        f"if the derivation is wrong, fix the light data, don't overrule it")
 else:
-    source = derived
-
-# --ref-pair: the ref spot never sees the lamp, so lamp state must not gate this
-# pairing; under lamp-on the row is demoted to ref-only evidence.
-ref_only = False
-if ref_pair:
-    rp_reason, ref_only = refpair_route(source, lux_in is not None)
-    if rp_reason: die(f"--ref-pair rejected: {rp_reason}")
+    source, ref_only, rc_err = reconcile(derived, source_arg, lux_in is not None)
+    if rc_err == "need-lux":
+        die("--source daylight under a lit lamp is the ref-anchor recording "
+            "(Photone at the lux_ref spot) — it needs --lux")
+    if rc_err == "contradiction":
+        die(f"--source {source_arg!r} contradicts the derived source {derived!r} "
+            f"(lamp_state={lamp_state} @ {lamp_row_ts}, sun_alt={sun_alt:.1f}) — "
+            f"if the derivation is wrong, fix the light data, don't overrule it")
 
 # ---------- pull co-timed samples (raw) in the window ----------
 chan_filter = " or ".join(f'r._field == "{c}"' for c in CH)
@@ -438,8 +463,8 @@ paired = 1.0 if ok else 0.0
 warns = []
 if clipped: warns.append("a channel hit ADC full-scale (65535) — clipped samples dropped")
 if ref_only:
-    warns.append("ref-pair under lamp-on: main lux + spectrum are lamp-lit — "
-                 "stored as sentinels; this row carries lux_ref evidence only")
+    warns.append("daylight under a lit lamp (ref anchor): main lux + spectrum are "
+                 "lamp-lit — stored as sentinels; this row carries lux_ref evidence only")
 else:
     if not spec_ok:
         why = ("config changed inside the window" if config_split else
@@ -450,7 +475,7 @@ else:
         why = f"lux unstable (CV {lux_cv*100:.0f}% > {MAX_CV*100:.0f}%) — lamp transition / cloud edge?" \
               if lux_cv > MAX_CV else f"only {len(lux_samples)} lux samples in ±{win:g}m (< {MIN_N})"
         warns.append(f"lux stream refused ({why}) — lux targets get sentinels")
-if not ref_ok and (ref_pair or source == "daylight"):
+if not ref_ok and source == "daylight":
     why = f"lux_ref unstable (CV {ref_cv*100:.0f}% > {MAX_CV*100:.0f}%) — cloud edge?" \
           if ref_cv > MAX_CV else f"only {len(ref_samples)} lux_ref samples in ±{win:g}m (< {MIN_N})"
     warns.append(f"lux_ref stream refused ({why}) — bh1750_lux_ref gets sentinels")
@@ -483,7 +508,7 @@ print(f"  lamp={lamp_txt}"
       + (f" (last light row {lamp_row_ts})" if lamp_row_ts else "")
       + f"  sun_alt={sun_alt:.1f}°  → source={source}"
       + ("  [override]" if source_override else "")
-      + ("  [ref-pair]" if ref_pair else "")
+      + ("  [ref-only]" if ref_only else "")
       + f"  location={light_location}")
 print(f"  window ±{win:g}m: {n} spectrum sample(s), {len(lux_samples)} lux sample(s)"
       + (f", lux {min(lux_samples):.0f}–{max(lux_samples):.0f} (CV {lux_cv*100:.0f}%)" if lux_samples else "")
@@ -526,8 +551,7 @@ fields += [f"spec_ppfd_at={spec_at}", f"lux_at={lux_at}", f"lux_ref_at={ref_at}"
            f"cal_at={cal}", f"tint_ms={tint}", f"n={float(n)}", f"paired={paired}",
            f"lamp_state={float(lamp_state)}", f"sun_alt_deg={sun_alt}",
            f"source_override={float(source_override)}",
-           f"config_override={1.0 if config_override else 0.0}",
-           f"ref_pair={1.0 if ref_pair else 0.0}"]
+           f"config_override={1.0 if config_override else 0.0}"]
 if gain_x is not None: fields.append(f"gain_x={gain_x}")
 fields += [f"{c}={chan_at[c]}" for c in CH]
 if note: fields.append(f'note="{esc_str(note)}"')
@@ -540,13 +564,13 @@ csv_path = os.path.join(os.environ["DIR"], "photone-log.csv")
 csv_hdr = ["time","device","source","gain","ppfd","lux_in","spec_ppfd_at","lux_at",
            "lux_ref_at","k_spec","k_lux","n","paired","cal_at","tint_ms","note",
            "light_location","lamp_state","sun_alt_deg","source_override",
-           "gain_x","config_override","ref_pair"]
+           "gain_x","config_override"]
 csv_row = [at.strftime("%Y-%m-%dT%H:%M:%SZ"), device, source, gain, ppfd,
            lux_in if lux_in is not None else "", spec_at, lux_at, ref_at,
            f"{k_spec:.4f}" if paired else "", f"{k_lux:.4f}" if paired else "",
            n, int(paired), cal, tint, note,
            light_location, lamp_state, f"{sun_alt:.2f}", source_override,
-           gain_x if gain_x is not None else "", int(config_override), int(ref_pair)]
+           gain_x if gain_x is not None else "", int(config_override)]
 
 if dry:
     print("\n[dry-run] would write line protocol:\n  " + line)
