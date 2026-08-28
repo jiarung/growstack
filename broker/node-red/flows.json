@@ -193,6 +193,16 @@
     "type": "str"
    },
    {
+    "label": "cactus-19",
+    "value": "cactus-19",
+    "type": "str"
+   },
+   {
+    "label": "cactus-20",
+    "value": "cactus-20",
+    "type": "str"
+   },
+   {
     "label": "white-ref",
     "value": "white-ref",
     "type": "str"
