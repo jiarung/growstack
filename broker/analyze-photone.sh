@@ -26,6 +26,14 @@ with open(sys.argv[1]) as f:
             if float(r.get("paired", 0)) != 1.0: continue
         except ValueError:
             continue
+        # A ref-pair row under lamp-on is daylight evidence for the REF sensor
+        # (lux_ref never sees the lamp); its lamp-lit fields are -1 sentinels, so
+        # regrouping it as daylight lets it feed r_ref and nothing else.
+        try:
+            if r.get("source") == "mixed" and float(r.get("ref_pair", 0) or 0) == 1.0:
+                r = {**r, "source": "daylight"}
+        except ValueError:
+            pass
         rows.append(r)
 if not rows:
     print("no paired rows — nothing to analyze"); sys.exit(0)

@@ -95,13 +95,26 @@ from(bucket:"sensors") |> range(start:-10m)
 挑一個夜裡燈已關的時刻:
 - [ ] → `measurement rejected: lamp off at night — no light source to measure`
 
+**e2. ref-pair(燈開白天,Photone 貼 ref 位)**
+```bash
+./record-photone.sh --ppfd <v> --lux <v> --ref-pair --dry-run    # 挑燈開的白天時刻
+```
+- [ ] 標頭出現 `[ref-pair]`;警告「ref-pair under lamp-on … ref evidence only」
+- [ ] line protocol:`ref_pair=1`、`lux_at=-1`、八通道 -1、`lux_ref_at` 為正常值
+- [ ] 報表有 `r_ref = Photone/lux_ref`
+- [ ] 反例:夜間燈開 + `--ref-pair` → 拒收("needs daylight");不帶 `--lux` → 拒收
+- [ ] 寫入一筆 ref-pair 後看面板:id 12 overlay **不出現**該 Photone 點(ref 位不屬
+      植株位曲線);id 13 該 row 的 k_spec/k_lux/lux_div54 顯示 -1(sentinel)而非負比值,
+      `ref_pair` 欄=1
+
 **f. 真實寫入一筆(唯一會寫的步驟)**
 ```bash
 ./record-photone.sh --ppfd <Photone 實測> --lux <Photone 實測>
 ```
 - [ ] Influx `photone` 新 row 有:`light_location` tag、`lamp_state`、`sun_alt_deg`、
-      `source_override=0`、`config_override=0`、`gain_x=4`(Stage 3 後)
-- [ ] `photone-log.csv` 頭列 = v2 header;舊檔已轉存 `photone-log.v1.csv`
+      `source_override=0`、`config_override=0`、`ref_pair`、`gain_x=4`(Stage 3 後)
+- [ ] `photone-log.csv` 頭列 = v3 header;舊 header 檔已轉存 `photone-log.pre-<stamp>.csv`
+      (含今天稍早寫的 v2 檔;`photone-log.v1.csv` 若存在則原樣未動)
 - [ ] 印出的 k_spec/k_lux 數量級合理(k_lux 接近既有經驗值)
 
 ## Stage 5 — solar-noon.py --alt-at 抽查
@@ -121,4 +134,5 @@ python3 solar-noon.py --alt-at $(date -d "12:00 +8 hours ago" +%s 2>/dev/null ||
 - [ ] 硬體線(獨立,不擋 Phase B 開工):0x5C 盤點拍照 → `mark-epoch.sh epoch` 首筆回填;canopy 標記
 
 ## 已知豁免(裁定 pass,2026-08-28)
-CSV 輪替可能覆蓋既有 v1 備份、PPFD 空值錯誤訊息不精確、`--tint-ms` override 值被 telemetry 蓋回(旗標仍正確)。
+PPFD 空值錯誤訊息不精確、`--tint-ms` override 值被 telemetry 蓋回(旗標仍正確)。
+(CSV 輪替覆蓋問題已於 ref-pair 修訂一併修正:輪替改用時間戳檔名,永不覆蓋。)

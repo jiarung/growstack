@@ -36,6 +36,12 @@ REQUIRED:
 
 OPTIONAL:
   --lux <v>         Photone lux reading (preferred estimator input for luxScale)
+  --ref-pair        the Photone is at the lux_ref spot. lux_ref NEVER sees the grow
+                    lamp (system invariant: sensors.h / FIRMWARE.md / 遮燈 DLI), so
+                    this pairing is valid in ANY daytime, lamp on or off. Under
+                    lamp-on (mixed) the row carries REF evidence only: lux_at and
+                    the 8 channels are lamp-lit and stored as -1 sentinels.
+                    Requires --lux and daylight (rejected at night).
   --source <s>      OVERRIDE the derived source (daylight|lamp|mixed). Refused if
                     it contradicts a known lamp state; required if lamp state is
                     UNKNOWN. Overrides are flagged (source_override=1).
@@ -52,22 +58,24 @@ OPTIONAL:
   --self-check      run the math self-test and exit (no InfluxDB, no token)
   -h, --help        this help
 
-Writes one point + appends broker/photone-log.csv (gitignored; header v2 — an old
-v1 file is rotated to photone-log.v1.csv). Unpaired/unstable windows store -1
-sentinels. gain_x/tint_ms prefer the paired spectrum telemetry (firmware ≥ the
-Phase A build); rows without telemetry config are e0-legacy for the estimator.
+Writes one point + appends broker/photone-log.csv (gitignored; header v3 — a file
+with an older header is rotated aside as photone-log.pre-<stamp>.csv, never
+clobbered). Unpaired/unstable windows store -1 sentinels. gain_x/tint_ms prefer
+the paired spectrum telemetry (firmware ≥ the Phase A build); rows without
+telemetry config are e0-legacy for the estimator.
 EOF
 }
 
 # ---- defaults / args ----
 PPFD=""; SOURCE=""; LUX=""; DEVICE="livingroom"; AT="now"; NOTE=""
 GAIN="4x"; TINT_MS="280.78"; CAL="0.0017469"; WINDOW_MIN="2"; DRY_RUN=0; SELF_CHECK=0
-CONFIG_OVERRIDE=0
+CONFIG_OVERRIDE=0; REF_PAIR=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --ppfd)      PPFD="${2:?--ppfd needs a value}"; shift 2;;
     --source)    SOURCE="${2:?--source needs a value}"; shift 2;;
     --lux)       LUX="${2:?--lux needs a value}"; shift 2;;
+    --ref-pair)  REF_PAIR=1; shift;;
     --device)    DEVICE="${2:?--device needs a value}"; shift 2;;
     --at)        AT="${2:?--at needs a value}"; shift 2;;
     --note)      NOTE="${2:?--note needs a value}"; shift 2;;
@@ -90,8 +98,9 @@ ENV_LIGHT_LOCATION="$(grep -E '^LIGHT_LOCATION=' "$DIR/.env" 2>/dev/null | head 
 PPFD="$PPFD" SOURCE="$SOURCE" LUX="$LUX" DEVICE="$DEVICE" AT="$AT" NOTE="$NOTE" \
 GAIN="$GAIN" TINT_MS="$TINT_MS" CAL="$CAL" WINDOW_MIN="$WINDOW_MIN" \
 DRY_RUN="$DRY_RUN" SELF_CHECK="$SELF_CHECK" CONFIG_OVERRIDE="$CONFIG_OVERRIDE" \
+REF_PAIR="$REF_PAIR" \
 ENV_LIGHT_LOCATION="$ENV_LIGHT_LOCATION" DIR="$DIR" INFLUX_TOKEN="$TOKEN" python3 - <<'PY'
-import os, sys, json, subprocess, csv, io, statistics
+import os, sys, json, math, subprocess, csv, io, statistics
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
@@ -138,18 +147,40 @@ def config_from(pairs):
     g, t = pairs[0]
     return g, t, False
 
-def pairing_of(n_spec, n_lux, lux_cv, config_split):
-    """Per-target pairing -> (paired, spec_ok, lux_ok). Pure (selftested).
+def streams_of(n_spec, n_lux, lux_cv, config_split, n_ref, ref_cv, ref_only=False):
+    """Per-stream quality -> (paired, spec_ok, lux_ok, ref_ok). Pure (selftested).
 
-    Each evidence stream stands on its own: a dead AS7341 must not sink a good
-    Photone-vs-BH1750 daylight pairing (the pipeline's anchor model), and a
-    missing BH1750 must not sink a spectrum pairing. A config change mid-window
-    poisons only the spectrum identity. An UNSTABLE lux window still refuses
-    everything — the light field itself moved."""
-    spec_ok = n_spec >= MIN_N and not config_split
-    lux_ok  = n_lux >= MIN_N and lux_cv <= MAX_CV
-    paired  = lux_cv <= MAX_CV and (spec_ok or lux_ok)
-    return paired, spec_ok, lux_ok
+    Three evidence streams, each standing on its own: a dead AS7341 must not
+    sink a lux pairing, a missing BH1750 must not sink a spectrum pairing, and
+    an unstable PLANT-position field must not sink the ref stream — the ref
+    spot is its own light field, gated by its own CV. main-lux CV doubles as
+    the stability proxy for the plant-position field, which the colocated
+    AS7341 shares (spectrum has no CV of its own), so instability there
+    refuses the spectrum stream too. A config change mid-window poisons only
+    the spectrum identity. ref_only (ref-pair under lamp-on): the lamp-lit
+    streams carry no daylight evidence regardless of their quality.
+    paired = any stream stands."""
+    lux_stable = lux_cv <= MAX_CV
+    spec_ok = n_spec >= MIN_N and not config_split and lux_stable
+    lux_ok  = n_lux >= MIN_N and lux_stable
+    ref_ok  = n_ref >= MIN_N and ref_cv <= MAX_CV
+    if ref_only:
+        spec_ok = lux_ok = False
+    return (spec_ok or lux_ok or ref_ok), spec_ok, lux_ok, ref_ok
+
+def refpair_route(source, has_photone_lux):
+    """--ref-pair semantics -> (reject_reason|None, ref_only).
+
+    lux_ref NEVER sees the grow lamp (system invariant: sensors.h:14,
+    FIRMWARE.md, the 遮燈 DLI ledger integrates lux_ref through lamp hours), so
+    a Photone reading at the ref spot is daylight evidence regardless of lamp
+    state. Under lamp-on (source=mixed) the OTHER streams (main lux, AS7341)
+    ARE lamp-lit — the row must carry ref evidence only. Pure (selftested)."""
+    if not has_photone_lux:
+        return "--ref-pair needs --lux (the pairing IS Photone lux ÷ lux_ref)", False
+    if source == "lamp":
+        return "ref pairing needs daylight — the ref spot sees no lamp light", False
+    return None, source == "mixed"
 
 def derive_source(lamp_state, sun_alt):
     """Blueprint source table. Returns (source|None, reject_reason|None).
@@ -193,18 +224,29 @@ if os.environ["SELF_CHECK"] == "1":
     assert config_from([(4.0, 280.78), (4.0, 280.78)]) == (4.0, 280.78, False)
     assert config_from([(4.0, 280.78), (64.0, 280.78)])[2] is True, "config change -> split"
     assert config_from([]) == (None, None, False), "no telemetry config -> legacy"
-    # per-target pairing: each evidence stream stands or falls on its own
-    assert pairing_of(0, 5, 0.05, False) == (True, False, True), \
+    # per-stream pairing: each evidence stream stands or falls on its own
+    assert streams_of(0, 5, 0.05, False, 5, 0.05) == (True, False, True, True), \
         "dead AS7341 + good lux must still pair (anchor-model rows survive)"
-    assert pairing_of(5, 0, 0.0, False) == (True, True, False), \
+    assert streams_of(5, 0, 0.0, False, 0, 0.0) == (True, True, False, False), \
         "missing BH1750 + good spectrum must still pair"
-    assert pairing_of(5, 5, 0.05, False) == (True, True, True), "both streams good"
-    assert pairing_of(5, 5, 0.50, False)[0] is False, "unstable lux refuses everything"
-    assert pairing_of(5, 5, 0.05, True) == (True, False, True), \
+    assert streams_of(5, 5, 0.05, False, 5, 0.05) == (True, True, True, True), "all streams good"
+    assert streams_of(5, 5, 0.50, False, 5, 0.02) == (True, False, False, True), \
+        "plant-position instability refuses spec+lux but must NOT sink the ref stream"
+    assert streams_of(5, 5, 0.05, True, 0, 0.0) == (True, False, True, False), \
         "config split poisons spectrum only; lux pairing survives"
-    assert pairing_of(2, 2, 0.0, False)[0] is False, "too few samples on both streams"
+    assert streams_of(2, 2, 0.0, False, 2, 0.0)[0] is False, "too few samples everywhere"
+    assert streams_of(5, 5, 0.05, False, 5, 0.05, ref_only=True) == (True, False, False, True), \
+        "ref-only demotes the lamp-lit streams regardless of their quality"
+    assert streams_of(5, 5, 0.05, False, 2, 0.0, ref_only=True)[0] is False, \
+        "ref-only with a bad ref stream has no evidence at all"
+    # ref-pair routing: lamp state must not gate the ref target (lux_ref never
+    # sees the lamp); lamp-on daytime = ref evidence only; night = nothing there
+    assert refpair_route("daylight", True) == (None, False), "daylight ref-pair = normal row"
+    assert refpair_route("mixed", True)    == (None, True),  "lamp-on daytime -> ref-only row"
+    assert refpair_route("lamp", True)[0] is not None,  "night ref-pair must reject"
+    assert refpair_route("mixed", False)[0] is not None, "ref-pair without --lux must reject"
     print("self-check OK (S_of, spec_ppfd, k math, source table, station-map, "
-          "lamp-state, config identity, per-target pairing)")
+          "lamp-state, config identity, per-stream pairing, ref-pair routing)")
     sys.exit(0)
 
 # ---------- validate ----------
@@ -212,7 +254,7 @@ def die(m): print(m, file=sys.stderr); sys.exit(1)
 try: ppfd = float(os.environ["PPFD"])
 except ValueError: die("--ppfd must be a number")
 if not os.environ["PPFD"]: die("--ppfd is required")
-if ppfd <= 0: die("--ppfd must be > 0")
+if not math.isfinite(ppfd) or ppfd <= 0: die("--ppfd must be a finite number > 0")
 source_arg = os.environ["SOURCE"]
 if source_arg and source_arg not in ("daylight","lamp","mixed"):
     die("--source must be one of: daylight | lamp | mixed")
@@ -226,9 +268,12 @@ def farg(name, env):
     try: return float(v)
     except ValueError: die(f"{name} must be a number")
 lux_in = farg("--lux","LUX")
+if lux_in is not None and (not math.isfinite(lux_in) or lux_in <= 0):
+    die("--lux must be a finite number > 0 (omit it if you didn't take a lux reading)")
 cal = farg("--cal","CAL"); tint = farg("--tint-ms","TINT_MS"); win = farg("--window","WINDOW_MIN")
 gain = os.environ["GAIN"]
 config_override = os.environ["CONFIG_OVERRIDE"] == "1"
+ref_pair = os.environ["REF_PAIR"] == "1"
 note = os.environ["NOTE"].replace("\n"," ").replace("\r"," ")
 dry = os.environ["DRY_RUN"] == "1"
 
@@ -334,6 +379,13 @@ elif source_arg and source_arg != derived:
 else:
     source = derived
 
+# --ref-pair: the ref spot never sees the lamp, so lamp state must not gate this
+# pairing; under lamp-on the row is demoted to ref-only evidence.
+ref_only = False
+if ref_pair:
+    rp_reason, ref_only = refpair_route(source, lux_in is not None)
+    if rp_reason: die(f"--ref-pair rejected: {rp_reason}")
+
 # ---------- pull co-timed samples (raw) in the window ----------
 chan_filter = " or ".join(f'r._field == "{c}"' for c in CH)
 rows = influx_query(f'''
@@ -377,38 +429,51 @@ n = len(spec_samples)
 def mean(xs): return sum(xs)/len(xs) if xs else None
 lux_cv = (statistics.pstdev(lux_samples)/mean(lux_samples)) if len(lux_samples) >= 2 and mean(lux_samples) else 0.0
 
-# ---------- window quality → paired? (per-target: see pairing_of) ----------
-ok, spec_ok, lux_ok = pairing_of(n, len(lux_samples), lux_cv, config_split)
+# ---------- window quality → paired? (per-stream: see streams_of) ----------
+ref_cv = (statistics.pstdev(ref_samples)/mean(ref_samples)) if len(ref_samples) >= 2 and mean(ref_samples) else 0.0
+ok, spec_ok, lux_ok, ref_ok = streams_of(n, len(lux_samples), lux_cv, config_split,
+                                         len(ref_samples), ref_cv, ref_only)
 paired = 1.0 if ok else 0.0
 
 warns = []
 if clipped: warns.append("a channel hit ADC full-scale (65535) — clipped samples dropped")
-if not spec_ok:
-    why = "config changed inside the window" if config_split else \
-          f"only {n} spectrum samples in ±{win:g}m (< {MIN_N})"
-    warns.append(f"spectrum stream refused ({why}) — as7341_ppfd gets sentinels")
-if not lux_ok:
-    why = f"lux unstable (CV {lux_cv*100:.0f}% > {MAX_CV*100:.0f}%) — lamp transition / cloud edge?" \
-          if lux_cv > MAX_CV else f"only {len(lux_samples)} lux samples in ±{win:g}m (< {MIN_N})"
-    warns.append(f"lux stream refused ({why}) — lux targets get sentinels")
+if ref_only:
+    warns.append("ref-pair under lamp-on: main lux + spectrum are lamp-lit — "
+                 "stored as sentinels; this row carries lux_ref evidence only")
+else:
+    if not spec_ok:
+        why = ("config changed inside the window" if config_split else
+               f"only {n} spectrum samples in ±{win:g}m (< {MIN_N})" if n < MIN_N else
+               f"plant-position field unstable (lux CV {lux_cv*100:.0f}%)")
+        warns.append(f"spectrum stream refused ({why}) — as7341_ppfd gets sentinels")
+    if not lux_ok:
+        why = f"lux unstable (CV {lux_cv*100:.0f}% > {MAX_CV*100:.0f}%) — lamp transition / cloud edge?" \
+              if lux_cv > MAX_CV else f"only {len(lux_samples)} lux samples in ±{win:g}m (< {MIN_N})"
+        warns.append(f"lux stream refused ({why}) — lux targets get sentinels")
+if not ref_ok and (ref_pair or source == "daylight"):
+    why = f"lux_ref unstable (CV {ref_cv*100:.0f}% > {MAX_CV*100:.0f}%) — cloud edge?" \
+          if ref_cv > MAX_CV else f"only {len(ref_samples)} lux_ref samples in ±{win:g}m (< {MIN_N})"
+    warns.append(f"lux_ref stream refused ({why}) — bh1750_lux_ref gets sentinels")
 if config_override: warns.append("gain/tint from CLI override — row excluded from as7341_ppfd estimation")
 if source_override: warns.append("source from --source override (lamp state UNKNOWN)")
 if loc_src and "bootstrap" in loc_src: warns.append(f"light_location via {loc_src}")
 
 # Sentinels are per stream: a refused stream stores -1 (the estimator's >0 rule
-# drops it per target) while the surviving stream keeps its evidence.
-if paired and spec_ok:
+# drops it per target) while every surviving stream keeps its evidence — a
+# stream_ok flag already implies paired, so each value gates on its own flag.
+if spec_ok:
     spec_at = mean(spec_samples)
     chan_at = {c: mean(chan_acc[c]) for c in CH}
     k_spec = ppfd/spec_at if spec_at and spec_at > 0 else float("nan")
 else:
     spec_at = -1.0; chan_at = {c: -1.0 for c in CH}; k_spec = float("nan")
-if paired and lux_ok:
+if lux_ok:
     lux_at = mean(lux_samples)
-    ref_at = mean(ref_samples) if ref_samples else -1.0
     k_lux  = ppfd/(lux_at/LUX_TO_PPFD) if lux_at and lux_at > 0 else float("nan")
 else:
-    lux_at = ref_at = -1.0; k_lux = float("nan")
+    lux_at = -1.0; k_lux = float("nan")
+ref_at = mean(ref_samples) if ref_ok else -1.0
+r_ref = (lux_in / ref_at) if (lux_in is not None and ref_at > 0) else float("nan")
 
 # ---------- report ----------
 lamp_txt = {1:"ON", 0:"OFF", -1:"UNKNOWN"}[lamp_state]
@@ -418,14 +483,17 @@ print(f"  lamp={lamp_txt}"
       + (f" (last light row {lamp_row_ts})" if lamp_row_ts else "")
       + f"  sun_alt={sun_alt:.1f}°  → source={source}"
       + ("  [override]" if source_override else "")
+      + ("  [ref-pair]" if ref_pair else "")
       + f"  location={light_location}")
 print(f"  window ±{win:g}m: {n} spectrum sample(s), {len(lux_samples)} lux sample(s)"
       + (f", lux {min(lux_samples):.0f}–{max(lux_samples):.0f} (CV {lux_cv*100:.0f}%)" if lux_samples else "")
       + (f", telemetry gain={gain_x:g}/tint={tint:g}ms" if gain_x is not None else ", no telemetry config (e0-legacy)"))
 for w in warns: print(f"  ⚠ {w}")
 paired_txt = "yes" if paired else "NO (all context stored as -1 sentinels)"
-if paired and not (spec_ok and lux_ok):
-    paired_txt += f"  (spectrum {'ok' if spec_ok else 'refused'}, lux {'ok' if lux_ok else 'refused'})"
+if paired and not (spec_ok and lux_ok and ref_ok):
+    paired_txt += (f"  (spectrum {'ok' if spec_ok else 'refused'}, "
+                   f"lux {'ok' if lux_ok else 'refused'}, "
+                   f"lux_ref {'ok' if ref_ok else 'refused'})")
 print(f"  paired = {paired_txt}")
 print()
 print(f"  {'quantity':<22}{'value':>12}")
@@ -440,6 +508,10 @@ if paired:
         print(f"  {'k_lux  = Photone/lux54':<22}{k_lux:>12.3f}")
     else:
         print(f"  {'lux÷54':<22}{'(no lux)':>12}")
+    if ref_at > 0:
+        print(f"  {'lux_ref':<22}{ref_at:>12.0f}")
+        if lux_in is not None:
+            print(f"  {'r_ref = Photone/lux_ref':<22}{r_ref:>12.3f}   <- 0x5C anchor scale (daylight-only field)")
     if spec_at > 0:
         print(f"  {'k_spec = Photone/spec':<22}{k_spec:>12.3f}   <- spectrum CAL correction for this light")
 else:
@@ -454,7 +526,8 @@ fields += [f"spec_ppfd_at={spec_at}", f"lux_at={lux_at}", f"lux_ref_at={ref_at}"
            f"cal_at={cal}", f"tint_ms={tint}", f"n={float(n)}", f"paired={paired}",
            f"lamp_state={float(lamp_state)}", f"sun_alt_deg={sun_alt}",
            f"source_override={float(source_override)}",
-           f"config_override={1.0 if config_override else 0.0}"]
+           f"config_override={1.0 if config_override else 0.0}",
+           f"ref_pair={1.0 if ref_pair else 0.0}"]
 if gain_x is not None: fields.append(f"gain_x={gain_x}")
 fields += [f"{c}={chan_at[c]}" for c in CH]
 if note: fields.append(f'note="{esc_str(note)}"')
@@ -462,18 +535,18 @@ tags = (f"device={esc_tag(device)},source={source},gain={esc_tag(gain)}"
         f",light_location={esc_tag(light_location)}")
 line = f"photone,{tags} {','.join(fields)} {epoch}"
 
-# ---------- append-only CSV audit copy (v2 header; rotate a v1 file) ----------
+# ---------- append-only CSV audit copy (v3 header; older files rotate aside) ----------
 csv_path = os.path.join(os.environ["DIR"], "photone-log.csv")
 csv_hdr = ["time","device","source","gain","ppfd","lux_in","spec_ppfd_at","lux_at",
            "lux_ref_at","k_spec","k_lux","n","paired","cal_at","tint_ms","note",
            "light_location","lamp_state","sun_alt_deg","source_override",
-           "gain_x","config_override"]
+           "gain_x","config_override","ref_pair"]
 csv_row = [at.strftime("%Y-%m-%dT%H:%M:%SZ"), device, source, gain, ppfd,
            lux_in if lux_in is not None else "", spec_at, lux_at, ref_at,
            f"{k_spec:.4f}" if paired else "", f"{k_lux:.4f}" if paired else "",
            n, int(paired), cal, tint, note,
            light_location, lamp_state, f"{sun_alt:.2f}", source_override,
-           gain_x if gain_x is not None else "", int(config_override)]
+           gain_x if gain_x is not None else "", int(config_override), int(ref_pair)]
 
 if dry:
     print("\n[dry-run] would write line protocol:\n  " + line)
@@ -488,11 +561,16 @@ if w.returncode != 0:
     die("influx write failed:\n"+w.stderr[:800])
 
 new = not os.path.exists(csv_path)
-if not new:   # a header from before v2 → rotate, keep the audit trail intact
+if not new:   # an older header → rotate aside, never clobbering a previous rotation
     with open(csv_path) as f:
         first = f.readline().strip().split(",")
     if first != csv_hdr:
-        os.rename(csv_path, os.path.join(os.environ["DIR"], "photone-log.v1.csv"))
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        base = os.path.join(os.environ["DIR"], f"photone-log.pre-{stamp}")
+        target, i = base + ".csv", 0
+        while os.path.exists(target):   # os.rename overwrites — pick an unused name
+            i += 1; target = f"{base}-{i}.csv"
+        os.rename(csv_path, target)
         new = True
 with open(csv_path, "a", newline="") as f:
     wr = csv.writer(f)
