@@ -131,17 +131,16 @@ def solar_noon(date=None):
     return epoch, local, 90.0 - abs(lat - dec)
 
 
-def sun_alt(epoch):
-    """Solar altitude (degrees) at an arbitrary instant, for the .env coordinates.
+def sun_alt_at(epoch, lat, lon, tz_name):
+    """Solar altitude (degrees) at an instant, for EXPLICIT coordinates.
 
     Same NOAA terms as solar_noon(): true solar time from the equation of time,
     hour angle from its offset to 12:00, then the standard altitude expression.
     Positive = sun above the horizon; the k-model pipeline's day/night boundary.
+    Parameterized so the pipeline's offline fixtures pin their own coordinates
+    instead of reading whatever .env says on the machine running the test.
     """
-    lat = float(envval("WEATHER_LAT", "25.01"))
-    lon = float(envval("WEATHER_LON", "121.46"))
-
-    with _in_zone(envval("LIGHT_TZ", "Asia/Taipei")):
+    with _in_zone(tz_name):
         lt = time.localtime(epoch)
         d = dt.date(lt.tm_year, lt.tm_mon, lt.tm_mday)
         tz_hours = lt.tm_gmtoff / 3600.0
@@ -154,6 +153,14 @@ def sun_alt(epoch):
     alt = math.degrees(math.asin(
         math.sin(latr) * math.sin(decr) + math.cos(latr) * math.cos(decr) * math.cos(har)))
     return alt
+
+
+def sun_alt(epoch):
+    """sun_alt_at() for the .env coordinates — the CLI's view."""
+    return sun_alt_at(epoch,
+                      float(envval("WEATHER_LAT", "25.01")),
+                      float(envval("WEATHER_LON", "121.46")),
+                      envval("LIGHT_TZ", "Asia/Taipei"))
 
 
 def main(argv=None):

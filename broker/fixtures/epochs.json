@@ -1,0 +1,82 @@
+{
+  "epochs": [
+    {
+      "epoch_id": "bh1750_lux_ref-e1",
+      "target": "bh1750_lux_ref",
+      "start": "2026-09-01T00:00:00Z",
+      "reason": "fixture: registry bootstrap",
+      "device": "livingroom",
+      "config": {
+        "address": "0x5C",
+        "position": "shelf-north",
+        "optics": "bare"
+      },
+      "photone": {
+        "phone": "pixel-6",
+        "app_ver": "1.5.0"
+      },
+      "prev": "e0-legacy"
+    },
+    {
+      "epoch_id": "bh1750_lux_ref-e2",
+      "target": "bh1750_lux_ref",
+      "start": "2026-09-08T00:00:00Z",
+      "reason": "fixture: re-inventory (half-open boundary case)",
+      "device": "livingroom",
+      "config": {
+        "address": "0x5C",
+        "position": "shelf-north",
+        "optics": "bare"
+      },
+      "photone": {
+        "phone": "pixel-6",
+        "app_ver": "1.5.0"
+      },
+      "prev": "bh1750_lux_ref-e1"
+    },
+    {
+      "epoch_id": "as7341_ppfd-e1",
+      "target": "as7341_ppfd",
+      "start": "2026-09-01T00:00:00Z",
+      "reason": "fixture: registry bootstrap",
+      "device": "livingroom",
+      "config": {
+        "gain": 4.0,
+        "tint_ms": 280.78
+      },
+      "photone": {
+        "phone": "pixel-6",
+        "app_ver": "1.5.0"
+      },
+      "prev": "e0-legacy"
+    },
+    {
+      "epoch_id": "as7341_ppfd-e2",
+      "target": "as7341_ppfd",
+      "start": "2026-09-08T00:00:00Z",
+      "reason": "fixture: gain change 4x -> 64x",
+      "device": "livingroom",
+      "config": {
+        "gain": 64.0,
+        "tint_ms": 27.8
+      },
+      "photone": {
+        "phone": "pixel-6",
+        "app_ver": "1.5.0"
+      },
+      "prev": "as7341_ppfd-e1"
+    }
+  ],
+  "station_map": [
+    {
+      "device": "livingroom",
+      "light_location": "livingroom",
+      "valid_from": "1970-01-01T00:00:00Z"
+    },
+    {
+      "device": "balcony",
+      "light_location": "balcony",
+      "valid_from": "1970-01-01T00:00:00Z"
+    }
+  ]
+}

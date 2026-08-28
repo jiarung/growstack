@@ -1,0 +1,326 @@
+{
+  "balcony": [
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-08T21:25:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-08T21:30:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-08T21:35:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-08T21:40:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "diffuse",
+      "source": "daylight",
+      "ts": "2026-09-08T21:45:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "diffuse",
+      "source": "daylight",
+      "ts": "2026-09-08T21:50:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-08T21:55:00Z"
+    }
+  ],
+  "livingroom": [
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-09T09:00:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-09T09:05:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-09T09:10:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-09T09:15:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-09T09:20:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-09T09:25:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "diffuse",
+      "source": "daylight",
+      "ts": "2026-09-09T09:30:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "direct",
+      "source": "daylight",
+      "ts": "2026-09-09T09:35:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-09T09:40:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-09T09:45:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "diffuse",
+      "source": "daylight",
+      "ts": "2026-09-09T09:50:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "diffuse",
+      "source": "daylight",
+      "ts": "2026-09-09T09:55:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-09T10:00:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-09T10:05:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-09T10:10:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-09T10:15:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-09T10:20:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-09T10:25:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "lamp",
+      "ts": "2026-09-09T10:30:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-09T10:35:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "lamp",
+      "ts": "2026-09-09T10:40:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-09T10:45:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-09T10:50:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-09T10:55:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-09T11:00:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-09T11:05:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-09T11:10:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "none",
+      "ts": "2026-09-09T11:15:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "unknown",
+      "source": "unknown",
+      "ts": "2026-09-09T11:20:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "lamp",
+      "ts": "2026-09-09T11:25:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "lamp",
+      "ts": "2026-09-09T11:30:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "lamp",
+      "ts": "2026-09-09T11:35:00Z"
+    },
+    {
+      "epoch_as7341": "as7341_ppfd-e2",
+      "epoch_lux_main": "e0-legacy",
+      "epoch_lux_ref": "bh1750_lux_ref-e2",
+      "regime": "none",
+      "source": "lamp",
+      "ts": "2026-09-09T11:40:00Z"
+    }
+  ]
+}
