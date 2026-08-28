@@ -237,3 +237,36 @@ Node-RED flows.json 的自述把 `staging-01` 稱為「要改掉的預設值」�
 1. **Stage 3 後半 — reclaim 驗證**：必須先在感測器前放遮蔽物。第一輪就是對無遮蔽的午後天空跑 64x 把晶片打掛的，不重複。
 2. **Stage 4f — 真實寫入一筆**：`./record-photone.sh --ppfd <實測> --lux <實測>`
 3. **Stage 6 — `secrets.h` 的 `PUBLISH_AMBIENT_SPECTRUM` 註解**：在 dev host。
+
+## 第三輪 — rebase 到 `49c694d`（`--ref-pair` 移除）之後重跑
+
+前一輪的 Stage 4 跑在 `064f7ff` 上，`49c694d` 又把 `--ref-pair` 拿掉、改由
+`(source=daylight, lamp_state=1)` 表達 ref 錨定。配對與 `reconcile()` 都被改寫過，
+所以整組重跑，否則這份記錄是在替已經不存在的旗標背書。
+
+**a–e 全部仍然 PASS**（`--ref-pair` 已如預期變成 `unknown arg`，`ref_pair` 欄位消失）。
+案例 a 因為此時太陽已落（`sun_alt=-5.1°`）推導為 `lamp` 而非 `mixed` —— 正確；
+連同 b1/b2 與 e2，三種推導在本輪都各自被觀察到一次。
+
+### e2 — ref 錨定收錄（新寫法）
+
+`./record-photone.sh --at 2026-08-28T08:17:00Z --ppfd 42 --lux 2100 --source daylight --dry-run`
+（該時刻燈開、`sun_alt=26.3°`，推導 = mixed）
+
+| 驗收項 | 結果 |
+|---|---|
+| 不視為矛盾，標頭 `source=daylight [ref-only]` | **PASS** |
+| 警告文字 | **PASS** — `daylight under a lit lamp (ref anchor): main lux + spectrum are lamp-lit — stored as sentinels; this row carries lux_ref evidence only` |
+| tag `source=daylight`、`lamp_state=1.0` | **PASS** |
+| `lux_at=-1.0`、八通道全 `-1.0`、`lux_ref_at=764.525`（正常值） | **PASS** |
+| `source_override=0.0`（這不是 override） | **PASS** |
+| 報表有 `r_ref = Photone/lux_ref` | **PASS** — 2.747 |
+| 三串流各自把關 | **PASS** — `paired = yes (spectrum refused, lux refused, lux_ref ok)` |
+| 反例：同時刻不帶 `--lux` → 拒收 | **PASS** — `--source daylight under a lit lamp is the ref-anchor recording (Photone at the lux_ref spot) — it needs --lux` |
+| 反例：夜間燈開 + `--source daylight` → 矛盾中止（= 案例 d） | **PASS** |
+
+面板那兩項（id 12 overlay 不出現該點、id 13 顯示 sentinel）要等 **f 真實寫入**之後才驗得到。
+
+### 輸入守門（`064f7ff` 引入，`49c694d` 保留）
+
+`--ppfd nan` 與 `--ppfd 0` 皆回 `--ppfd must be a finite number > 0`。
