@@ -34,6 +34,23 @@ constexpr uint8_t I2C_SCL = 18;
 constexpr uint8_t BH1750_ADDR_MAIN = 0x23;
 constexpr uint8_t BH1750_ADDR_REF  = 0x5C;
 constexpr uint8_t AS7341_ADDR      = 0x39;
+// Ambient AS7341 profile — single source of truth for begin/recovery/re-assert AND
+// for the config identity published with every spectrum reading (gain_x/tint_ms):
+// the k-model pipeline anchors CAL to these as measured facts.
+constexpr uint8_t  AMBIENT_ATIME   = 100;
+constexpr uint16_t AMBIENT_ASTEP   = 999;
+// gain/integration: ambient daylight needs a LOW gain (64x saturates by ~10k lux);
+// reflect's close LED wants 64x. 4x gives ~16x headroom over the 64x saturation
+// point (~160k lux) for full sun.
+constexpr as7341_gain_t AMBIENT_GAIN = AS7341_GAIN_4X;
+constexpr as7341_gain_t REFLECT_GAIN = AS7341_GAIN_64X;
+// The published multiplier is DERIVED from the enum (datasheet: 0.5 × 2^n), so the
+// setter and the metadata cannot drift apart — change AMBIENT_GAIN and gain_x follows.
+constexpr float gainMultiplier(as7341_gain_t g) { return 0.5f * (float)(1u << (unsigned)g); }
+static_assert(gainMultiplier(AS7341_GAIN_4X) == 4.0f, "gain enum->multiplier mapping broke");
+static_assert(gainMultiplier(AS7341_GAIN_64X) == 64.0f, "gain enum->multiplier mapping broke");
+constexpr float    AMBIENT_GAIN_X  = gainMultiplier(AMBIENT_GAIN);
+constexpr float    AMBIENT_TINT_MS = (AMBIENT_ATIME + 1) * (AMBIENT_ASTEP + 1) * 0.00278f;
 
 Adafruit_BME680 bme;
 BH1750 lightMeter;     // primary    @ 0x23 -> lux
@@ -104,9 +121,9 @@ bool sensorsBegin() {
     // would contaminate the spectrum (it's for reflectance, a later phase).
     as7341Ok = as7341.begin();
     if (as7341Ok) {
-        as7341.setATIME(100);
-        as7341.setASTEP(999);             // ~280 ms integration
-        as7341.setGain(AS7341_GAIN_64X);  // tune if it saturates in direct sun
+        as7341.setATIME(AMBIENT_ATIME);
+        as7341.setASTEP(AMBIENT_ASTEP);   // ~280 ms integration
+        as7341.setGain(AMBIENT_GAIN);     // resting mode = ambient; reflect sets its own
         as7341.enableLED(false);
         logln("[sensors] AS7341 ok @ 0x39");
     } else {
@@ -151,8 +168,9 @@ static bool as7341Gate() {
     }
     if (!as7341Responsive) {
         logln("[sensors] AS7341 back on the bus — re-asserting config");
-        as7341.setATIME(100);
-        as7341.setASTEP(999);       // ambient profile (mirrors sensorsBegin)
+        as7341.setATIME(AMBIENT_ATIME);
+        as7341.setASTEP(AMBIENT_ASTEP);   // ambient profile (mirrors sensorsBegin)
+        as7341.setGain(AMBIENT_GAIN);
         as7341.enableLED(false);
         as7341Responsive = true;
     }
@@ -360,11 +378,6 @@ constexpr uint16_t SAT_LEVEL                = 65000;// near the 16-bit ADC ceili
 constexpr uint16_t AMBIENT_LEAK_CLEAR       = 2000; // dark clear above this = ambient leaking in
 
 // The AS7341 gain register is shared, so each read path sets its OWN gain before starting
-// integration: ambient daylight needs a LOW gain (64x saturates by ~10k lux); reflect's close
-// LED wants 64x. 4x gives ~16x headroom over the 64x saturation point (~160k lux) for full sun.
-constexpr as7341_gain_t AMBIENT_GAIN = AS7341_GAIN_4X;
-constexpr as7341_gain_t REFLECT_GAIN = AS7341_GAIN_64X;
-
 // Dual-sensor reflect: a dark phase then a lit phase. The AS7341 (visible, primary) is read
 // NON-blocking (start/poll/get). The AS7263 (NIR, best-effort) is read with the library's
 // BLOCKING takeMeasurements() at the correct LED state — its non-blocking mode returned stale
@@ -587,7 +600,16 @@ SpectrumReading spectrumRead() {
     // address probe so a mid-read dropout exits on the next poll instead of
     // walking the rest of the sequence on Wire timeouts (the observed 16s stall).
     uint16_t ch[12];
-    as7341.setGain(AMBIENT_GAIN);   // low gain: daylight would saturate reflect's 64x
+    // Low gain: daylight would saturate reflect's 64x. The write MUST be verified:
+    // the published gain_x is a constant that is only a measured fact because this
+    // setter succeeds per read — a silent failure after reflect would take the
+    // reading at 64x while claiming 4x. (tint_ms needs no such check: a wrong
+    // integration time is caught by the read_ms Mode A gate below.)
+    if (!as7341.setGain(AMBIENT_GAIN)) {
+        logln("[sensors] AS7341 setGain failed — reading dropped (gain identity unverified)");
+        lastSpectrumReadMs = NAN;
+        return s;   // valid stays false
+    }
     uint32_t t0 = millis();
     as7341.startReading();
     bool ok = false;
@@ -608,8 +630,9 @@ SpectrumReading spectrumRead() {
     if (s.read_ms < SPECTRUM_READ_MIN_MS || s.read_ms > SPECTRUM_READ_MAX_MS) {   // Mode A gate
         logf("[sensors] AS7341 read_ms=%.0f outside [%.0f,%.0f] — reading dropped, config re-asserted\n",
              s.read_ms, SPECTRUM_READ_MIN_MS, SPECTRUM_READ_MAX_MS);
-        as7341.setATIME(100);
-        as7341.setASTEP(999);
+        as7341.setATIME(AMBIENT_ATIME);
+        as7341.setASTEP(AMBIENT_ASTEP);
+        as7341.setGain(AMBIENT_GAIN);
         return s;   // valid stays false: wrongly-timed data never reaches the wire
     }
 
@@ -617,6 +640,8 @@ SpectrumReading spectrumRead() {
     s.f415 = ch[0];  s.f445 = ch[1];  s.f480 = ch[2];  s.f515 = ch[3];
     s.f555 = ch[6];  s.f590 = ch[7];  s.f630 = ch[8];  s.f680 = ch[9];
     s.clear = ch[10]; s.nir = ch[11];
+    s.gain_x  = AMBIENT_GAIN_X;    // config identity rides with the data
+    s.tint_ms = AMBIENT_TINT_MS;
     // Any clipped channel corrupts the PPFD sum — flag it so downstream doesn't trust the value.
     for (int i = 0; i < 10; i++) if (ch[CH10[i]] >= SAT_LEVEL) s.saturated = true;
     s.valid = true;

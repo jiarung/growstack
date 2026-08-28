@@ -413,13 +413,15 @@ bool mqttPublishSpectrum(const SpectrumReading& s) {
     if (!mqttConnected() || !s.valid) return false;  // fail-open: nothing to send
 
     // All channels as floats (".0") to keep InfluxDB field types stable, like telemetry.
-    char payload[256];
+    char payload[320];
     int n = snprintf(payload, sizeof(payload),
         "{\"mode\":\"ambient\",\"f415\":%.1f,\"f445\":%.1f,\"f480\":%.1f,\"f515\":%.1f,"
         "\"f555\":%.1f,\"f590\":%.1f,\"f630\":%.1f,\"f680\":%.1f,\"clear\":%.1f,\"nir\":%.1f,"
-        "\"spectrum_read_ms\":%.1f,\"saturated\":%.1f}",
+        "\"spectrum_read_ms\":%.1f,\"saturated\":%.1f,\"gain\":%.1f,\"tint_ms\":%.2f}",
         s.f415, s.f445, s.f480, s.f515, s.f555, s.f590, s.f630, s.f680, s.clear, s.nir,
-        s.read_ms, s.saturated ? 1.0 : 0.0);
+        s.read_ms, s.saturated ? 1.0 : 0.0,
+        // config identity as measured facts — the k-model CAL is anchored to these
+        s.gain_x, s.tint_ms);
     if (n < 0 || (size_t)n >= sizeof(payload)) {
         logln("[mqtt] spectrum publish aborted: payload overflow");
         return false;

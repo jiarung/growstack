@@ -85,6 +85,42 @@ STATE_TOPIC = f"monitor-air/{LOC}/light/state"
 AVAIL_TOPIC = f"monitor-air/{LOC}/light/availability"
 
 
+CHECKPOINT_AT = dtime(3, 0)   # daily state checkpoint (local) — the k-model light
+                              # contract reads history back with a 26h staleness
+                              # bound, so a lamp that never switches must still
+                              # leave one trusted row per day.
+
+
+def should_checkpoint(now_local, last_date):
+    """True once per local day, at/after CHECKPOINT_AT. Pure (selftested)."""
+    return now_local.time() >= CHECKPOINT_AT and last_date != now_local.date()
+
+
+def checkpoint_payload(is_on):
+    """Retained state message carrying checkpoint provenance. Pure (selftested)."""
+    return json.dumps({"state": "ON" if is_on else "OFF",
+                       "on": 1 if is_on else 0, "source": "checkpoint"})
+
+
+async def do_checkpoint(read_state, publish_retained, log=print):
+    """One daily checkpoint attempt: read the plug's REAL state, publish it
+    retained with source=checkpoint. 3 attempts; a fully failed day is logged
+    and skipped (blueprint: acceptable). Dependencies injected so the selftest
+    exercises the real control flow, not a copy of it. Never raises.
+    Returns 'ON'/'OFF' on success, None on failure."""
+    for attempt in range(3):
+        try:
+            is_on = await read_state()
+            await publish_retained(checkpoint_payload(is_on))
+            state = "ON" if is_on else "OFF"
+            log(f"checkpoint: plug={state}", flush=True)
+            return state
+        except Exception as e:
+            log(f"checkpoint attempt {attempt+1}/3 failed: {e!r}", flush=True)
+    log("checkpoint failed 3/3 — skipping today", flush=True)
+    return None
+
+
 def decide(lux, lux_at, now, current, hard_off=HARD_OFF):
     """Desired 'ON'/'OFF'. Pure: window + hysteresis + staleness.
 
@@ -260,10 +296,22 @@ async def run():
 
         async def tick():
             ext = {"on": False, "day": None}   # evening top-up, re-evaluated each tick
+            ckpt = {"day": None}               # daily state checkpoint marker
             while True:
                 now = time.time()
                 now_local = datetime.now(TZ)
                 t = now_local.time()
+
+                # Daily checkpoint: at least one trusted light row per day even
+                # when the lamp never switches (the k-model 26h staleness bound).
+                if should_checkpoint(now_local, ckpt["day"]):
+                    state = await do_checkpoint(
+                        lambda: asyncio.wait_for(plug_is_on(dev), timeout=30),
+                        lambda payload: client.publish(STATE_TOPIC, payload,
+                                                       qos=1, retain=True))
+                    if state is not None:
+                        st["current"] = state          # sync drift too
+                    ckpt["day"] = now_local.date()
 
                 # Evening top-up: inside [HARD_OFF, EXTEND_END), keep the window open
                 # while today's DLI is still short of DLI_TARGET. Re-checked EVERY tick
@@ -338,6 +386,37 @@ def selftest():
     assert extend_decision(4.20, 4.0, True) is False, "past target → stop"
     assert extend_decision(None, 4.0, True) is True, "query failed → hold ON, don't flap off"
     assert extend_decision(None, 4.0, False) is False, "query failed → hold OFF too"
+
+    # daily checkpoint (pure parts): once per local day, at/after 03:00
+    from datetime import date
+    d_before = datetime(2026, 6, 25, 2, 59, tzinfo=TZ)
+    d_at     = datetime(2026, 6, 25, 3, 0, tzinfo=TZ)
+    d_late   = datetime(2026, 6, 25, 23, 0, tzinfo=TZ)
+    assert not should_checkpoint(d_before, None), "02:59 → not yet"
+    assert should_checkpoint(d_at, None), "03:00 first run → checkpoint"
+    assert should_checkpoint(d_at, date(2026, 6, 24)), "03:00 new day → checkpoint"
+    assert not should_checkpoint(d_at, date(2026, 6, 25)), "already done today → no"
+    assert should_checkpoint(d_late, date(2026, 6, 24)), "late restart catches up"
+    for on, want_on, want_state in ((True, 1, "ON"), (False, 0, "OFF")):
+        pl = json.loads(checkpoint_payload(on))
+        assert pl == {"state": want_state, "on": want_on, "source": "checkpoint"}, \
+            f"checkpoint payload wrong for {on}"
+
+    # checkpoint control flow, with the REAL do_checkpoint and mocked I/O
+    def _run(coro): return asyncio.new_event_loop().run_until_complete(coro)
+    published = []
+    async def read_ok(): return True
+    async def pub(payload): published.append(payload)
+    assert _run(do_checkpoint(read_ok, pub, log=lambda *a, **k: None)) == "ON"
+    assert json.loads(published[0])["source"] == "checkpoint", "publish must carry provenance"
+    fails = {"n": 0}
+    async def read_fail():
+        fails["n"] += 1
+        raise OSError("plug unreachable")
+    published.clear()
+    assert _run(do_checkpoint(read_fail, pub, log=lambda *a, **k: None)) is None, \
+        "3 failures → give up for the day, never raise"
+    assert fails["n"] == 3 and published == [], "exactly 3 attempts, nothing published"
     print("selftest OK")
 
 

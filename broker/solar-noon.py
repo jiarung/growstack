@@ -131,12 +131,43 @@ def solar_noon(date=None):
     return epoch, local, 90.0 - abs(lat - dec)
 
 
+def sun_alt(epoch):
+    """Solar altitude (degrees) at an arbitrary instant, for the .env coordinates.
+
+    Same NOAA terms as solar_noon(): true solar time from the equation of time,
+    hour angle from its offset to 12:00, then the standard altitude expression.
+    Positive = sun above the horizon; the k-model pipeline's day/night boundary.
+    """
+    lat = float(envval("WEATHER_LAT", "25.01"))
+    lon = float(envval("WEATHER_LON", "121.46"))
+
+    with _in_zone(envval("LIGHT_TZ", "Asia/Taipei")):
+        lt = time.localtime(epoch)
+        d = dt.date(lt.tm_year, lt.tm_mon, lt.tm_mday)
+        tz_hours = lt.tm_gmtoff / 3600.0
+        eot, dec = _sun(d, tz_hours)
+        clock_min = lt.tm_hour * 60.0 + lt.tm_min + lt.tm_sec / 60.0
+        # true solar time in minutes; wraps at the day boundary
+        tst = (clock_min + eot + 4.0 * lon - 60.0 * tz_hours) % 1440.0
+    hour_angle = tst / 4.0 - 180.0
+    latr, decr, har = map(math.radians, (lat, dec, hour_angle))
+    alt = math.degrees(math.asin(
+        math.sin(latr) * math.sin(decr) + math.cos(latr) * math.cos(decr) * math.cos(har)))
+    return alt
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="Solar noon for the coordinates in broker/.env")
     p.add_argument("--noon-epoch", action="store_true",
                    help="print epoch seconds only, for a shell caller")
+    p.add_argument("--alt-at", metavar="EPOCH",
+                   help="print solar altitude (deg) at this epoch-seconds instant and exit")
     p.add_argument("date", nargs="?", help="YYYY-MM-DD (default: today, in LIGHT_TZ)")
     a = p.parse_args(argv)
+
+    if a.alt_at is not None:
+        print("%.2f" % sun_alt(float(a.alt_at)))
+        return 0
 
     d = dt.date(*map(int, a.date.split("-"))) if a.date else None
     epoch, local, alt = solar_noon(d)

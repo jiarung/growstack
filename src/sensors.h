@@ -29,6 +29,10 @@ struct SpectrumReading {
     float f590 = NAN, f630 = NAN, f680 = NAN;
     float clear = NAN, nir = NAN;
     float read_ms = NAN;  // how long the (blocking) read took — a bus-health signal
+    // The configuration this reading was taken under — published with the data so a
+    // calibration is anchored to a measured fact, not to what a CLI claims was set.
+    float gain_x  = NAN;  // ADC gain as a multiplier (ambient = 4.0)
+    float tint_ms = NAN;  // integration time, ms ((ATIME+1)·(ASTEP+1)·2.78µs)
     bool saturated = false;  // a channel hit the ADC ceiling → PPFD sum untrustworthy
     bool valid = false;
 };

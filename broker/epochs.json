@@ -1,0 +1,7 @@
+{
+  "epochs": [],
+  "station_map": [
+    {"device": "livingroom", "light_location": "livingroom",
+     "valid_from": "1970-01-01T00:00:00Z"}
+  ]
+}

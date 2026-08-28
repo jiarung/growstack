@@ -30,3 +30,4 @@ broker/backup/backup.log
 # Python bytecode (solar-noon.py gets imported by tests)
 __pycache__/
 *.pyc
+broker/epochs.json.lock
