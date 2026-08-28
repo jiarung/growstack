@@ -31,3 +31,4 @@ broker/backup/backup.log
 __pycache__/
 *.pyc
 broker/epochs.json.lock
+.codex/
