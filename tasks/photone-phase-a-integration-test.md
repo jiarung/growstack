@@ -150,7 +150,7 @@ PPFD 空值錯誤訊息不精確、`--tint-ms` override 值被 telemetry 蓋回(
 | 1 telegraf | **PASS** | force-recreate 後 inode 一致（44840094 兩邊相同）；rows 同時帶 `location` + `source` |
 | 2 light.py | **PASS** | `selftest OK`；重啟即觸發 checkpoint，Influx 出現 `source=checkpoint`（15:41:32），三種 source 皆現 |
 | 3 firmware | 前半 PASS / **後半 FAIL** | `gain=4`、`tint_ms=280.78` 每筆都有 ✓。**reclaim 驗證把 AS7341 打掛了** — 見下 |
-| 4 record-photone | **BLOCKED** | 推導邏輯本身正確，但 device tag 已變（見下），全部 target 抓不到樣本 |
+| 4 record-photone | **a–e PASS** / f 待你 | device tag 修正後重跑，六案例中的 a–e 全過（見「第二輪」）；f 需要你手邊的 Photone 實測值 |
 | 5 solar-noon | **PASS** | 正午 epoch → `--alt-at` = 74.71，與 `solar_noon()` 印的相同；子夜 −54.92、日出前 +4.09、黃昏後 −9.20，跨 0° 符號正確 |
 | 6 收尾 | 未完成 | 卡在 3、4 |
 
@@ -205,3 +205,35 @@ telegraf 新舊設定都是 `tags = "_/device/_"`，且舊設定裡沒有 `livin
 Node-RED flows.json 的自述把 `staging-01` 稱為「要改掉的預設值」，
 **研判是誤用 staging 的 secrets.h 燒錄**。修法在 dev host：把 `MQTT_DEVICE_ID`
 改回 `livingroom` 重燒。不建議反向把上述 8 面板 + 2 告警 + 7 腳本改成 staging-01。
+
+
+---
+
+# 第二輪 — 2026-08-28 16:1x（斷電復原 + 韌體重燒之後）
+
+兩個阻斷問題都解掉了：
+- AS7341 斷電後恢復（`as7341:1.0`、`read_ms 613`、`gain=4`、15 s 一筆）
+- device tag 於 16:13:07 回到 `livingroom` —— 8 面板 / 2 告警 / 7 腳本恢復
+- `as7263:0.0` 仍在，但斷電前那筆也是 0，**不是今天造成的**；`i2c_n` 由 4→5 的增量剛好只有 AS7341
+- `hx711` 沒有持續心跳屬正常（`hx711Poll` 只在 `is_ready()` 時取樣），第一輪的 0.0 判讀有誤，撤回
+
+## Stage 4 — record-photone.sh 六案例
+
+| 案例 | 結果 | 實際輸出 |
+|---|---|---|
+| a 正常時刻 | **PASS** | `lamp=ON … sun_alt=26.2° → source=mixed location=livingroom`；`gain=4/tint=280.78ms`；`paired=yes`（7+7 樣本）；`gain_x=4.0` |
+| b1 白天燈關 | **PASS** | `--at 2026-08-27T22:30:00Z` → `lamp=OFF sun_alt=11.8° → source=daylight`，`lamp_state=0.0` |
+| b2 夜間燈開 | **PASS** | `--at 2026-08-26T11:00:00Z` → `lamp=ON sun_alt=-9.7° → source=lamp`，`lamp_state=1.0` |
+| c1 UNKNOWN 無 override | **PASS** | `lamp state UNKNOWN at … (no light row within 26h …) — pass an explicit --source to override (it will be flagged source_override=1)` |
+| c2 UNKNOWN + override | **PASS** | 收下，`[override]` + `⚠ source from --source override`；line protocol `source_override=1.0`、`lamp_state=-1.0`、`paired=0.0` |
+| d 矛盾中止 | **PASS** | `--source 'daylight' contradicts the derived source 'lamp' (lamp_state=1 @ …, sun_alt=-9.7) — if the derivation is wrong, fix the light data, don't overrule it` |
+| e 燈關∧夜間 | **PASS** | `measurement rejected: lamp off at night — no light source to measure (lamp_state=0, sun_alt=-22.7)` |
+| f 真實寫入 | 待執行 | 需要你手邊的 Photone 實測 PPFD/lux |
+
+`lux_ref` 是很好的旁證：b1 早晨日光 183.5、b2 夜間燈下 25.0 —— 遮燈感測器行為完全正確。
+
+## 仍待執行（都需要人在現場）
+
+1. **Stage 3 後半 — reclaim 驗證**：必須先在感測器前放遮蔽物。第一輪就是對無遮蔽的午後天空跑 64x 把晶片打掛的，不重複。
+2. **Stage 4f — 真實寫入一筆**：`./record-photone.sh --ppfd <實測> --lux <實測>`
+3. **Stage 6 — `secrets.h` 的 `PUBLISH_AMBIENT_SPECTRUM` 註解**：在 dev host。
