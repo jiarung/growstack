@@ -139,3 +139,69 @@ python3 solar-noon.py --alt-at $(date -d "12:00 +8 hours ago" +%s 2>/dev/null ||
 ## 已知豁免(裁定 pass,2026-08-28)
 PPFD 空值錯誤訊息不精確、`--tint-ms` override 值被 telemetry 蓋回(旗標仍正確)。
 (CSV 輪替覆蓋問題已於 ref-pair 修訂一併修正:輪替改用時間戳檔名,永不覆蓋。)
+
+---
+
+# 執行結果 — 2026-08-28（broker host）
+
+| Stage | 結果 | 摘要 |
+|---|---|---|
+| 0 前提 | PASS* | `secrets.h` 不在本機（dev host 檔案），改以功能佐證：30 min 內 119 筆 ambient spectrum → 旗標確為開啟 |
+| 1 telegraf | **PASS** | force-recreate 後 inode 一致（44840094 兩邊相同）；rows 同時帶 `location` + `source` |
+| 2 light.py | **PASS** | `selftest OK`；重啟即觸發 checkpoint，Influx 出現 `source=checkpoint`（15:41:32），三種 source 皆現 |
+| 3 firmware | 前半 PASS / **後半 FAIL** | `gain=4`、`tint_ms=280.78` 每筆都有 ✓。**reclaim 驗證把 AS7341 打掛了** — 見下 |
+| 4 record-photone | **BLOCKED** | 推導邏輯本身正確，但 device tag 已變（見下），全部 target 抓不到樣本 |
+| 5 solar-noon | **PASS** | 正午 epoch → `--alt-at` = 74.71，與 `solar_noon()` 印的相同；子夜 −54.92、日出前 +4.09、黃昏後 −9.20，跨 0° 符號正確 |
+| 6 收尾 | 未完成 | 卡在 3、4 |
+
+## 阻斷問題 1 — AS7341 + AS7263 停止 ACK（reflect 觸發）
+
+**時間軸**
+```
+15:42:59  ambient 正常（read_ms 613, gain=4），此前連續數十筆皆同
+15:43:04  reflect(64x) 對「無遮蔽的午後天空」→ read_ms=1072, saturated=1,
+          lit_f590/f630/f680 = 65535（真實飽和，非 I2C 故障值）
+15:43 起  ambient 完全停止 — 不是發佈垃圾，是 sensors.cpp:608 的
+          setGain 驗證失敗 → 讀數丟棄。此行為正確。
+```
+
+**遠端鑑識**（`diag/cmd` ← `as7341`，依 mqtt_client.cpp:57-59 在斷電前取得）
+完整輸出：`tasks/as7341-forensic-2026-08-28T1546.txt`
+
+```
+=== done: 561 failure(s), 0 clean transaction(s) ===
+```
+**每一筆交易都是 `err=2`（位址 NACK），沒有任何一次成功。** 依 diag 自己的判讀規則，
+NACK/short-read → **bus/silicon**，不是「晶片沒守住狀態」，也不是 gain/AGC 損毀。
+
+`health`: `{"bme":1,"lux":1,"lux_ref":1,"as7341":0,"as7263":0,"hx711":1,"pn532":1}`
+→ **兩顆光譜晶片一起失效，其餘 I2C 裝置全部正常。** 這比之前「as7341 單獨掛」
+的描述更窄：指向兩者共用的東西（供電軌或匯流排分支），而非 AS7341 本身。
+
+**復原**：需要斷電（證據已取畢）。目前燈是 ON —— 依先前觀察，
+「開燈狀態下重新上電」是唯一一致有效的條件。
+
+**文件要補的警告**：Stage 3 的 reclaim 驗證**必須在感測器前放遮蔽物**再跑。
+對無遮蔽強光打 64x 會硬飽和，本次即由此觸發失效。
+
+## 阻斷問題 2 — device tag 在 15:36:30 從 `livingroom` 變成 `staging-01`
+
+```
+15:36:30  air.lux / spectrum 的 device tag 同時翻轉（韌體 OTA 重燒，
+          health 的 reset="software (esp_restart)" 相符）
+15:41:08  telegraf force-recreate —— 晚了 4.5 分鐘，不是原因
+```
+telegraf 新舊設定都是 `tags = "_/device/_"`，且舊設定裡沒有 `livingroom` 字串，
+所以是 MQTT topic 的第 2 段變了 = 韌體的 `MQTT_DEVICE_ID` 變了。
+
+**影響範圍**（全部綁 `device == "livingroom"`）
+- air.json 面板 7, 12, 17, 18
+- daily.json 面板 1, 3, 12, 13
+- 告警規則 2 條
+- 腳本 7 個：calibrate-ppfd / cal-review-reminder / lamp-hold / light-ctl /
+  mark-epoch / ppfd-cal-daily / record-photone
+- `.env`: `LIGHT_LOCATION=livingroom`、`LIGHT_SENSOR_DEVICE=livingroom`
+
+Node-RED flows.json 的自述把 `staging-01` 稱為「要改掉的預設值」，
+**研判是誤用 staging 的 secrets.h 燒錄**。修法在 dev host：把 `MQTT_DEVICE_ID`
+改回 `livingroom` 重燒。不建議反向把上述 8 面板 + 2 告警 + 7 腳本改成 staging-01。

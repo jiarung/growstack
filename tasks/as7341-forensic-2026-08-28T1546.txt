@@ -1,0 +1,582 @@
+# AS7341 failure forensic — 2026-08-28 15:46 Taipei
+# 觸發：Phase A 整合測試 Stage 3 的 reclaim 驗證 —— 對無遮蔽的午後天空跑 reflect(64x)
+# 觸發前：ambient 連續正常 read_ms 611-614，gain=4
+# reflect 那筆：read_ms=1072, saturated=1, lit_f590/f630/f680 = 65535 (真實飽和)
+# 之後：ambient 完全停止（setGain 驗證失敗 -> 讀數丟棄，非發佈假資料）
+# health: {"bme":1,"lux":1,"lux_ref":1,"as7341":0,"as7263":0,"hx711":1,"pn532":1}
+# 判讀：561/561 err=2（位址 NACK），0 clean —— 依 diag 判讀規則屬 bus/silicon，非狀態或 gain 損毀
+# 注意：AS7263 一併失效，其餘 I2C 裝置全正常
+
+01 [diag] === AS7341 failure-state forensic (direct Wire, no driver) ===
+02 [diag] -- pre-state (as found) --
+03 [diag]   RD 0x92 ptr-write FAIL err=2
+04 [diag]   RD 0x80 ptr-write FAIL err=2
+05 [diag]   RD 0x81 ptr-write FAIL err=2
+06 [diag]   RD 0xCA ptr-write FAIL err=2
+07 [diag]   RD 0xCB ptr-write FAIL err=2
+08 [diag]   RD 0xA9 ptr-write FAIL err=2
+09 [diag]   RD 0xAA ptr-write FAIL err=2
+10 [diag]   RD 0xAC ptr-write FAIL err=2
+11 [diag]   RD 0xAF ptr-write FAIL err=2
+12 [diag]   RD 0xB1 ptr-write FAIL err=2
+13 [diag]   RD 0xB2 ptr-write FAIL err=2
+14 [diag]   RD 0xB3 ptr-write FAIL err=2
+15 [diag]   RD 0xB5 ptr-write FAIL err=2
+16 [diag]   RD 0xCF ptr-write FAIL err=2
+17 [diag]   RD 0xD6 ptr-write FAIL err=2
+18 [diag]   RD 0x93 ptr-write FAIL err=2
+19 [diag]   RD 0xA3 ptr-write FAIL err=2
+20 [diag]   RD 0xA7 ptr-write FAIL err=2
+21 [diag]   RD 0xA9 ptr-write FAIL err=2
+22 [diag] -- normalize + verify measurement-gating config --
+23 [diag]   WR 0xA9<=0x00 FAIL err=2
+24 [diag]   WR 0xA9<=0x10 FAIL err=2
+25 [diag]   WR 0x80<=0x01 FAIL err=2
+26 [diag]   WR 0xAC<=0x00 FAIL err=2
+27 [diag]   WR 0x81<=0x64 FAIL err=2
+28 [diag]   WR 0xCA<=0xE7 FAIL err=2
+29 [diag]   WR 0xCB<=0x03 FAIL err=2
+30 [diag]   WR 0xAA<=0x03 FAIL err=2
+31 [diag] -- SMUX low bank (F1-F4+Clear+NIR): load, verify chain, measure --
+32 [diag]   WR 0x80<=0x01 FAIL err=2
+33 [diag]   WR 0xAF<=0x10 FAIL err=2
+34 [diag]   WR 0x00<=0x30 FAIL err=2
+35 [diag]   WR 0x01<=0x01 FAIL err=2
+36 [diag]   WR 0x02<=0x00 FAIL err=2
+37 [diag]   WR 0x03<=0x00 FAIL err=2
+38 [diag]   WR 0x04<=0x00 FAIL err=2
+39 [diag]   WR 0x05<=0x42 FAIL err=2
+40 [diag]   WR 0x06<=0x00 FAIL err=2
+41 [diag]   WR 0x07<=0x00 FAIL err=2
+42 [diag]   WR 0x08<=0x50 FAIL err=2
+43 [diag]   WR 0x09<=0x00 FAIL err=2
+44 [diag]   WR 0x0A<=0x00 FAIL err=2
+45 [diag]   WR 0x0B<=0x00 FAIL err=2
+46 [diag]   WR 0x0C<=0x20 FAIL err=2
+47 [diag]   WR 0x0D<=0x04 FAIL err=2
+48 [diag]   WR 0x0E<=0x00 FAIL err=2
+49 [diag]   WR 0x0F<=0x30 FAIL err=2
+50 [diag]   WR 0x10<=0x01 FAIL err=2
+51 [diag]   WR 0x11<=0x50 FAIL err=2
+52 [diag]   WR 0x12<=0x00 FAIL err=2
+53 [diag]   WR 0x13<=0x06 FAIL err=2
+54 [diag]   SMUX low RAM writes 0/20
+55 [diag]   WR 0xAF<=0x10 FAIL err=2
+56 [diag]   WR 0x80<=0x11 FAIL err=2
+57 [diag]   RD 0x80 ptr-write FAIL err=2
+58 [diag]   RD 0x80 ptr-write FAIL err=2
+59 [diag]   RD 0x80 ptr-write FAIL err=2
+60 [diag]   RD 0x80 ptr-write FAIL err=2
+61 [diag]   RD 0x80 ptr-write FAIL err=2
+62 [diag]   RD 0x80 ptr-write FAIL err=2
+63 [diag]   RD 0x80 ptr-write FAIL err=2
+64 [diag]   RD 0x80 ptr-write FAIL err=2
+65 [diag]   RD 0x80 ptr-write FAIL err=2
+66 [diag]   RD 0x80 ptr-write FAIL err=2
+67 [diag]   RD 0x80 ptr-write FAIL err=2
+68 [diag]   RD 0x80 ptr-write FAIL err=2
+69 [diag]   RD 0x80 ptr-write FAIL err=2
+70 [diag]   RD 0x80 ptr-write FAIL err=2
+71 [diag]   RD 0x80 ptr-write FAIL err=2
+72 [diag]   RD 0x80 ptr-write FAIL err=2
+73 [diag]   RD 0x80 ptr-write FAIL err=2
+74 [diag]   RD 0x80 ptr-write FAIL err=2
+75 [diag]   RD 0x80 ptr-write FAIL err=2
+76 [diag]   RD 0x80 ptr-write FAIL err=2
+77 [diag]   RD 0x80 ptr-write FAIL err=2
+78 [diag]   RD 0x80 ptr-write FAIL err=2
+79 [diag]   RD 0x80 ptr-write FAIL err=2
+80 [diag]   RD 0x80 ptr-write FAIL err=2
+81 [diag]   RD 0x80 ptr-write FAIL err=2
+82 [diag]   RD 0x80 ptr-write FAIL err=2
+83 [diag]   RD 0x80 ptr-write FAIL err=2
+84 [diag]   RD 0x80 ptr-write FAIL err=2
+85 [diag]   RD 0x80 ptr-write FAIL err=2
+86 [diag]   RD 0x80 ptr-write FAIL err=2
+87 [diag]   RD 0x80 ptr-write FAIL err=2
+88 [diag]   RD 0x80 ptr-write FAIL err=2
+89 [diag]   RD 0x80 ptr-write FAIL err=2
+90 [diag]   RD 0x80 ptr-write FAIL err=2
+91 [diag]   RD 0x80 ptr-write FAIL err=2
+92 [diag]   RD 0x80 ptr-write FAIL err=2
+93 [diag]   RD 0x80 ptr-write FAIL err=2
+94 [diag]   RD 0x80 ptr-write FAIL err=2
+95 [diag]   RD 0x80 ptr-write FAIL err=2
+96 [diag]   RD 0x80 ptr-write FAIL err=2
+97 [diag]   RD 0x80 ptr-write FAIL err=2
+98 [diag]   RD 0x80 ptr-write FAIL err=2
+99 [diag]   RD 0x80 ptr-write FAIL err=2
+100 [diag]   RD 0x80 ptr-write FAIL err=2
+101 [diag]   RD 0x80 ptr-write FAIL err=2
+102 [diag]   RD 0x80 ptr-write FAIL err=2
+103 [diag]   RD 0x80 ptr-write FAIL err=2
+104 [diag]   RD 0x80 ptr-write FAIL err=2
+105 [diag]   RD 0x80 ptr-write FAIL err=2
+106 [diag]   RD 0x80 ptr-write FAIL err=2
+107 [diag]   RD 0x80 ptr-write FAIL err=2
+108 [diag]   RD 0x80 ptr-write FAIL err=2
+109 [diag]   RD 0x80 ptr-write FAIL err=2
+110 [diag]   RD 0x80 ptr-write FAIL err=2
+111 [diag]   RD 0x80 ptr-write FAIL err=2
+112 [diag]   RD 0x80 ptr-write FAIL err=2
+113 [diag]   RD 0x80 ptr-write FAIL err=2
+114 [diag]   RD 0x80 ptr-write FAIL err=2
+115 [diag]   RD 0x80 ptr-write FAIL err=2
+116 [diag]   RD 0x80 ptr-write FAIL err=2
+117 [diag]   RD 0x80 ptr-write FAIL err=2
+118 [diag]   RD 0x80 ptr-write FAIL err=2
+119 [diag]   RD 0x80 ptr-write FAIL err=2
+120 [diag]   RD 0x80 ptr-write FAIL err=2
+121 [diag]   RD 0x80 ptr-write FAIL err=2
+122 [diag]   RD 0x80 ptr-write FAIL err=2
+123 [diag]   RD 0x80 ptr-write FAIL err=2
+124 [diag]   RD 0x80 ptr-write FAIL err=2
+125 [diag]   RD 0x80 ptr-write FAIL err=2
+126 [diag]   RD 0x80 ptr-write FAIL err=2
+127 [diag]   RD 0x80 ptr-write FAIL err=2
+128 [diag]   RD 0x80 ptr-write FAIL err=2
+129 [diag]   RD 0x80 ptr-write FAIL err=2
+130 [diag]   RD 0x80 ptr-write FAIL err=2
+131 [diag]   RD 0x80 ptr-write FAIL err=2
+132 [diag]   RD 0x80 ptr-write FAIL err=2
+133 [diag]   RD 0x80 ptr-write FAIL err=2
+134 [diag]   RD 0x80 ptr-write FAIL err=2
+135 [diag]   RD 0x80 ptr-write FAIL err=2
+136 [diag]   RD 0x80 ptr-write FAIL err=2
+137 [diag]   RD 0x80 ptr-write FAIL err=2
+138 [diag]   RD 0x80 ptr-write FAIL err=2
+139 [diag]   RD 0x80 ptr-write FAIL err=2
+140 [diag]   RD 0x80 ptr-write FAIL err=2
+141 [diag]   RD 0x80 ptr-write FAIL err=2
+142 [diag]   RD 0x80 ptr-write FAIL err=2
+143 [diag]   RD 0x80 ptr-write FAIL err=2
+144 [diag]   RD 0x80 ptr-write FAIL err=2
+145 [diag]   RD 0x80 ptr-write FAIL err=2
+146 [diag]   RD 0x80 ptr-write FAIL err=2
+147 [diag]   RD 0x80 ptr-write FAIL err=2
+148 [diag]   RD 0x80 ptr-write FAIL err=2
+149 [diag]   RD 0x80 ptr-write FAIL err=2
+150 [diag]   RD 0x80 ptr-write FAIL err=2
+151 [diag]   RD 0x80 ptr-write FAIL err=2
+152 [diag]   RD 0x80 ptr-write FAIL err=2
+153 [diag]   RD 0x80 ptr-write FAIL err=2
+154 [diag]   RD 0x80 ptr-write FAIL err=2
+155 [diag]   RD 0x80 ptr-write FAIL err=2
+156 [diag]   RD 0x80 ptr-write FAIL err=2
+157 [diag]   RD 0x80 ptr-write FAIL err=2
+158 [diag]   RD 0x80 ptr-write FAIL err=2
+159 [diag]   RD 0x80 ptr-write FAIL err=2
+160 [diag]   RD 0x80 ptr-write FAIL err=2
+161 [diag]   RD 0x80 ptr-write FAIL err=2
+162 [diag]   RD 0x80 ptr-write FAIL err=2
+163 [diag]   RD 0x80 ptr-write FAIL err=2
+164 [diag]   RD 0x80 ptr-write FAIL err=2
+165 [diag]   RD 0x80 ptr-write FAIL err=2
+166 [diag]   RD 0x80 ptr-write FAIL err=2
+167 [diag]   RD 0x80 ptr-write FAIL err=2
+168 [diag]   RD 0x80 ptr-write FAIL err=2
+169 [diag]   RD 0x80 ptr-write FAIL err=2
+170 [diag]   RD 0x80 ptr-write FAIL err=2
+171 [diag]   RD 0x80 ptr-write FAIL err=2
+172 [diag]   RD 0x80 ptr-write FAIL err=2
+173 [diag]   RD 0x80 ptr-write FAIL err=2
+174 [diag]   RD 0x80 ptr-write FAIL err=2
+175 [diag]   RD 0x80 ptr-write FAIL err=2
+176 [diag]   RD 0x80 ptr-write FAIL err=2
+177 [diag]   RD 0x80 ptr-write FAIL err=2
+178 [diag]   RD 0x80 ptr-write FAIL err=2
+179 [diag]   RD 0x80 ptr-write FAIL err=2
+180 [diag]   RD 0x80 ptr-write FAIL err=2
+181 [diag]   RD 0x80 ptr-write FAIL err=2
+182 [diag]   RD 0x80 ptr-write FAIL err=2
+183 [diag]   RD 0x80 ptr-write FAIL err=2
+184 [diag]   RD 0x80 ptr-write FAIL err=2
+185 [diag]   RD 0x80 ptr-write FAIL err=2
+186 [diag]   RD 0x80 ptr-write FAIL err=2
+187 [diag]   RD 0x80 ptr-write FAIL err=2
+188 [diag]   RD 0x80 ptr-write FAIL err=2
+189 [diag]   RD 0x80 ptr-write FAIL err=2
+190 [diag]   RD 0x80 ptr-write FAIL err=2
+191 [diag]   RD 0x80 ptr-write FAIL err=2
+192 [diag]   RD 0x80 ptr-write FAIL err=2
+193 [diag]   RD 0x80 ptr-write FAIL err=2
+194 [diag]   RD 0x80 ptr-write FAIL err=2
+195 [diag]   RD 0x80 ptr-write FAIL err=2
+196 [diag]   RD 0x80 ptr-write FAIL err=2
+197 [diag]   RD 0x80 ptr-write FAIL err=2
+198 [diag]   RD 0x80 ptr-write FAIL err=2
+199 [diag]   RD 0x80 ptr-write FAIL err=2
+200 [diag]   RD 0x80 ptr-write FAIL err=2
+201 [diag]   RD 0x80 ptr-write FAIL err=2
+202 [diag]   RD 0x80 ptr-write FAIL err=2
+203 [diag]   RD 0x80 ptr-write FAIL err=2
+204 [diag]   RD 0x80 ptr-write FAIL err=2
+205 [diag]   RD 0x80 ptr-write FAIL err=2
+206 [diag]   RD 0x80 ptr-write FAIL err=2
+207 [diag]   RD 0x80 ptr-write FAIL err=2
+208 [diag]   RD 0x80 ptr-write FAIL err=2
+209 [diag]   RD 0x80 ptr-write FAIL err=2
+210 [diag]   RD 0x80 ptr-write FAIL err=2
+211 [diag]   RD 0x80 ptr-write FAIL err=2
+212 [diag]   RD 0x80 ptr-write FAIL err=2
+213 [diag]   RD 0x80 ptr-write FAIL err=2
+214 [diag]   RD 0x80 ptr-write FAIL err=2
+215 [diag]   RD 0x80 ptr-write FAIL err=2
+216 [diag]   RD 0x80 ptr-write FAIL err=2
+217 [diag]   RD 0x80 ptr-write FAIL err=2
+218 [diag]   RD 0x80 ptr-write FAIL err=2
+219 [diag]   RD 0x80 ptr-write FAIL err=2
+220 [diag]   RD 0x80 ptr-write FAIL err=2
+221 [diag]   RD 0x80 ptr-write FAIL err=2
+222 [diag]   RD 0x80 ptr-write FAIL err=2
+223 [diag]   RD 0x80 ptr-write FAIL err=2
+224 [diag]   RD 0x80 ptr-write FAIL err=2
+225 [diag]   RD 0x80 ptr-write FAIL err=2
+226 [diag]   RD 0x80 ptr-write FAIL err=2
+227 [diag]   RD 0x80 ptr-write FAIL err=2
+228 [diag]   RD 0x80 ptr-write FAIL err=2
+229 [diag]   RD 0x80 ptr-write FAIL err=2
+230 [diag]   RD 0x80 ptr-write FAIL err=2
+231 [diag]   RD 0x80 ptr-write FAIL err=2
+232 [diag]   RD 0x80 ptr-write FAIL err=2
+233 [diag]   RD 0x80 ptr-write FAIL err=2
+234 [diag]   RD 0x80 ptr-write FAIL err=2
+235 [diag]   RD 0x80 ptr-write FAIL err=2
+236 [diag]   RD 0x80 ptr-write FAIL err=2
+237 [diag]   RD 0x80 ptr-write FAIL err=2
+238 [diag]   RD 0x80 ptr-write FAIL err=2
+239 [diag]   RD 0x80 ptr-write FAIL err=2
+240 [diag]   RD 0x80 ptr-write FAIL err=2
+241 [diag]   RD 0x80 ptr-write FAIL err=2
+242 [diag]   RD 0x80 ptr-write FAIL err=2
+243 [diag]   RD 0x80 ptr-write FAIL err=2
+244 [diag]   RD 0x80 ptr-write FAIL err=2
+245 [diag]   RD 0x80 ptr-write FAIL err=2
+246 [diag]   RD 0x80 ptr-write FAIL err=2
+247 [diag]   RD 0x80 ptr-write FAIL err=2
+248 [diag]   RD 0x80 ptr-write FAIL err=2
+249 [diag]   RD 0x80 ptr-write FAIL err=2
+250 [diag]   RD 0x80 ptr-write FAIL err=2
+251 [diag]   RD 0x80 ptr-write FAIL err=2
+252 [diag]   RD 0x80 ptr-write FAIL err=2
+253 [diag]   RD 0x80 ptr-write FAIL err=2
+254 [diag]   RD 0x80 ptr-write FAIL err=2
+255 [diag]   RD 0x80 ptr-write FAIL err=2
+256 [diag]   RD 0x80 ptr-write FAIL err=2
+257 [diag]   RD 0x80 ptr-write FAIL err=2
+258 [diag]   RD 0x80 ptr-write FAIL err=2
+259 [diag]   RD 0x80 ptr-write FAIL err=2
+260 [diag]   RD 0x80 ptr-write FAIL err=2
+261 [diag]   RD 0x80 ptr-write FAIL err=2
+262 [diag]   RD 0x80 ptr-write FAIL err=2
+263 [diag]   RD 0x80 ptr-write FAIL err=2
+264 [diag]   RD 0x80 ptr-write FAIL err=2
+265 [diag]   RD 0x80 ptr-write FAIL err=2
+266 [diag]   RD 0x80 ptr-write FAIL err=2
+267 [diag]   RD 0x80 ptr-write FAIL err=2
+268 [diag]   RD 0x80 ptr-write FAIL err=2
+269 [diag]   RD 0x80 ptr-write FAIL err=2
+270 [diag]   RD 0x80 ptr-write FAIL err=2
+271 [diag]   RD 0x80 ptr-write FAIL err=2
+272 [diag]   RD 0x80 ptr-write FAIL err=2
+273 [diag]   RD 0x80 ptr-write FAIL err=2
+274 [diag]   RD 0x80 ptr-write FAIL err=2
+275 [diag]   RD 0x80 ptr-write FAIL err=2
+276 [diag]   RD 0x80 ptr-write FAIL err=2
+277 [diag]   RD 0x80 ptr-write FAIL err=2
+278 [diag]   RD 0x80 ptr-write FAIL err=2
+279 [diag]   RD 0x80 ptr-write FAIL err=2
+280 [diag]   RD 0x80 ptr-write FAIL err=2
+281 [diag]   RD 0x80 ptr-write FAIL err=2
+282 [diag]   RD 0x80 ptr-write FAIL err=2
+283 [diag]   RD 0x80 ptr-write FAIL err=2
+284 [diag]   RD 0x80 ptr-write FAIL err=2
+285 [diag]   RD 0x80 ptr-write FAIL err=2
+286 [diag]   RD 0x80 ptr-write FAIL err=2
+287 [diag]   SMUX low TIMEOUT (ENABLE=0x00 after 1000ms)
+288 [diag] -- SMUX high bank (F5-F8+Clear+NIR): load, verify chain, measure --
+289 [diag]   WR 0x80<=0x01 FAIL err=2
+290 [diag]   WR 0xAF<=0x10 FAIL err=2
+291 [diag]   WR 0x00<=0x00 FAIL err=2
+292 [diag]   WR 0x01<=0x00 FAIL err=2
+293 [diag]   WR 0x02<=0x00 FAIL err=2
+294 [diag]   WR 0x03<=0x40 FAIL err=2
+295 [diag]   WR 0x04<=0x02 FAIL err=2
+296 [diag]   WR 0x05<=0x00 FAIL err=2
+297 [diag]   WR 0x06<=0x10 FAIL err=2
+298 [diag]   WR 0x07<=0x03 FAIL err=2
+299 [diag]   WR 0x08<=0x50 FAIL err=2
+300 [diag]   WR 0x09<=0x10 FAIL err=2
+301 [diag]   WR 0x0A<=0x03 FAIL err=2
+302 [diag]   WR 0x0B<=0x00 FAIL err=2
+303 [diag]   WR 0x0C<=0x00 FAIL err=2
+304 [diag]   WR 0x0D<=0x00 FAIL err=2
+305 [diag]   WR 0x0E<=0x24 FAIL err=2
+306 [diag]   WR 0x0F<=0x00 FAIL err=2
+307 [diag]   WR 0x10<=0x00 FAIL err=2
+308 [diag]   WR 0x11<=0x50 FAIL err=2
+309 [diag]   WR 0x12<=0x00 FAIL err=2
+310 [diag]   WR 0x13<=0x06 FAIL err=2
+311 [diag]   SMUX high RAM writes 0/20
+312 [diag]   WR 0xAF<=0x10 FAIL err=2
+313 [diag]   WR 0x80<=0x11 FAIL err=2
+314 [diag]   RD 0x80 ptr-write FAIL err=2
+315 [diag]   RD 0x80 ptr-write FAIL err=2
+316 [diag]   RD 0x80 ptr-write FAIL err=2
+317 [diag]   RD 0x80 ptr-write FAIL err=2
+318 [diag]   RD 0x80 ptr-write FAIL err=2
+319 [diag]   RD 0x80 ptr-write FAIL err=2
+320 [diag]   RD 0x80 ptr-write FAIL err=2
+321 [diag]   RD 0x80 ptr-write FAIL err=2
+322 [diag]   RD 0x80 ptr-write FAIL err=2
+323 [diag]   RD 0x80 ptr-write FAIL err=2
+324 [diag]   RD 0x80 ptr-write FAIL err=2
+325 [diag]   RD 0x80 ptr-write FAIL err=2
+326 [diag]   RD 0x80 ptr-write FAIL err=2
+327 [diag]   RD 0x80 ptr-write FAIL err=2
+328 [diag]   RD 0x80 ptr-write FAIL err=2
+329 [diag]   RD 0x80 ptr-write FAIL err=2
+330 [diag]   RD 0x80 ptr-write FAIL err=2
+331 [diag]   RD 0x80 ptr-write FAIL err=2
+332 [diag]   RD 0x80 ptr-write FAIL err=2
+333 [diag]   RD 0x80 ptr-write FAIL err=2
+334 [diag]   RD 0x80 ptr-write FAIL err=2
+335 [diag]   RD 0x80 ptr-write FAIL err=2
+336 [diag]   RD 0x80 ptr-write FAIL err=2
+337 [diag]   RD 0x80 ptr-write FAIL err=2
+338 [diag]   RD 0x80 ptr-write FAIL err=2
+339 [diag]   RD 0x80 ptr-write FAIL err=2
+340 [diag]   RD 0x80 ptr-write FAIL err=2
+341 [diag]   RD 0x80 ptr-write FAIL err=2
+342 [diag]   RD 0x80 ptr-write FAIL err=2
+343 [diag]   RD 0x80 ptr-write FAIL err=2
+344 [diag]   RD 0x80 ptr-write FAIL err=2
+345 [diag]   RD 0x80 ptr-write FAIL err=2
+346 [diag]   RD 0x80 ptr-write FAIL err=2
+347 [diag]   RD 0x80 ptr-write FAIL err=2
+348 [diag]   RD 0x80 ptr-write FAIL err=2
+349 [diag]   RD 0x80 ptr-write FAIL err=2
+350 [diag]   RD 0x80 ptr-write FAIL err=2
+351 [diag]   RD 0x80 ptr-write FAIL err=2
+352 [diag]   RD 0x80 ptr-write FAIL err=2
+353 [diag]   RD 0x80 ptr-write FAIL err=2
+354 [diag]   RD 0x80 ptr-write FAIL err=2
+355 [diag]   RD 0x80 ptr-write FAIL err=2
+356 [diag]   RD 0x80 ptr-write FAIL err=2
+357 [diag]   RD 0x80 ptr-write FAIL err=2
+358 [diag]   RD 0x80 ptr-write FAIL err=2
+359 [diag]   RD 0x80 ptr-write FAIL err=2
+360 [diag]   RD 0x80 ptr-write FAIL err=2
+361 [diag]   RD 0x80 ptr-write FAIL err=2
+362 [diag]   RD 0x80 ptr-write FAIL err=2
+363 [diag]   RD 0x80 ptr-write FAIL err=2
+364 [diag]   RD 0x80 ptr-write FAIL err=2
+365 [diag]   RD 0x80 ptr-write FAIL err=2
+366 [diag]   RD 0x80 ptr-write FAIL err=2
+367 [diag]   RD 0x80 ptr-write FAIL err=2
+368 [diag]   RD 0x80 ptr-write FAIL err=2
+369 [diag]   RD 0x80 ptr-write FAIL err=2
+370 [diag]   RD 0x80 ptr-write FAIL err=2
+371 [diag]   RD 0x80 ptr-write FAIL err=2
+372 [diag]   RD 0x80 ptr-write FAIL err=2
+373 [diag]   RD 0x80 ptr-write FAIL err=2
+374 [diag]   RD 0x80 ptr-write FAIL err=2
+375 [diag]   RD 0x80 ptr-write FAIL err=2
+376 [diag]   RD 0x80 ptr-write FAIL err=2
+377 [diag]   RD 0x80 ptr-write FAIL err=2
+378 [diag]   RD 0x80 ptr-write FAIL err=2
+379 [diag]   RD 0x80 ptr-write FAIL err=2
+380 [diag]   RD 0x80 ptr-write FAIL err=2
+381 [diag]   RD 0x80 ptr-write FAIL err=2
+382 [diag]   RD 0x80 ptr-write FAIL err=2
+383 [diag]   RD 0x80 ptr-write FAIL err=2
+384 [diag]   RD 0x80 ptr-write FAIL err=2
+385 [diag]   RD 0x80 ptr-write FAIL err=2
+386 [diag]   RD 0x80 ptr-write FAIL err=2
+387 [diag]   RD 0x80 ptr-write FAIL err=2
+388 [diag]   RD 0x80 ptr-write FAIL err=2
+389 [diag]   RD 0x80 ptr-write FAIL err=2
+390 [diag]   RD 0x80 ptr-write FAIL err=2
+391 [diag]   RD 0x80 ptr-write FAIL err=2
+392 [diag]   RD 0x80 ptr-write FAIL err=2
+393 [diag]   RD 0x80 ptr-write FAIL err=2
+394 [diag]   RD 0x80 ptr-write FAIL err=2
+395 [diag]   RD 0x80 ptr-write FAIL err=2
+396 [diag]   RD 0x80 ptr-write FAIL err=2
+397 [diag]   RD 0x80 ptr-write FAIL err=2
+398 [diag]   RD 0x80 ptr-write FAIL err=2
+399 [diag]   RD 0x80 ptr-write FAIL err=2
+400 [diag]   RD 0x80 ptr-write FAIL err=2
+401 [diag]   RD 0x80 ptr-write FAIL err=2
+402 [diag]   RD 0x80 ptr-write FAIL err=2
+403 [diag]   RD 0x80 ptr-write FAIL err=2
+404 [diag]   RD 0x80 ptr-write FAIL err=2
+405 [diag]   RD 0x80 ptr-write FAIL err=2
+406 [diag]   RD 0x80 ptr-write FAIL err=2
+407 [diag]   RD 0x80 ptr-write FAIL err=2
+408 [diag]   RD 0x80 ptr-write FAIL err=2
+409 [diag]   RD 0x80 ptr-write FAIL err=2
+410 [diag]   RD 0x80 ptr-write FAIL err=2
+411 [diag]   RD 0x80 ptr-write FAIL err=2
+412 [diag]   RD 0x80 ptr-write FAIL err=2
+413 [diag]   RD 0x80 ptr-write FAIL err=2
+414 [diag]   RD 0x80 ptr-write FAIL err=2
+415 [diag]   RD 0x80 ptr-write FAIL err=2
+416 [diag]   RD 0x80 ptr-write FAIL err=2
+417 [diag]   RD 0x80 ptr-write FAIL err=2
+418 [diag]   RD 0x80 ptr-write FAIL err=2
+419 [diag]   RD 0x80 ptr-write FAIL err=2
+420 [diag]   RD 0x80 ptr-write FAIL err=2
+421 [diag]   RD 0x80 ptr-write FAIL err=2
+422 [diag]   RD 0x80 ptr-write FAIL err=2
+423 [diag]   RD 0x80 ptr-write FAIL err=2
+424 [diag]   RD 0x80 ptr-write FAIL err=2
+425 [diag]   RD 0x80 ptr-write FAIL err=2
+426 [diag]   RD 0x80 ptr-write FAIL err=2
+427 [diag]   RD 0x80 ptr-write FAIL err=2
+428 [diag]   RD 0x80 ptr-write FAIL err=2
+429 [diag]   RD 0x80 ptr-write FAIL err=2
+430 [diag]   RD 0x80 ptr-write FAIL err=2
+431 [diag]   RD 0x80 ptr-write FAIL err=2
+432 [diag]   RD 0x80 ptr-write FAIL err=2
+433 [diag]   RD 0x80 ptr-write FAIL err=2
+434 [diag]   RD 0x80 ptr-write FAIL err=2
+435 [diag]   RD 0x80 ptr-write FAIL err=2
+436 [diag]   RD 0x80 ptr-write FAIL err=2
+437 [diag]   RD 0x80 ptr-write FAIL err=2
+438 [diag]   RD 0x80 ptr-write FAIL err=2
+439 [diag]   RD 0x80 ptr-write FAIL err=2
+440 [diag]   RD 0x80 ptr-write FAIL err=2
+441 [diag]   RD 0x80 ptr-write FAIL err=2
+442 [diag]   RD 0x80 ptr-write FAIL err=2
+443 [diag]   RD 0x80 ptr-write FAIL err=2
+444 [diag]   RD 0x80 ptr-write FAIL err=2
+445 [diag]   RD 0x80 ptr-write FAIL err=2
+446 [diag]   RD 0x80 ptr-write FAIL err=2
+447 [diag]   RD 0x80 ptr-write FAIL err=2
+448 [diag]   RD 0x80 ptr-write FAIL err=2
+449 [diag]   RD 0x80 ptr-write FAIL err=2
+450 [diag]   RD 0x80 ptr-write FAIL err=2
+451 [diag]   RD 0x80 ptr-write FAIL err=2
+452 [diag]   RD 0x80 ptr-write FAIL err=2
+453 [diag]   RD 0x80 ptr-write FAIL err=2
+454 [diag]   RD 0x80 ptr-write FAIL err=2
+455 [diag]   RD 0x80 ptr-write FAIL err=2
+456 [diag]   RD 0x80 ptr-write FAIL err=2
+457 [diag]   RD 0x80 ptr-write FAIL err=2
+458 [diag]   RD 0x80 ptr-write FAIL err=2
+459 [diag]   RD 0x80 ptr-write FAIL err=2
+460 [diag]   RD 0x80 ptr-write FAIL err=2
+461 [diag]   RD 0x80 ptr-write FAIL err=2
+462 [diag]   RD 0x80 ptr-write FAIL err=2
+463 [diag]   RD 0x80 ptr-write FAIL err=2
+464 [diag]   RD 0x80 ptr-write FAIL err=2
+465 [diag]   RD 0x80 ptr-write FAIL err=2
+466 [diag]   RD 0x80 ptr-write FAIL err=2
+467 [diag]   RD 0x80 ptr-write FAIL err=2
+468 [diag]   RD 0x80 ptr-write FAIL err=2
+469 [diag]   RD 0x80 ptr-write FAIL err=2
+470 [diag]   RD 0x80 ptr-write FAIL err=2
+471 [diag]   RD 0x80 ptr-write FAIL err=2
+472 [diag]   RD 0x80 ptr-write FAIL err=2
+473 [diag]   RD 0x80 ptr-write FAIL err=2
+474 [diag]   RD 0x80 ptr-write FAIL err=2
+475 [diag]   RD 0x80 ptr-write FAIL err=2
+476 [diag]   RD 0x80 ptr-write FAIL err=2
+477 [diag]   RD 0x80 ptr-write FAIL err=2
+478 [diag]   RD 0x80 ptr-write FAIL err=2
+479 [diag]   RD 0x80 ptr-write FAIL err=2
+480 [diag]   RD 0x80 ptr-write FAIL err=2
+481 [diag]   RD 0x80 ptr-write FAIL err=2
+482 [diag]   RD 0x80 ptr-write FAIL err=2
+483 [diag]   RD 0x80 ptr-write FAIL err=2
+484 [diag]   RD 0x80 ptr-write FAIL err=2
+485 [diag]   RD 0x80 ptr-write FAIL err=2
+486 [diag]   RD 0x80 ptr-write FAIL err=2
+487 [diag]   RD 0x80 ptr-write FAIL err=2
+488 [diag]   RD 0x80 ptr-write FAIL err=2
+489 [diag]   RD 0x80 ptr-write FAIL err=2
+490 [diag]   RD 0x80 ptr-write FAIL err=2
+491 [diag]   RD 0x80 ptr-write FAIL err=2
+492 [diag]   RD 0x80 ptr-write FAIL err=2
+493 [diag]   RD 0x80 ptr-write FAIL err=2
+494 [diag]   RD 0x80 ptr-write FAIL err=2
+495 [diag]   RD 0x80 ptr-write FAIL err=2
+496 [diag]   RD 0x80 ptr-write FAIL err=2
+497 [diag]   RD 0x80 ptr-write FAIL err=2
+498 [diag]   RD 0x80 ptr-write FAIL err=2
+499 [diag]   RD 0x80 ptr-write FAIL err=2
+500 [diag]   RD 0x80 ptr-write FAIL err=2
+501 [diag]   RD 0x80 ptr-write FAIL err=2
+502 [diag]   RD 0x80 ptr-write FAIL err=2
+503 [diag]   RD 0x80 ptr-write FAIL err=2
+504 [diag]   RD 0x80 ptr-write FAIL err=2
+505 [diag]   RD 0x80 ptr-write FAIL err=2
+506 [diag]   RD 0x80 ptr-write FAIL err=2
+507 [diag]   RD 0x80 ptr-write FAIL err=2
+508 [diag]   RD 0x80 ptr-write FAIL err=2
+509 [diag]   RD 0x80 ptr-write FAIL err=2
+510 [diag]   RD 0x80 ptr-write FAIL err=2
+511 [diag]   RD 0x80 ptr-write FAIL err=2
+512 [diag]   RD 0x80 ptr-write FAIL err=2
+513 [diag]   RD 0x80 ptr-write FAIL err=2
+514 [diag]   RD 0x80 ptr-write FAIL err=2
+515 [diag]   RD 0x80 ptr-write FAIL err=2
+516 [diag]   RD 0x80 ptr-write FAIL err=2
+517 [diag]   RD 0x80 ptr-write FAIL err=2
+518 [diag]   RD 0x80 ptr-write FAIL err=2
+519 [diag]   RD 0x80 ptr-write FAIL err=2
+520 [diag]   RD 0x80 ptr-write FAIL err=2
+521 [diag]   RD 0x80 ptr-write FAIL err=2
+522 [diag]   RD 0x80 ptr-write FAIL err=2
+523 [diag]   RD 0x80 ptr-write FAIL err=2
+524 [diag]   RD 0x80 ptr-write FAIL err=2
+525 [diag]   RD 0x80 ptr-write FAIL err=2
+526 [diag]   RD 0x80 ptr-write FAIL err=2
+527 [diag]   RD 0x80 ptr-write FAIL err=2
+528 [diag]   RD 0x80 ptr-write FAIL err=2
+529 [diag]   RD 0x80 ptr-write FAIL err=2
+530 [diag]   RD 0x80 ptr-write FAIL err=2
+531 [diag]   RD 0x80 ptr-write FAIL err=2
+532 [diag]   RD 0x80 ptr-write FAIL err=2
+533 [diag]   RD 0x80 ptr-write FAIL err=2
+534 [diag]   RD 0x80 ptr-write FAIL err=2
+535 [diag]   RD 0x80 ptr-write FAIL err=2
+536 [diag]   RD 0x80 ptr-write FAIL err=2
+537 [diag]   RD 0x80 ptr-write FAIL err=2
+538 [diag]   RD 0x80 ptr-write FAIL err=2
+539 [diag]   RD 0x80 ptr-write FAIL err=2
+540 [diag]   RD 0x80 ptr-write FAIL err=2
+541 [diag]   RD 0x80 ptr-write FAIL err=2
+542 [diag]   RD 0x80 ptr-write FAIL err=2
+543 [diag]   RD 0x80 ptr-write FAIL err=2
+544 [diag]   RD 0x80 ptr-write FAIL err=2
+545 [diag]   RD 0x80 ptr-write FAIL err=2
+546 [diag]   RD 0x80 ptr-write FAIL err=2
+547 [diag]   RD 0x80 ptr-write FAIL err=2
+548 [diag]   RD 0x80 ptr-write FAIL err=2
+549 [diag]   SMUX high TIMEOUT (ENABLE=0x00 after 1000ms)
+550 [diag] -- post-state (as left) --
+551 [diag]   RD 0x92 ptr-write FAIL err=2
+552 [diag]   RD 0x80 ptr-write FAIL err=2
+553 [diag]   RD 0x81 ptr-write FAIL err=2
+554 [diag]   RD 0xCA ptr-write FAIL err=2
+555 [diag]   RD 0xCB ptr-write FAIL err=2
+556 [diag]   RD 0xA9 ptr-write FAIL err=2
+557 [diag]   RD 0xAA ptr-write FAIL err=2
+558 [diag]   RD 0xAC ptr-write FAIL err=2
+559 [diag]   RD 0xAF ptr-write FAIL err=2
+560 [diag]   RD 0xB1 ptr-write FAIL err=2
+561 [diag]   RD 0xB2 ptr-write FAIL err=2
+562 [diag]   RD 0xB3 ptr-write FAIL err=2
+563 [diag]   RD 0xB5 ptr-write FAIL err=2
+564 [diag]   RD 0xCF ptr-write FAIL err=2
+565 [diag]   RD 0xD6 ptr-write FAIL err=2
+566 [diag]   RD 0x93 ptr-write FAIL err=2
+567 [diag]   RD 0xA3 ptr-write FAIL err=2
+568 [diag]   RD 0xA7 ptr-write FAIL err=2
+569 [diag]   RD 0xA9 ptr-write FAIL err=2
+570 [diag] === done: 561 failure(s), 0 clean transaction(s) ===
+571 [diag] failures above name the exact step. NACK/short-read = bus/silicon; readback or chain-verify MISMATCH = chip not holding state; gain-used!=4x = AGC/gain corruption (data was never comparable). 
+572 [diag] mqtt sink: 0 line(s) not delivered
+Timed out
