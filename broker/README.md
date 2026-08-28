@@ -418,9 +418,19 @@ one retained MQTT message per tag —
 monitor-air/ref/weight/<uid>  {"plant_id":…,"sat_g":…,"dry_g":…,"anchor_day":…}
 ```
 
-— where `sat_g` is the plant's peak since the last qualifying watering session (a
-day on which >=8 plants gained >10 g) and `dry_g` is its 10th percentile over 60
-days. Those move whenever anyone weighs anything, so it runs hourly:
+— where `sat_g` is the plant's peak since **its own** last watering and `dry_g` is
+the weight it reaches once it has given back as much water as it ever has (`sat`
+minus the largest drawdown that plant completed in 60 days). The firmware's
+`(sat-w)/(sat-dry)` is therefore exactly the 該澆水了嗎 panel's depletion%.
+
+**The script does not define any of that** — it reads the Flux straight out of
+daily.json panel 10 and ships the result. The two used to carry separate copies:
+on 2026-08-22 the panel's anchor was fixed (per plant instead of per global
+watering session) and the script's copy was not, so for six days every pot that
+had been skipped in the last group watering read 0% on the OLED. One definition
+now, in the panel.
+
+Those move whenever anyone weighs anything, so it runs hourly:
 
 ```cron
 5 * * * * /home/jiarung/monitor-air/broker/publish-weight-ref.sh >> /tmp/publish-weight-ref.log 2>&1

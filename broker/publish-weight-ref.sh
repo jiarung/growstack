@@ -5,11 +5,12 @@
 #   ./publish-weight-ref.sh              # compute + publish + clear stale
 #   ./publish-weight-ref.sh --dry-run    # print what would happen, touch nothing
 #
-# For each plant: sat_g = max weight since the last qualifying watering session
-# (same session rule as the Grafana panels: a day where >=8 plants gained >10 g),
-# dry_g = 10th percentile of the last 60 days (NOT the min — one bad low reading
-# must not inflate the denominator). Plants whose span (sat-dry) is <= 5 g are
-# noise and get no reference. Payload per tag UID, retained at QoS 1:
+# The sat/dry definition is NOT duplicated here — this reads the Flux straight out
+# of the 該澆水了嗎 panel (daily.json id 10) and ships what it computes. sat_g is
+# each plant's max since ITS OWN last watering; dry_g is the panel's trig_g, i.e.
+# sat minus the largest drawdown that plant has actually completed in 60 days.
+# Plants whose span is <= 5 g are noise and get no reference. Payload per tag UID,
+# retained at QoS 1:
 #
 #   monitor-air/ref/weight/<uid>  {"plant_id":...,"sat_g":...,"dry_g":...,"anchor_day":...}
 #
@@ -36,41 +37,22 @@ TAG_MAP="${TAG_MAP:-node-red/tag-map.json}"
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
 
-# Same anchor + estimators as the "該澆水了嗎" panel (daily.json id 10). If no
-# qualifying session exists in 90 d, findRecord has no record and .day errors out
-# — influx exits non-zero, which IS our fail path (nothing gets touched).
-read -r -d '' FLUX <<'EOF' || true
-import "date"
-import "timezone"
-option location = timezone.location(name: "Asia/Taipei")
-
-src = (start) => from(bucket: "sensors")
-  |> range(start: start)
-  |> filter(fn: (r) => r._measurement == "plant_weight" and r._field == "weight_g"
-       and r.quality == "ok" and r.plant_id != "unknown")
-
-S = (src(start: -90d)
-  |> group(columns: ["plant_id"]) |> sort(columns: ["_time"])
-  |> difference(columns: ["_value"], nonNegative: false)
-  |> filter(fn: (r) => r._value > 10.0)
-  |> map(fn: (r) => ({ r with day: date.truncate(t: r._time, unit: 1d) }))
-  |> group(columns: ["day", "plant_id"]) |> distinct(column: "plant_id")
-  |> group(columns: ["day"]) |> count(column: "_value")
-  |> filter(fn: (r) => r._value >= 8)
-  |> group() |> sort(columns: ["day"]) |> last(column: "day")
-  |> findRecord(fn: (key) => true, idx: 0)).day
-
-satW = src(start: -90d) |> range(start: S) |> group(columns: ["plant_id"]) |> max()
-  |> map(fn: (r) => ({ plant_id: r.plant_id, k: "sat", v: r._value }))
-dryW = src(start: -60d) |> group(columns: ["plant_id"])
-  |> quantile(q: 0.1, method: "exact_mean")
-  |> map(fn: (r) => ({ plant_id: r.plant_id, k: "dry", v: r._value }))
-
-union(tables: [satW, dryW]) |> group()
-  |> pivot(rowKey: ["plant_id"], columnKey: ["k"], valueColumn: "v")
-  |> filter(fn: (r) => exists r.sat and exists r.dry and r.sat - r.dry > 5.0)
-  |> map(fn: (r) => ({ plant_id: r.plant_id, sat: r.sat, dry: r.dry, anchor: string(v: S) }))
-EOF
+# One definition, not two. This script and the panel used to carry separate copies
+# of the same Flux; on 2026-08-22 the panel's anchor was fixed (per plant instead of
+# per global session) and this copy was not, so every pot skipped in the last group
+# watering has been reading 0% on the OLED ever since. Reading the panel's query
+# makes that class of drift impossible rather than merely detectable.
+FLUX="$(python3 - <<'PY'
+import json
+q = next(p for p in json.load(open("grafana/provisioning/dashboards/daily.json"))["panels"]
+         if p["id"] == 10)["targets"][0]["query"]
+# The panel hardcodes its own ranges today. If someone switches it to the dashboard
+# time picker there is no time range to supply headless, and silently publishing
+# refs computed over the wrong window would be worse than not publishing.
+assert "v.timeRange" not in q, "panel 10 now uses dashboard time variables — cannot run headless"
+print(q)
+PY
+)"
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 docker exec -i "$INFLUX" influx query --org "$ORG" --raw -f /dev/stdin <<<"$FLUX" > "$TMP/rows.csv"
@@ -81,7 +63,7 @@ docker exec -i "$INFLUX" influx query --org "$ORG" --raw -f /dev/stdin <<<"$FLUX
 # here — it is re-raised at the end where cron can see it.
 PLAN_RC=0
 python3 - "$TMP" "$TAG_MAP" "$PREFIX" > "$TMP/plan" <<'PY' || PLAN_RC=$?
-import csv, json, math, sys, os
+import csv, datetime as dt, json, math, sys, os
 tmp, tag_map_path, prefix = sys.argv[1], sys.argv[2], sys.argv[3]
 
 uid_to_plant = json.load(open(tag_map_path))
@@ -106,15 +88,28 @@ if not rows:
 untagged = []
 for r in sorted(rows, key=lambda r: r["plant_id"]):
     plant = r["plant_id"]
+    # dry_g is the panel's trig_g — the weight this pot reaches when it has given
+    # back as much water as it ever has. The firmware's (sat-w)/(sat-dry) then IS
+    # the panel's depletion%, so src/ needs no change for this to take effect.
     try:
-        sat, dry = float(r["sat"]), float(r["dry"])
+        sat, dry = float(r["sat_g"]), float(r["trig_g"])
     except (KeyError, ValueError):
         print(f"bad row for {plant}: {r} — schema changed?", file=sys.stderr)
         sys.exit(1)
     if not (math.isfinite(sat) and math.isfinite(dry) and sat - dry > 5.0):
         print(f"bad values for {plant}: sat={sat} dry={dry}", file=sys.stderr)
         sys.exit(1)
-    anchor = r.get("anchor", "")[:10]
+    # anchor_day is decorative — the firmware ignores it (src/weight_ref.cpp reads
+    # only sat_g/dry_g). It is derived from the panel's `days` rather than carried
+    # as its own column because that pivot's value column is float, and unioning a
+    # time into it is a type error. days = (now()-anchor)/86400e9, so this inverts
+    # to sub-millisecond accuracy — the date truncation is exact. Taipei is a fixed
+    # UTC+8 with no DST, so no tz database is needed (cron's python3 may lack one).
+    try:
+        anchor = (dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
+                  - dt.timedelta(days=float(r["days"]))).date().isoformat()
+    except (KeyError, ValueError):
+        anchor = ""
     uids = plant_to_uids.get(plant)
     if not uids:
         untagged.append(plant)

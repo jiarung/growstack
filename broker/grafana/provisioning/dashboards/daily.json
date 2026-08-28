@@ -473,7 +473,7 @@
   },
   {
    "id": 10,
-   "title": "該澆水了嗎 — 耗竭程度（分母為觀測範圍，非真實持水量）",
+   "title": "該澆水了嗎 — 耗竭程度（分母為該盆實測的澆水循環幅度）",
    "type": "table",
    "datasource": {
     "type": "influxdb",
@@ -485,7 +485,7 @@
     "x": 0,
     "y": 35
    },
-   "description": "現在該澆哪一盆。依耗竭程度排序。\n\n耗竭% = (飽和 − 現在) / (飽和 − 乾基準) × 100。\n‧ 飽和 = 最近一次合格澆水場次之後的最大重量（錨定日期欄可見）。\n‧ 乾基準 = 60 天內的第 10 百分位，**不是最小值** —— 單一錯誤的低讀數會撐大分母、壓低耗竭%，而這類雜訊已知存在。\n\n**兩個判準的差別只在門檻，分母相同**：\n‧「依你的習慣」= 耗竭 ≥100%，即已達你歷史上實際會澆水的乾度。\n‧「達觀測範圍80%」= 耗竭 ≥80%，提早提醒。\n\n⚠ 分母是**你用過的重量範圍**，不是真實的容器持水量 —— 乾介質重量從未量測。因此這裡的百分比不具備園藝上「土壤含水耗竭%」的意義，不要那樣解讀。取得真實乾基重（空盆+全乾介質）之後，分母才能換成真正的持水量。\n\n⚠「依你的習慣」是**描述性的，不是規範性的**：它只記錄你過去會在多乾時澆水。若你因為看了這張表而提早澆水，乾基準就不再更新，門檻會凍結在舊習慣上。行為改變後這個基準需要重新檢視。\n\n⚠ 錨點來自全域場次。若只澆單盆，該盆的實際飽和點會比錨點新，本表會低估其含水量 —— 「錨定日期」與「距上次澆水」兩欄使這個失效可見。\n\n**飽和重量錨在每一株自己上次的澆水，不是上一個全體場次。** 舊版用全體場次日當錨點，對當天沒被澆到的植株，`sat` 會取到它自己偏乾的近期讀值 —— `sat` 幾乎等於 `now`，耗竭算出 0%，於是**最需要水的那幾株顯示成不用澆**。\n\n2026-08-22 抓到這個錯：當天 13 株有澆、4 株沒有，但全部 17 株都顯示 0%。改成每株各自的錨點之後，cactus-13-2 51.8%、cactus-12 50.8%、cactus-08 40.2%、cactus-14 12.2%，其餘 13 株才是 0%。\n\n`days` 欄同樣改為「距離這一株自己上次澆水的天數」，不再是全體場次的天數。",
+   "description": "現在該澆哪一盆。依耗竭程度排序。\n\n耗竭% = (飽和 − 現在) / **循環幅度** × 100。\n‧ 飽和 = 這一株自己上次澆水之後的最大重量。\n‧ 循環幅度 = **這一株已完結的澆水循環中，實測到的最大一次回落幅度**（60 天窗）。\n\n所以 **100% = 跟這盆歷來最乾的時候一樣乾**。這是一句可以直接拿資料查證的話。\n\n**為什麼不再用「60 天第 10 百分位」當乾基準。** 那個 p10 取到的是上秤初期、盆子已乾很久的狀態，現在的澆水習慣從不回到那裡 —— 分母裡有一大塊是週級尺度上既不會被用掉、也不會被一次澆水補回來的深層核心水（實測：每次澆水補的量都少於上一輪掉的量，飽和重量逐輪緩降）。\n\n疏水介質的大盆受害最深。實測循環幅度 ÷ 舊分母：\n\n| | |\n|---|---|\n| cactus-12 (2498 g) | 0.57 |\n| cactus-14 (2029 g) | 0.53 |\n| cactus-11 (1578 g) | 0.43 |\n| cactus-05 (1350 g) | 0.38 |\n| cactus-01 (282 g) | 0.80 |\n| cactus-10 (240 g) | 0.85 |\n| cactus-09 (308 g) | 1.30 |\n\n大盆分母約 2 倍過大，小盆大致正確 —— **80% 這個門檻等於是被小盆校準出來的，大盆永遠不會亮。** cactus-12 上一輪掉了 189 g 才被澆，舊公式只算 60%；cactus-11 是 61%。兩個都不會觸發。\n\n**證據（leave-one-out，每一輪的分母只由其他輪決定，n=73 次歷史澆水）**：把「你按下澆水那一刻，這個指標讀到幾 %」拿來比 —— 舊的 p10 中位數 56%、只有 26% 的事件落在 70–110%；改用最大循環幅度後是 82% / 45%。**80% 的旗標大約就在你實際會澆水的時間點亮。**\n\n分母的候選裡，最大幅度與 p75 統計上打平（45% vs 47%，n=73 下無意義）。選最大幅度是為了穩定（IQR 36 vs 42、範圍 13–154 vs 14–174 都較緊）與可解釋 —— 「跟歷來最乾一樣乾」講得清楚，「p75 分位」講不清楚。\n\n**兩個判準的差別只在門檻，分母相同**：\n‧「該澆水 (80%)」= 提早提醒。\n‧「已過歷來最乾 (100%)」= 已經比這盆歷史上任何一次都乾。>100% 不設上限。\n\n**分母來源**欄：尚未累積出一個完結循環的新盆會標「暫用 p10」，沿用舊定義撐著，各自第二次澆水後自動轉正。\n\n⚠ **已知失效模式**：某盆被放置特別久，會把它的最大幅度撐高，該盆在 60 天窗內的後續循環因此低報；60 天後自動回正。「循環幅度 g」欄讓這件事看得見 —— 如果某盆的幅度明顯比鄰居大得不合理，就是踩到這個。\n\n⚠ 分母仍然是**你用過的重量範圍**，不是真實的容器持水量 —— 乾介質重量從未量測。這裡的百分比不具備園藝上「土壤含水耗竭%」的意義，不要那樣解讀。\n\n⚠ 這個指標是**描述性的，不是規範性的**：它記錄你過去會在多乾時澆水。若你因為看了這張表而普遍提早澆水，最大幅度就不再更新，門檻會凍結在舊習慣上。行為改變後這個基準需要重新檢視。\n\n秤重站 OLED 的 `used %` 由 `broker/publish-weight-ref.sh` 發佈，而該腳本直接讀取本面板的查詢，所以兩邊永遠是同一個定義。",
    "fieldConfig": {
     "defaults": {
      "custom": {
@@ -543,12 +543,80 @@
      {
       "matcher": {
        "id": "byName",
-       "options": "dry_g"
+       "options": "trig_g"
       },
       "properties": [
        {
         "id": "displayName",
-        "value": "乾基準 g"
+        "value": "該澆水點 g"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "span_g"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "循環幅度 g"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "basis"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "分母來源"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "habit"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "已過歷來最乾 (100%)"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "obs80"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "該澆水 (80%)"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "days"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "距上次澆水 d"
        },
        {
         "id": "decimals",
@@ -601,28 +669,67 @@
         }
        }
       ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
      },
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\n// 10 g 是全域的澆水判定門檻，與面板 2 的速率過濾、面板 11 的場次偵測同一個值。\nJUMP = 10.0\n\nsrc = (start) => from(bucket: \"sensors\")\n  |> range(start: start)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"\n       and r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])\n\n// 錨點是「這一株自己上次被澆水」，不是「上一個全體澆水場次」。\n// 舊版用後者，於是沒被澆到的那幾株，sat 取到的是它們自己偏乾的近期讀值,\n// sat 幾乎等於 now、耗竭算出 0% —— 最需要水的反而顯示成不用澆。\n// 2026-08-22 實測：cactus-08/12/13-2 當天沒澆，舊版全報 0%，實際是 40-52%。\nanchor = src(start: -90d)\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"_time\"])\n  |> difference(columns: [\"_value\"], nonNegative: false)\n  |> filter(fn: (r) => r._value > JUMP)\n  |> group(columns: [\"plant_id\"]) |> last(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, anchor: r._time }))\n  |> group()\n\n// 飽和重量 = 自己那次澆水之後的最大值\nsatW = join(tables: {s: src(start: -90d) |> group(), a: anchor}, on: [\"plant_id\"])\n  |> filter(fn: (r) => r._time >= r.anchor)\n  |> group(columns: [\"plant_id\"]) |> max(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"sat\", v: r._value }))\n  |> group()\n\nnowW = src(start: -90d) |> group(columns: [\"plant_id\"]) |> last()\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"now\", v: r._value }))\n\n// 距離自己上次澆水幾天 —— 每株各自計算\nageW = anchor\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"days\",\n       v: float(v: int(v: now()) - int(v: r.anchor)) / 86400000000000.0 }))\n\n// ---- 分母：已完結澆水循環中，實測到的最大一次回落幅度 ----\n// 舊版用「sat − 60 天 p10」。那個 p10 取到的是上秤初期、盆子已乾很久的狀態，\n// 現在的澆水習慣從不回到那裡 —— 分母裡有一大塊是週級尺度上既不會被用掉、\n// 也不會被一次澆水補回來的深層核心水。大盆因此分母約 2 倍過大：\n// 實測循環幅度 ÷ 舊分母，>1300 g 的盆是 0.38–0.63，<500 g 的盆是 0.71–1.30。\n// 於是 80% 這個門檻等於是被小盆校準出來的，大盆永遠不會亮。\n//\n// 每筆標上它屬於第幾個澆水循環。difference 只覆寫 _value，先 duplicate 出 wt\n// 就能同時保有原重量與差分。group 之後補一次 sort：Flux 不保證 group 維持列序，\n// 而 last() 依賴它。\ncyc = src(start: -60d)\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"_time\"])\n  |> duplicate(column: \"_value\", as: \"wt\")\n  |> difference(columns: [\"_value\"], nonNegative: false, keepFirst: true)\n  |> map(fn: (r) => ({ r with isw: if exists r._value and r._value > JUMP then 1 else 0 }))\n  |> cumulativeSum(columns: [\"isw\"])\n  |> group(columns: [\"plant_id\", \"isw\"]) |> sort(columns: [\"_time\"])\n\nhi = cyc |> max(column: \"wt\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, c: r.isw, k: \"hi\", v: r.wt })) |> group()\nlo = cyc |> last(column: \"wt\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, c: r.isw, k: \"lo\", v: r.wt })) |> group()\ncmax = cyc |> last(column: \"wt\") |> group(columns: [\"plant_id\"]) |> max(column: \"isw\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, cmax: r.isw })) |> group()\n\ndrops = union(tables: [hi, lo]) |> group()\n  |> pivot(rowKey: [\"plant_id\", \"c\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, c: r.c, drop: r.hi - r.lo }))\n\n// c > 0     ：c = 0 是「窗口左緣 → 第一次澆水」的左截斷殘段，起點不是澆水，\n//             不算完結循環。實測 6/23 盆的殘段 >= 10 g（cactus-12 是 37 g）。\n// c < cmax  ：排除進行中的那一輪。\n// drop>=JUMP：排除順手補水造成的零幅度循環。\nspanCyc = join(tables: {d: drops, m: cmax}, on: [\"plant_id\"])\n  |> filter(fn: (r) => r.c > 0 and r.c < r.cmax and r.drop >= JUMP)\n  |> group(columns: [\"plant_id\"]) |> max(column: \"drop\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"cycsp\", v: r.drop }))\n  |> group()\n\n// 尚無完結循環的新盆暫用舊的 p10 定義，basis 欄會標示出來。\n// spanCyc 全空時 pivot 不會產生 cycsp 欄，exists 在該情況下回傳 false\n// 並落到這條退路（實測確認，不需要哨兵列）。\np10W = src(start: -60d) |> group(columns: [\"plant_id\"])\n  |> quantile(q: 0.1, method: \"exact_mean\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"p10\", v: r._value }))\n\nunion(tables: [nowW, satW, p10W, ageW, spanCyc]) |> group()\n  |> pivot(rowKey: [\"plant_id\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({ r with\n       span: if exists r.cycsp then r.cycsp else r.sat - r.p10,\n       basis: if exists r.cycsp then \"循環\" else \"暫用 p10\" }))\n  |> filter(fn: (r) => r.span > 5.0)\n  |> map(fn: (r) => ({\n       plant_id: r.plant_id,\n       now_g: r.now, sat_g: r.sat, trig_g: r.sat - r.span, span_g: r.span,\n       basis: r.basis,\n       depl_pct: (r.sat - r.now) / r.span * 100.0,\n       days: r.days }))\n  |> map(fn: (r) => ({ r with\n       habit: if r.depl_pct >= 100.0 then \"● 該澆水\" else \"○\",\n       obs80: if r.depl_pct >= 80.0 then \"● 該澆水\" else \"○\" }))\n  |> sort(columns: [\"depl_pct\"], desc: true)\n  |> keep(columns: [\"plant_id\",\"now_g\",\"sat_g\",\"trig_g\",\"span_g\",\"basis\",\n                    \"depl_pct\",\"habit\",\"obs80\",\"days\"])"
+    }
+   ]
+  },
+  {
+   "id": 14,
+   "type": "table",
+   "title": "最久沒澆水 — 誰被忘記了",
+   "description": "最久沒被澆到的前 8 盆，依天數排序。\n\n上面那張「該澆水了嗎」是照乾度排序，會漏掉一種情況：**某盆單純被忘記了**。群體澆水時被跳過一次、下次又跳過，它就從視野裡消失 —— cactus-08 就這樣連續 11.7 天沒被澆到，而在舊的耗竭公式下它只顯示 81%，排在表中間，沒有任何東西把它推到眼前。\n\n所以這張只看兩件事：**距上次澆水幾天**，和**自那時起掉了幾克**。刻意不含耗竭% —— 天數本身就是要看的訊號，混進百分比反而會讓「久」被「還不夠乾」蓋掉。兩張要對著看：這裡排第一但掉重很少的盆，是喝得慢，不是被虧待。\n\n「掉了 g」= 該株自己上次澆水後的最大重量 減 現在。",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "influxdb-monitor-air"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 24,
+    "x": 0,
+    "y": 45
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "influxdb-monitor-air"
+     },
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nJUMP = 10.0\n\nsrc = (start) => from(bucket: \"sensors\")\n  |> range(start: start)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"\n       and r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])\n\n// 每株自己上次被澆水的時間點（同面板「該澆水了嗎」的前半段）。\n// 這張刻意不計算耗竭% —— 它問的是另一個問題，不需要分母，\n// 也就不會在 repo 裡多出第三份分母定義。\nanchor = src(start: -90d)\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"_time\"])\n  |> difference(columns: [\"_value\"], nonNegative: false)\n  |> filter(fn: (r) => r._value > JUMP)\n  |> group(columns: [\"plant_id\"]) |> last(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, anchor: r._time }))\n  |> group()\n\nsatW = join(tables: {s: src(start: -90d) |> group(), a: anchor}, on: [\"plant_id\"])\n  |> filter(fn: (r) => r._time >= r.anchor)\n  |> group(columns: [\"plant_id\"]) |> max(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"sat\", v: r._value }))\n  |> group()\n\nnowW = src(start: -90d) |> group(columns: [\"plant_id\"]) |> last()\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"now\", v: r._value }))\n\nageW = anchor\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"days\",\n       v: float(v: int(v: now()) - int(v: r.anchor)) / 86400000000000.0 }))\n\nunion(tables: [nowW, satW, ageW]) |> group()\n  |> pivot(rowKey: [\"plant_id\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({\n       plant_id: r.plant_id, days: r.days, now_g: r.now, lost_g: r.sat - r.now }))\n  |> sort(columns: [\"days\"], desc: true)\n  |> limit(n: 8)"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
      {
       "matcher": {
        "id": "byName",
-       "options": "habit"
+       "options": "plant_id"
       },
       "properties": [
        {
         "id": "displayName",
-        "value": "依你的習慣"
-       }
-      ]
-     },
-     {
-      "matcher": {
-       "id": "byName",
-       "options": "obs80"
-      },
-      "properties": [
-       {
-        "id": "displayName",
-        "value": "達觀測範圍 80%"
+        "value": "植株"
        }
       ]
      },
@@ -639,24 +746,70 @@
        {
         "id": "decimals",
         "value": 1
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background"
+        }
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "text",
+           "value": null
+          },
+          {
+           "color": "orange",
+           "value": 10
+          },
+          {
+           "color": "red",
+           "value": 14
+          }
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "now_g"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "現在 g"
+       },
+       {
+        "id": "decimals",
+        "value": 1
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "lost_g"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "掉了 g"
+       },
+       {
+        "id": "decimals",
+        "value": 1
        }
       ]
      }
     ]
    },
-   "options": {
-    "showHeader": true
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "influxdb-monitor-air"
-     },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nsrc = (start) => from(bucket: \"sensors\")\n  |> range(start: start)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"\n       and r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])\n\n// 錨點是「這一株自己上次被澆水」，不是「上一個全體澆水場次」。\n// 舊版用後者，於是沒被澆到的那幾株，sat 取到的是它們自己偏乾的近期讀值,\n// sat 幾乎等於 now、耗竭算出 0% —— 最需要水的反而顯示成不用澆。\n// 2026-08-22 實測：cactus-08/12/13-2 當天沒澆，舊版全報 0%，實際是 40-52%。\nanchor = src(start: -90d)\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"_time\"])\n  |> difference(columns: [\"_value\"], nonNegative: false)\n  |> filter(fn: (r) => r._value > 10.0)\n  |> group(columns: [\"plant_id\"]) |> last(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, anchor: r._time }))\n  |> group()\n\n// 飽和重量 = 自己那次澆水之後的最大值\nsatW = join(tables: {s: src(start: -90d) |> group(), a: anchor}, on: [\"plant_id\"])\n  |> filter(fn: (r) => r._time >= r.anchor)\n  |> group(columns: [\"plant_id\"]) |> max(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"sat\", v: r._value }))\n  |> group()\n\nnowW = src(start: -90d) |> group(columns: [\"plant_id\"]) |> last()\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"now\", v: r._value }))\n// 乾重用 10 百分位而非最小值：一筆異常低讀不該把分母撐大\ndryW = src(start: -60d) |> group(columns: [\"plant_id\"])\n  |> quantile(q: 0.1, method: \"exact_mean\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"dry\", v: r._value }))\n// 距離自己上次澆水幾天 —— 每株各自計算\nageW = anchor\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"days\",\n       v: float(v: int(v: now()) - int(v: r.anchor)) / 86400000000000.0 }))\n\nunion(tables: [nowW, satW, dryW, ageW]) |> group()\n  |> pivot(rowKey: [\"plant_id\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({ r with span: r.sat - r.dry }))\n  |> filter(fn: (r) => r.span > 5.0)\n  |> map(fn: (r) => ({\n       plant_id: r.plant_id,\n       now_g: r.now, sat_g: r.sat, dry_g: r.dry,\n       depl_pct: (r.sat - r.now) / r.span * 100.0,\n       days: r.days }))\n  |> map(fn: (r) => ({ r with\n       habit: if r.depl_pct >= 100.0 then \"● 該澆水\" else \"○\",\n       obs80: if r.depl_pct >= 80.0 then \"● 該澆水\" else \"○\" }))\n  |> sort(columns: [\"depl_pct\"], desc: true)\n  |> keep(columns: [\"plant_id\",\"now_g\",\"sat_g\",\"dry_g\",\"depl_pct\",\"habit\",\"obs80\",\"days\"])"
-    }
-   ]
+   "transformations": []
   },
   {
    "id": 11,
@@ -670,7 +823,7 @@
     "h": 6,
     "w": 24,
     "x": 0,
-    "y": 45
+    "y": 52
    },
    "description": "pipeline 誤差的觀測窗。\n\n列出所有「有植株增重 >10 g」的日子，以及當天有幾株。澆水是全體同時發生的事件（16 株約在 26 分鐘內完成），所以：\n‧ ≥8 株 → 判定為澆水場次，納入統計。\n‧ 1–7 株 → 判定為疑似異常，**排除**在統計之外，但列在這裡讓你看見。\n\n為什麼需要這張表：2026-08-10 有 7 株同時增重、08-11 有 1 株。這些不是澆水，但若直接當成澆水事件納入基準，會嚴重扭曲比較結果（實測會使某株的比較失真成 +321%）。把它們排除但顯示出來，比靜默丟棄誠實。\n\n注意：百分比門檻無法取代這個判定 —— 08-10 的 cactus-07 增重 15.1 g 佔其盆重 10.9%，與真實澆水的比例重疊。全域同時性才是有效的判別依據。",
    "fieldConfig": {
@@ -763,7 +916,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 51
+    "y": 58
    },
    "description": "Daily light integral from the BH1750, lux/54. This is the figure the light controller tops up against (DLI_TARGET, default 4.0), so it is the one to read when asking whether the evening top-up did its job. Absolute scale is not trustworthy — lux/54 is a daylight conversion applied to an LED — so read it relatively.\n\n橫線是 `DLI_TARGET`（broker/.env，目前 4）。低於目標的長條是橘色，達標是綠色 —— 所以「今天補夠了沒」一眼就看得出來，不必再去對照關燈時刻那張。\n\n**細線是其中免費的日光**（遮燈的 lux_ref 積分）。總量減去它就是燈實際做的工。兩者分開之後才看得出達標是靠天還是靠電。\n\n這張要回答的實際問題是：**今天負擔得起一次停燈校準嗎。** 過中天停燈 30 分鐘約花 0.165 mol（實測燈約 0.33 mol/h），所以長條高出橫線 0.165 以上，那天就有餘裕。\n\n先前根據「每天都跑到 20:30 上限」推論補光是赤字 —— 2026-08-18~23 的實測推翻了它：六天有三天達標。這張面板就是為了不要再用印象判斷這件事。",
    "fieldConfig": {
@@ -866,7 +1019,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 51
+    "y": 58
    },
    "description": "Open-Meteo daily context. Indoor light barely tracks this — natural light measured at 1-2% of the indoor daily total on 2026-07-30 — so treat it as weather context, not as an explanation of indoor DLI.",
    "fieldConfig": {
@@ -940,7 +1093,7 @@
     "h": 8,
     "w": 24,
     "x": 0,
-    "y": 59
+    "y": 66
    },
    "description": "Notifications Grafana tried to send and could not. Every other panel here answers a question about the plants; this one answers whether you would have been TOLD. On 2026-08-08 delivery to Telegram failed 89 times over five hours while the deadman was firing correctly, and a 53-hour sensor outage went unnoticed for two days as a result. With a single notification channel you cannot be alerted that the channel is down — so this makes it permanent, reviewable data instead. Flat zero is healthy. Any bar means alerts were raised and never arrived: go and look at what was firing in that window.",
    "fieldConfig": {
@@ -987,7 +1140,7 @@
     "h": 7,
     "w": 12,
     "x": 0,
-    "y": 67
+    "y": 74
    },
    "description": "Local hour of the last lamp-off. 18.5 = the base window end (18:30, no top-up); ~19.8-20.1 = the evening top-up ran and reached DLI_TARGET; 20.5 = it ran to the EXTEND_END cap without reaching target, i.e. the lamp delivered less light than usual that day. Restricted to 17:00-21:30 because light/state is retained and every Telegraf reconnect replays it as a phantom OFF.",
    "fieldConfig": {
@@ -1037,7 +1190,7 @@
     "h": 7,
     "w": 12,
     "x": 12,
-    "y": 67
+    "y": 74
    },
    "description": "Points stored per day per pipeline. This is the panel that makes a silent outage visible: the Open-Meteo 503 collapse shows here as weather dropping from ~96/day to 3-10/day between 2026-07-30 and 08-03, and the recovery back to 96 after the poll interval was cut to 5 min. A pipeline going flat is the signal — the absolute heights differ by design.",
    "fieldConfig": {
@@ -1085,7 +1238,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 74
+    "y": 81
    },
    "description": "ppfd-cal-daily.sh 每天在開燈前的日光窗（07:00–08:00，由 LIGHT_WINDOW_START_MIN 推導）擬合出來的候選 CAL，只畫通過驗收的日子。橫線是面板目前實際採用的 CAL = 0.0017469。\n\n這是漂移監測值，不是權威值：參考來源是 BH1750 lux 經 Apogee 日光係數換算，不是 PAR 計。候選值連續數日穩定且明顯偏離橫線，才是人工更新 air.json 面板 9/11/12 的訊號 —— 絕不自動套用，見 PPFD-CALIBRATION.md。\n\n重要限制：均勻衰減（鏡片髒污、光罩氧化）會等比縮放每一個樣本，比值保持平坦、R² 依然漂亮，於是這裡照樣給出 valid=1，把光路損失烤進 CAL。抓得到那種故障的是 AS7341÷BH1750 通量比，在 spectrum-throughput-drift 告警裡。\n\n兩種量測窗各自成一條線，永不混畫：pre-lamp 是每日免費的開燈前窗（06:00–08:00，由 LIGHT_WINDOW_START_MIN 推導，不碰燈）；noon 是偶爾為了校核而主動停燈的過中天窗。兩者的大氣質量差一倍以上（2.27 對 1.02），CAL 本來就不保證相同 —— 兩條線的差距正是「晨窗有沒有光譜偏差」這個問題的答案，把它們畫成同一條線會讓那個答案消失。",
    "fieldConfig": {
@@ -1149,7 +1302,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 74
+    "y": 81
    },
    "description": "每日一列，包含被判定為不可用的日子 —— 那正是重點。腳本在資料不足或亮度跨度不足時也會寫入 valid=0，否則「這個窗已經太暗一個月了」會呈現成一張空圖，而空圖讀起來像沒事，不像沒量到。\n\nvalid=0 的常見原因，對照 calibrate-ppfd.sh 的三道驗收：\n  n_kept < 20      可用分鐘數不足（多半是整段低於 lux-min）\n  lux_hi/lux_lo < 2  亮度跨度不足，擬合沒有槓桿\n  drift_pct > 30   比值隨亮度漂移，幾何或光譜被污染\n\nR² 高不是通過條件：比值隨亮度漂的時候 R² 一樣可以很漂亮。\n\nwindow_mode 欄位標示這一列來自哪個窗。skipped=1 表示當天日光不足、根本沒有嘗試擬合（也就沒有動過燈）；lamp_off_ok 只在 noon 模式有意義，pre-lamp 模式恆為 1，因為那個窗的燈本來就是關的。",
    "fieldConfig": {
