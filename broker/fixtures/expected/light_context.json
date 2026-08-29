@@ -142,8 +142,8 @@
       "epoch_as7341": "as7341_ppfd-e2",
       "epoch_lux_main": "e0-legacy",
       "epoch_lux_ref": "bh1750_lux_ref-e2",
-      "regime": "diffuse",
-      "source": "daylight",
+      "regime": "none",
+      "source": "mixed",
       "ts": "2026-09-09T09:50:00Z"
     },
     {

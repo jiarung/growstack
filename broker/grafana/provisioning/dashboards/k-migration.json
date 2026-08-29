@@ -1,0 +1,134 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "tags": ["k-model", "migration"],
+  "templating": {"list": []},
+  "time": {"from": "now-7d", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "k-migration — raw vs corrected (parallel run)",
+  "uid": "k-migration",
+  "version": 1,
+  "panels": [
+    {
+      "id": 10,
+      "type": "text",
+      "title": "migration matrix — how this dashboard is used",
+      "gridPos": {"h": 5, "w": 24, "x": 0, "y": 0},
+      "options": {"mode": "markdown", "content": "**This dashboard IS the 7-day parallel period.** Production panels keep reading raw; each series pair below shows what the switch WOULD do. Per item: watch 7 days, daily integral delta must stay within ±2% (or every excursion explained), then flip that production panel's query (git revert = rollback; raw data is never touched), stamp an annotation. The join here mirrors broker/kconsume.py — the canonical order: truncate 5m → light_context → k_adopted → multiply at raw time → only then aggregate. Fallbacks multiply the per-target seed (lux 1.0 / PPFD CAL 0.0017469), so an uncalibrated system shows corrected == raw. Every join input is padded with a never-matching __dummy__ row (the Flux join package errors on an empty input stream); dummies are filtered out before anything renders.\n\n| # | consumer | this dashboard | production flip |\n|---|---|---|---|\n| 1 | air.json Spectrum PPFD | panel: spectrum PPFD | after 7d + user OK |\n| 2 | air.json DLI-lux / daily.json 總 lux | panel: main lux + flag map + delta gate | after 7d + user OK |\n| 3 | daily.json 遮燈 DLI | panel: ref lux | after 7d + user OK |\n| 4 | canary 基準 | after item 2 flips | re-baseline |\n| 5 | ppfd-cal-daily.sh / cal-review-reminder.sh | after item 1 flips | read the bucket or retire |\n| 6 | **light.py 控制 DLI** | **NOT here — separate user approval, stays raw until then** | — |"}
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "item 2 — main lux ÷54: raw vs corrected",
+      "description": "raw = air.lux/54 (what production reads today). corrected = (lux × k_adopted[bh1750_lux_main × context])/54 via the canonical join. Context unknown/mixed, out-of-matrix cells, or a still-seed bucket all multiply seed(1.0) so the lines coincide — divergence only ever comes from an EARNED adoption. Records are built with `with` so range's _start/_stop survive into aggregateWindow.",
+      "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 5},
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "spanNulls": true}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+          "query": "import \"array\"\nimport \"date\"\nimport \"join\"\nk = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: 1970-01-01T00:00:00Z)\n    |> filter(fn: (r) => r._measurement == \"k_adopted\" and (r._field == \"value\" or r._field == \"adoption_state\"))\n    |> last()\n    |> pivot(rowKey: [\"target\", \"source\", \"regime\", \"epoch\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => r.target == \"bh1750_lux_main\")\n    |> keep(columns: [\"source\", \"regime\", \"epoch\", \"value\", \"adoption_state\"])\n    |> group(),\n  array.from(rows: [{source: \"__dummy__\", regime: \"__dummy__\", epoch: \"__dummy__\", value: 0.0, adoption_state: \"__dummy__\"}])])\n  |> group()\nctx = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: date.sub(d: 5m, from: v.timeRangeStart), stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"light_context\" and r.location == \"livingroom\")\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> keep(columns: [\"_time\", \"source\", \"regime\", \"epoch_lux_main\"])\n    |> group(),\n  array.from(rows: [{_time: 1970-01-01T00:00:00Z, source: \"__dummy__\", regime: \"__dummy__\", epoch_lux_main: \"__dummy__\"}])])\n  |> group()\nraw = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n    // station-map note: single station today, device == location; the compute\n    // side resolves the real map — this panel is observational\n    |> map(fn: (r) => ({ r with raw: r._value, cell: date.truncate(t: r._time, unit: 5m) }))\n    |> group(),\n  array.from(rows: [{_time: 1970-01-01T00:00:00Z, raw: 0.0, cell: 1970-01-01T00:00:00Z}])])\n  |> group()\nj1 = join.left(left: raw, right: ctx,\n  on: (l, r) => l.cell == r._time,\n  as: (l, r) => ({ l with\n    src: if exists r.source then r.source else \"unknown\",\n    reg: if exists r.regime then r.regime else \"unknown\",\n    ep: if exists r.epoch_lux_main then r.epoch_lux_main else \"\" }))\nj2 = join.left(left: j1, right: k,\n  on: (l, r) => l.src == r.source and l.reg == r.regime and l.ep == r.epoch,\n  as: (l, r) => ({ l with\n    k: if l.src == \"unknown\" or l.src == \"mixed\"\n         or not ((l.src == \"daylight\" and (l.reg == \"diffuse\" or l.reg == \"direct\")) or (l.src == \"lamp\" and l.reg == \"none\"))\n         or not exists r.value\n       then 1.0 else r.value }))\nunion(tables: [\n  j2 |> map(fn: (r) => ({ r with _value: r.raw / 54.0, series: \"raw\" })),\n  j2 |> map(fn: (r) => ({ r with _value: r.raw * r.k / 54.0, series: \"corrected\" }))])\n  |> filter(fn: (r) => r._time > 1971-01-01T00:00:00Z)\n  |> keep(columns: [\"_time\", \"_start\", \"_stop\", \"_value\", \"series\"])\n  |> group(columns: [\"series\", \"_start\", \"_stop\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "state-timeline",
+      "title": "item 2 — correction flag per 5-min cell",
+      "description": "What the join decided for each cell of the main-lux consumer: ok = an earned k applied; seed = bucket exists but never earned adoption (numerically uncorrected); unknown/mixed/out-of-matrix = the blueprint's honest fallbacks. A parallel period that is all seed/fallback is SAFE but proves nothing — the flip gate wants ok cells.",
+      "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 14},
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"fillOpacity": 70, "lineWidth": 0},
+          "mappings": [
+            {"type": "value", "options": {
+              "ok": {"color": "green", "index": 0},
+              "seed": {"color": "blue", "index": 1},
+              "unknown": {"color": "yellow", "index": 2},
+              "mixed": {"color": "orange", "index": 3},
+              "out-of-matrix": {"color": "purple", "index": 4}}}
+          ]
+        },
+        "overrides": []
+      },
+      "options": {"showValue": "never", "legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+          "query": "import \"array\"\nimport \"join\"\nk = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: 1970-01-01T00:00:00Z)\n    |> filter(fn: (r) => r._measurement == \"k_adopted\" and (r._field == \"value\" or r._field == \"adoption_state\"))\n    |> last()\n    |> pivot(rowKey: [\"target\", \"source\", \"regime\", \"epoch\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => r.target == \"bh1750_lux_main\")\n    |> keep(columns: [\"source\", \"regime\", \"epoch\", \"value\", \"adoption_state\"])\n    |> group(),\n  array.from(rows: [{source: \"__dummy__\", regime: \"__dummy__\", epoch: \"__dummy__\", value: 0.0, adoption_state: \"__dummy__\"}])])\n  |> group()\nctx = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"light_context\" and r.location == \"livingroom\")\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> keep(columns: [\"_time\", \"source\", \"regime\", \"epoch_lux_main\"])\n    |> group(),\n  array.from(rows: [{_time: 1970-01-01T00:00:00Z, source: \"__dummy__\", regime: \"__dummy__\", epoch_lux_main: \"__dummy__\"}])])\n  |> group()\njoin.left(left: ctx, right: k,\n  on: (l, r) => l.source == r.source and l.regime == r.regime and l.epoch_lux_main == r.epoch,\n  as: (l, r) => ({ _time: l._time,\n    _value: if l.source == \"__dummy__\" then \"unknown\"\n      else if l.source == \"unknown\" then \"unknown\"\n      else if l.source == \"mixed\" then \"mixed\"\n      else if not ((l.source == \"daylight\" and (l.regime == \"diffuse\" or l.regime == \"direct\")) or (l.source == \"lamp\" and l.regime == \"none\")) then \"out-of-matrix\"\n      else if not exists r.value then \"unknown\"\n      else if r.adoption_state == \"seed\" then \"seed\"\n      else \"ok\" }))\n  |> filter(fn: (r) => r._time > 1971-01-01T00:00:00Z)\n  |> group()\n  |> sort(columns: [\"_time\"])"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "item 3 — ref lux ÷54 (遮燈 DLI): raw vs corrected",
+      "description": "raw = air.lux_ref/54. corrected joins bh1750_lux_ref — its legal matrix is daylight-only, so every lamp/none/mixed/unknown cell multiplies seed(1.0) and the lines coincide there by design.",
+      "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 20},
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "spanNulls": true}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+          "query": "import \"array\"\nimport \"date\"\nimport \"join\"\nk = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: 1970-01-01T00:00:00Z)\n    |> filter(fn: (r) => r._measurement == \"k_adopted\" and (r._field == \"value\" or r._field == \"adoption_state\"))\n    |> last()\n    |> pivot(rowKey: [\"target\", \"source\", \"regime\", \"epoch\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => r.target == \"bh1750_lux_ref\")\n    |> keep(columns: [\"source\", \"regime\", \"epoch\", \"value\", \"adoption_state\"])\n    |> group(),\n  array.from(rows: [{source: \"__dummy__\", regime: \"__dummy__\", epoch: \"__dummy__\", value: 0.0, adoption_state: \"__dummy__\"}])])\n  |> group()\nctx = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: date.sub(d: 5m, from: v.timeRangeStart), stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"light_context\" and r.location == \"livingroom\")\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> keep(columns: [\"_time\", \"source\", \"regime\", \"epoch_lux_ref\"])\n    |> group(),\n  array.from(rows: [{_time: 1970-01-01T00:00:00Z, source: \"__dummy__\", regime: \"__dummy__\", epoch_lux_ref: \"__dummy__\"}])])\n  |> group()\nraw = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux_ref\" and r.device == \"livingroom\")\n    |> map(fn: (r) => ({ r with raw: r._value, cell: date.truncate(t: r._time, unit: 5m) }))\n    |> group(),\n  array.from(rows: [{_time: 1970-01-01T00:00:00Z, raw: 0.0, cell: 1970-01-01T00:00:00Z}])])\n  |> group()\nj1 = join.left(left: raw, right: ctx,\n  on: (l, r) => l.cell == r._time,\n  as: (l, r) => ({ l with\n    src: if exists r.source then r.source else \"unknown\",\n    reg: if exists r.regime then r.regime else \"unknown\",\n    ep: if exists r.epoch_lux_ref then r.epoch_lux_ref else \"\" }))\nj2 = join.left(left: j1, right: k,\n  on: (l, r) => l.src == r.source and l.reg == r.regime and l.ep == r.epoch,\n  as: (l, r) => ({ l with\n    k: if l.src == \"unknown\" or l.src == \"mixed\"\n         or not (l.src == \"daylight\" and (l.reg == \"diffuse\" or l.reg == \"direct\"))\n         or not exists r.value\n       then 1.0 else r.value }))\nunion(tables: [\n  j2 |> map(fn: (r) => ({ r with _value: r.raw / 54.0, series: \"raw\" })),\n  j2 |> map(fn: (r) => ({ r with _value: r.raw * r.k / 54.0, series: \"corrected\" }))])\n  |> filter(fn: (r) => r._time > 1971-01-01T00:00:00Z)\n  |> keep(columns: [\"_time\", \"_start\", \"_stop\", \"_value\", \"series\"])\n  |> group(columns: [\"series\", \"_start\", \"_stop\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "item 1 — spectrum PPFD: hardcoded CAL vs adopted bucket",
+      "description": "raw = 0.0017469 × S (what air.json panel 9/11/12 hardcodes today). corrected = k_adopted[as7341_ppfd × context] × S. S is the same counts integral as the production panels; saturated samples are dropped the same way; every fallback multiplies CAL so the lines coincide until a bucket earns adoption.",
+      "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 29},
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "spanNulls": true}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+          "query": "import \"array\"\nimport \"date\"\nimport \"join\"\nCAL = 0.0017469\nk = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: 1970-01-01T00:00:00Z)\n    |> filter(fn: (r) => r._measurement == \"k_adopted\" and (r._field == \"value\" or r._field == \"adoption_state\"))\n    |> last()\n    |> pivot(rowKey: [\"target\", \"source\", \"regime\", \"epoch\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => r.target == \"as7341_ppfd\")\n    |> keep(columns: [\"source\", \"regime\", \"epoch\", \"value\", \"adoption_state\"])\n    |> group(),\n  array.from(rows: [{source: \"__dummy__\", regime: \"__dummy__\", epoch: \"__dummy__\", value: 0.0, adoption_state: \"__dummy__\"}])])\n  |> group()\nctx = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: date.sub(d: 5m, from: v.timeRangeStart), stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"light_context\" and r.location == \"livingroom\")\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> keep(columns: [\"_time\", \"source\", \"regime\", \"epoch_as7341\"])\n    |> group(),\n  array.from(rows: [{_time: 1970-01-01T00:00:00Z, source: \"__dummy__\", regime: \"__dummy__\", epoch_as7341: \"__dummy__\"}])])\n  |> group()\nraw = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and r.device == \"livingroom\" and (r._field == \"f415\" or r._field == \"f445\" or r._field == \"f480\" or r._field == \"f515\" or r._field == \"f555\" or r._field == \"f590\" or r._field == \"f630\" or r._field == \"f680\" or r._field == \"saturated\"))\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.f415 and exists r.f445 and exists r.f480 and exists r.f515 and exists r.f555 and exists r.f590 and exists r.f630 and exists r.f680)\n    |> filter(fn: (r) => (not exists r.saturated or r.saturated == 0.0) and r.f415 < 65535.0 and r.f445 < 65535.0 and r.f480 < 65535.0 and r.f515 < 65535.0 and r.f555 < 65535.0 and r.f590 < 65535.0 and r.f630 < 65535.0 and r.f680 < 65535.0)\n    |> map(fn: (r) => ({ r with s: r.f415/55.0*415.0 + r.f445/110.0*445.0 + r.f480/210.0*480.0 + r.f515/390.0*515.0 + r.f555/590.0*555.0 + r.f590/840.0*590.0 + r.f630/1350.0*630.0 + r.f680/1070.0*680.0, cell: date.truncate(t: r._time, unit: 5m) }))\n    |> keep(columns: [\"_time\", \"_start\", \"_stop\", \"s\", \"cell\"])\n    |> group(),\n  array.from(rows: [{_time: 1970-01-01T00:00:00Z, s: 0.0, cell: 1970-01-01T00:00:00Z}])])\n  |> group()\nj1 = join.left(left: raw, right: ctx,\n  on: (l, r) => l.cell == r._time,\n  as: (l, r) => ({ l with\n    src: if exists r.source then r.source else \"unknown\",\n    reg: if exists r.regime then r.regime else \"unknown\",\n    ep: if exists r.epoch_as7341 then r.epoch_as7341 else \"\" }))\nj2 = join.left(left: j1, right: k,\n  on: (l, r) => l.src == r.source and l.reg == r.regime and l.ep == r.epoch,\n  as: (l, r) => ({ l with\n    k: if l.src == \"unknown\" or l.src == \"mixed\"\n         or not ((l.src == \"daylight\" and (l.reg == \"diffuse\" or l.reg == \"direct\")) or (l.src == \"lamp\" and l.reg == \"none\"))\n         or not exists r.value\n       then CAL else r.value }))\nunion(tables: [\n  j2 |> map(fn: (r) => ({ r with _value: CAL * r.s, series: \"raw (CAL)\" })),\n  j2 |> map(fn: (r) => ({ r with _value: r.k * r.s, series: \"corrected\" }))])\n  |> filter(fn: (r) => r._time > 1971-01-01T00:00:00Z)\n  |> keep(columns: [\"_time\", \"_start\", \"_stop\", \"_value\", \"series\"])\n  |> group(columns: [\"series\", \"_start\", \"_stop\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "daily integral delta — the ±2% acceptance gate (item 2)",
+      "description": "Per Taipei day: integral(corrected, 1s)/integral(raw, 1s) − 1, the SAME integral the production DLI panels use — a plain sample sum would drift from it whenever telemetry has gaps or k changes across cells. Gate: 7 consecutive days inside ±2% (both directions red outside).",
+      "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 38},
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "delta_pct"},
+           "properties": [{"id": "unit", "value": "percent"}, {"id": "decimals", "value": 2},
+             {"id": "thresholds", "value": {"mode": "absolute", "steps": [
+               {"color": "red", "value": null}, {"color": "green", "value": -2}, {"color": "red", "value": 2}]}},
+             {"id": "custom.cellOptions", "value": {"type": "color-text"}}]}
+        ]
+      },
+      "options": {"sortBy": [{"displayName": "_time", "desc": true}]},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+          "query": "import \"array\"\nimport \"date\"\nimport \"join\"\nimport \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\nk = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: 1970-01-01T00:00:00Z)\n    |> filter(fn: (r) => r._measurement == \"k_adopted\" and (r._field == \"value\" or r._field == \"adoption_state\"))\n    |> last()\n    |> pivot(rowKey: [\"target\", \"source\", \"regime\", \"epoch\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => r.target == \"bh1750_lux_main\")\n    |> keep(columns: [\"source\", \"regime\", \"epoch\", \"value\", \"adoption_state\"])\n    |> group(),\n  array.from(rows: [{source: \"__dummy__\", regime: \"__dummy__\", epoch: \"__dummy__\", value: 0.0, adoption_state: \"__dummy__\"}])])\n  |> group()\nctx = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: date.sub(d: 5m, from: v.timeRangeStart), stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"light_context\" and r.location == \"livingroom\")\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> keep(columns: [\"_time\", \"source\", \"regime\", \"epoch_lux_main\"])\n    |> group(),\n  array.from(rows: [{_time: 1970-01-01T00:00:00Z, source: \"__dummy__\", regime: \"__dummy__\", epoch_lux_main: \"__dummy__\"}])])\n  |> group()\nraw = union(tables: [\n  from(bucket: \"sensors\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n    |> map(fn: (r) => ({ r with raw: r._value, cell: date.truncate(t: r._time, unit: 5m) }))\n    |> group(),\n  array.from(rows: [{_time: 1970-01-01T00:00:00Z, raw: 0.0, cell: 1970-01-01T00:00:00Z}])])\n  |> group()\nj1 = join.left(left: raw, right: ctx,\n  on: (l, r) => l.cell == r._time,\n  as: (l, r) => ({ l with\n    src: if exists r.source then r.source else \"unknown\",\n    reg: if exists r.regime then r.regime else \"unknown\",\n    ep: if exists r.epoch_lux_main then r.epoch_lux_main else \"\" }))\nj2 = join.left(left: j1, right: k,\n  on: (l, r) => l.src == r.source and l.reg == r.regime and l.ep == r.epoch,\n  as: (l, r) => ({ l with\n    cor: l.raw * (if l.src == \"unknown\" or l.src == \"mixed\"\n      or not ((l.src == \"daylight\" and (l.reg == \"diffuse\" or l.reg == \"direct\")) or (l.src == \"lamp\" and l.reg == \"none\"))\n      or not exists r.value then 1.0 else r.value) }))\n  |> filter(fn: (r) => r._time > 1971-01-01T00:00:00Z)\nrs = j2 |> map(fn: (r) => ({ r with _value: r.raw }))\n  |> keep(columns: [\"_time\", \"_start\", \"_stop\", \"_value\"])\n  |> group(columns: [\"_start\", \"_stop\"])\n  |> aggregateWindow(every: 1d, fn: (column, tables=<-) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ _time: r._time, rawint: r._value }))\n  |> group()\ncs = j2 |> map(fn: (r) => ({ r with _value: r.cor }))\n  |> keep(columns: [\"_time\", \"_start\", \"_stop\", \"_value\"])\n  |> group(columns: [\"_start\", \"_stop\"])\n  |> aggregateWindow(every: 1d, fn: (column, tables=<-) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ _time: r._time, corint: r._value }))\n  |> group()\nrsd = union(tables: [rs, array.from(rows: [{_time: 1970-01-01T00:00:00Z, rawint: 1.0}])]) |> group()\ncsd = union(tables: [cs, array.from(rows: [{_time: 1970-01-01T00:00:00Z, corint: 1.0}])]) |> group()\njoin.time(left: rsd, right: csd, as: (l, r) => ({ _time: l._time, delta_pct: (r.corint / l.rawint - 1.0) * 100.0 }))\n  |> filter(fn: (r) => r._time > 1971-01-01T00:00:00Z)\n  |> group()"
+        }
+      ]
+    }
+  ]
+}

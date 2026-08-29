@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, DIR)
 import kadopt   # noqa: E402
+import kconsume  # noqa: E402
 import kmodels  # noqa: E402
 from kmodels import UTC, rfc3339, parse_rfc3339  # noqa: E402
 
@@ -164,6 +165,38 @@ def k_event_artifact(events, computed_at):
         d["adopted_value"] = round(d["adopted_value"], 9)
         out.append(d)
     return {"computed_at": rfc3339(computed_at), "events": out}
+
+
+def corrected_artifact(lp_rows, registry, cells_by_loc, a_rows, computed_at):
+    """Fixture-only Phase D acceptance: run the canonical consumer join over the
+    fixture's raw air samples for the two lux consumers and freeze the results
+    (per-sample corrected value + flag, plus the raw-vs-corrected integrals —
+    the multiply-BEFORE-aggregate contract in one number)."""
+    cells = kconsume.cells_lookup(cells_by_loc)
+    adopted = kconsume.adopted_lookup(a_rows)
+    smap = registry["station_map"]
+    by_field = {"lux": [], "lux_ref": []}
+    for meas, tags, fields, ts in lp_rows:
+        if meas != "air" or tags.get("device") != "livingroom":
+            continue
+        for fld in by_field:
+            if fld in fields:
+                by_field[fld].append((ts, float(fields[fld])))
+    out = {}
+    for consumer, fld in (("lux_main", "lux"), ("lux_ref", "lux_ref")):
+        target = kconsume.CONSUMERS[consumer][0]
+        series = kconsume.correct_series(sorted(by_field[fld]), target,
+                                         "livingroom", smap, cells, adopted)
+        out[consumer] = {
+            "target": target,
+            "samples": [dict(s, ts=rfc3339(s["ts"]),
+                             corrected=round(s["corrected"], 6),
+                             k=round(s["k"], 9)) for s in series],
+            "integral_raw_lux_h": round(kconsume.integral_lux_hours(series, "raw"), 6),
+            "integral_corrected_lux_h": round(
+                kconsume.integral_lux_hours(series, "corrected"), 6),
+        }
+    return {"computed_at": rfc3339(computed_at), "consumers": out}
 
 
 def k_model_artifact(k_model, computed_at):
@@ -322,7 +355,8 @@ def run_fixture(fdir, write_expected):
     art = {"k_model.json": k_model_artifact(k_model, computed_at),
            "light_context.json": light_context_artifact(cells),
            "k_adopted.json": k_adopted_artifact(rows, written, computed_at),
-           "k_event.json": k_event_artifact(events, computed_at)}
+           "k_event.json": k_event_artifact(events, computed_at),
+           "corrected.json": corrected_artifact(lp, registry, cells, rows, computed_at)}
     outdir = os.path.join(fdir, "out")
     os.makedirs(outdir, exist_ok=True)
     for name, data in art.items():
