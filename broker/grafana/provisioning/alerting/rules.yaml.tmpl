@@ -598,3 +598,141 @@ groups:
                     # BH1750's is. One rule, two sensors checking each other.
                     type: outside_range
                     params: [2.5, 12.0]
+
+  # k-model adoption brake (Phase C, blueprint uid=k-alerts). The compute round
+  # writes k_event rows deduped by (bucket, event_type, evidence_rev); this rule
+  # only relays hold|stale — `resolved` rows are observation-only and explicitly
+  # filtered (acceptance: writing a resolved row must NOT fire). Events are
+  # sparse by design, so NoData is the healthy state, not a failure.
+  - orgId: 1
+    name: k-models
+    folder: Calibration
+    interval: 1m
+    rules:
+      - uid: k-alerts
+        title: k-model adoption needs a human — hold/stale
+        condition: C
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: '校正剎車:{{ $labels.target }}/{{ $labels.source }}/{{ $labels.regime }} 有 {{ $labels.event_type }}'
+          description: '桶 {{ $labels.target }}/{{ $labels.source }}/{{ $labels.regime }}(epoch {{ $labels.epoch }})過去 1 小時有 {{ printf "%.0f" $values.B.Value }} 筆 {{ $labels.event_type }} 事件。hold = 新估計跳出 ±10% 剎車帶,值已凍結 — 用 broker/ack-k-hold.sh 帶 --evidence-rev 審核(漏登 epoch?);stale = 採納值黏住但參考量測斷供 — 去補 Photone 配對。resolved 事件不觸發本規則。'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: influxdb-monitor-air
+            model:
+              refId: A
+              datasource:
+                type: influxdb
+                uid: influxdb-monitor-air
+              query: |
+                from(bucket: "sensors")
+                  |> range(start: -1h)
+                  // one field only, so each event row counts exactly once
+                  |> filter(fn: (r) => r._measurement == "k_event" and r._field == "evidence_rev")
+                  |> filter(fn: (r) => r.event_type == "hold" or r.event_type == "stale")
+                  |> group(columns: ["target", "source", "regime", "epoch", "event_type", "device"])
+                  |> count()
+                  // same series-collapse convention as deadman-sensor-stale:
+                  // plain label names, _time must exist and be now()
+                  |> map(fn: (r) => ({ target: r.target, source: r.source, regime: r.regime,
+                       epoch: r.epoch, event_type: r.event_type, device: r.device,
+                       _time: now(), _value: float(v: r._value) }))
+                  |> group(columns: ["target", "source", "regime", "epoch", "event_type", "device"])
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              datasource: {type: __expr__, uid: __expr__}
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              datasource: {type: __expr__, uid: __expr__}
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+
+      # State-driven backstop for the one-shot k_event pings above. The event
+      # dedupe (one alert per bucket/type/evidence_rev — spec'd) plus the 1h
+      # window means a missed Telegram would leave a held bucket waiting
+      # silently forever, and a carry-expired stale bucket's "持續告警" would be
+      # a single ping. This rule reads the STATE, not the events: any bucket
+      # sitting in held/stale for over 24h keeps firing until the state moves
+      # (ack, recovery, or re-earned adoption). 24h so it never doubles the
+      # initial event ping — it is the reminder, not the news.
+      - uid: k-adoption-stuck
+        title: k-model bucket stuck — held/stale unattended
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: '校正桶卡住:{{ $labels.target }}/{{ $labels.source }}/{{ $labels.regime }} {{ $labels.adoption_state }} 超過一天'
+          description: '桶 {{ $labels.target }}/{{ $labels.source }}/{{ $labels.regime }}(epoch {{ $labels.epoch }})的採納狀態停在 {{ $labels.adoption_state }} 已 {{ printf "%.0f" $values.B.Value }} 小時。held = 有 pending 值等人審,跑 broker/ack-k-hold.sh;stale = carry 值逾期,去補 Photone 量測讓本 epoch 自己掙到估計。狀態離開 held/stale 本警報就自動解除。'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: influxdb-monitor-air
+            model:
+              refId: A
+              datasource:
+                type: influxdb
+                uid: influxdb-monitor-air
+              query: |
+                from(bucket: "sensors")
+                  |> range(start: 1970-01-01T00:00:00Z)
+                  |> filter(fn: (r) => r._measurement == "k_adopted"
+                       and (r._field == "adoption_state" or r._field == "state_since"))
+                  |> last()
+                  |> pivot(rowKey: ["_time", "target", "source", "regime", "epoch"], columnKey: ["_field"], valueColumn: "_value")
+                  |> filter(fn: (r) => r.adoption_state == "held" or r.adoption_state == "stale")
+                  // age from state_since, NOT from the row's write time: a held
+                  // bucket keeps getting rewritten when new evidence revs land,
+                  // and that churn must not reset this clock. state_since moves
+                  // only when adoption_state itself changes (kadopt._finish).
+                  // Rows from before the field existed fall back to the point's
+                  // own _time — time() on a missing/empty string would be a
+                  // Flux EXECUTION error, not a quiet skip.
+                  // (same series-collapse convention: plain labels, _time now())
+                  |> map(fn: (r) => ({ target: r.target, source: r.source, regime: r.regime,
+                       epoch: r.epoch, adoption_state: r.adoption_state, _time: now(),
+                       _value: float(v: int(v: now()) - int(v:
+                         if exists r.state_since and r.state_since != "" then time(v: r.state_since) else r._time)) / 3600000000000.0 }))
+                  |> group(columns: ["target", "source", "regime", "epoch", "adoption_state"])
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              datasource: {type: __expr__, uid: __expr__}
+              expression: A
+              reducer: last
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              datasource: {type: __expr__, uid: __expr__}
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    # hours in state
+                    params: [24]

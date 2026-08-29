@@ -1,0 +1,108 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "tags": ["k-model", "calibration"],
+  "templating": {"list": []},
+  "time": {"from": "now-30d", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "k-models — calibration pipeline",
+  "uid": "k-models",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "k_model estimate per bucket (with CI bounds)",
+      "description": "Each series is one bucket (target/source/regime/epoch). estimate is the weighted log-median; ci_lo/ci_hi bound it (bootstrap 95%). Empty buckets carry no estimate and simply have no series here.",
+      "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "showPoints": "always", "pointSize": 4, "spanNulls": true},
+          "decimals": 6
+        },
+        "overrides": [
+          {"matcher": {"id": "byRegexp", "options": ".*ci_(lo|hi).*"},
+           "properties": [{"id": "custom.lineStyle", "value": {"dash": [4, 4], "fill": "dash"}},
+                          {"id": "custom.lineWidth", "value": 1},
+                          {"id": "custom.showPoints", "value": "never"}]}
+        ]
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+          "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"k_model\" and (r._field == \"estimate\" or r._field == \"ci_lo\" or r._field == \"ci_hi\"))\n  |> keep(columns: [\"_time\", \"_value\", \"_field\", \"target\", \"source\", \"regime\", \"epoch\"])"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "bucket status (latest round)",
+      "description": "The status decision table's verdict per bucket, latest compute round. unvalidated = not enough sessions (or an empty/new-epoch bucket); provisional = usable but not promoted (e0-legacy is capped here forever); stale = last reference pairing older than 90d; coverage = qualified ISO weeks in the last 90d / 13.",
+      "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 10},
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "status"},
+           "properties": [{"id": "mappings", "value": [
+             {"type": "value", "options": {
+               "valid": {"color": "green", "index": 0},
+               "provisional": {"color": "yellow", "index": 1},
+               "stale": {"color": "orange", "index": 2},
+               "unvalidated": {"color": "text", "index": 3}}}]},
+            {"id": "custom.cellOptions", "value": {"type": "color-text"}}]}
+        ]
+      },
+      "options": {"sortBy": [{"displayName": "target"}]},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+          "query": "from(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"k_model\")\n  |> filter(fn: (r) => r._field == \"estimate\" or r._field == \"n_sessions\" or r._field == \"n_eff\" or r._field == \"coverage\" or r._field == \"last_ref_age_d\" or r._field == \"status\" or r._field == \"evidence_rev\")\n  |> last()\n  |> pivot(rowKey: [\"target\", \"source\", \"regime\", \"epoch\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> keep(columns: [\"target\", \"source\", \"regime\", \"epoch\", \"estimate\", \"n_sessions\", \"n_eff\", \"coverage\", \"last_ref_age_d\", \"status\", \"evidence_rev\"])\n  |> group()\n  |> sort(columns: [\"target\", \"source\", \"regime\", \"epoch\"])"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "k_adopted vs k_model — the brake at a glance",
+      "description": "What consumers read (k_adopted.value) against what the estimator currently says (k_model.estimate). adoption_state=held means the value is FROZEN and pending_* carries the challenger — release with broker/ack-k-hold.sh --evidence-rev <rev> --accept|--reject. delta_pct is the challenger's distance from the adopted value (the ±10% brake band).",
+      "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 19},
+      "fieldConfig": {
+        "defaults": {"decimals": 6},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "adoption_state"},
+           "properties": [{"id": "mappings", "value": [
+             {"type": "value", "options": {
+               "adopted": {"color": "green", "index": 0},
+               "held": {"color": "red", "index": 1},
+               "stale": {"color": "orange", "index": 2},
+               "seed": {"color": "text", "index": 3}}}]},
+            {"id": "custom.cellOptions", "value": {"type": "color-text"}}]},
+          {"matcher": {"id": "byName", "options": "delta_pct"},
+           "properties": [{"id": "unit", "value": "percent"}, {"id": "decimals", "value": 1}]}
+        ]
+      },
+      "options": {"sortBy": [{"displayName": "adoption_state", "desc": true}]},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
+          "query": "import \"join\"\nm = from(bucket: \"sensors\")\n  |> range(start: -7d)\n  |> filter(fn: (r) => r._measurement == \"k_model\" and (r._field == \"estimate\" or r._field == \"status\"))\n  |> last()\n  |> pivot(rowKey: [\"target\", \"source\", \"regime\", \"epoch\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\na = from(bucket: \"sensors\")\n  |> range(start: 1970-01-01T00:00:00Z)\n  |> filter(fn: (r) => r._measurement == \"k_adopted\")\n  |> filter(fn: (r) => r._field == \"value\" or r._field == \"adoption_state\" or r._field == \"reason\" or r._field == \"pending_value\" or r._field == \"pending_evidence_rev\" or r._field == \"hold_ack_state\")\n  |> last()\n  |> pivot(rowKey: [\"target\", \"source\", \"regime\", \"epoch\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\njoin.left(left: a, right: m,\n  on: (l, r) => l.target == r.target and l.source == r.source and l.regime == r.regime and l.epoch == r.epoch,\n  as: (l, r) => ({ target: l.target, source: l.source, regime: l.regime, epoch: l.epoch,\n    adopted_value: l.value, adoption_state: l.adoption_state, reason: l.reason,\n    pending_value: l.pending_value, pending_evidence_rev: l.pending_evidence_rev,\n    hold_ack_state: l.hold_ack_state, model_estimate: r.estimate, model_status: r.status,\n    delta_pct: if exists r.estimate and l.value > 0.0 then (r.estimate / l.value - 1.0) * 100.0 else 0.0 }))\n  |> group()\n  |> sort(columns: [\"target\", \"source\", \"regime\"])"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "computed_at": "2026-09-09T12:00:00Z",
+  "events": [
+    {
+      "adopted_value": 0.005,
+      "epoch": "as7341_ppfd-e2",
+      "estimate": null,
+      "event_type": "resolved",
+      "evidence_rev": "e3b0c44298fc",
+      "message": "hold 自動解除:估計回到帶內或降級,現值未變",
+      "model_id": "as7341_ppfd/daylight/direct/as7341_ppfd-e2@2026-09-09T12:00:00Z",
+      "regime": "direct",
+      "source": "daylight",
+      "target": "as7341_ppfd",
+      "ts": "2026-09-09T12:00:00Z"
+    },
+    {
+      "adopted_value": 0.0045,
+      "epoch": "as7341_ppfd-e2",
+      "estimate": 0.005601265,
+      "event_type": "hold",
+      "evidence_rev": "76e611bb0505",
+      "message": "新 valid 估計偏離採納值超過 ±10% — 漏登 epoch?待人工確認",
+      "model_id": "as7341_ppfd/lamp/none/as7341_ppfd-e2@2026-09-09T12:00:00Z",
+      "regime": "none",
+      "source": "lamp",
+      "target": "as7341_ppfd",
+      "ts": "2026-09-09T12:00:00Z"
+    }
+  ]
+}
