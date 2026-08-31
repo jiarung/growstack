@@ -654,7 +654,7 @@
          "mode": "absolute",
          "steps": [
           {
-           "color": "text",
+           "color": "transparent",
            "value": null
           },
           {
@@ -682,7 +682,28 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\n// 10 g 是全域的澆水判定門檻，與面板 2 的速率過濾、面板 11 的場次偵測同一個值。\nJUMP = 10.0\n\nsrc = (start) => from(bucket: \"sensors\")\n  |> range(start: start)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"\n       and r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])\n\n// 錨點是「這一株自己上次被澆水」，不是「上一個全體澆水場次」。\n// 舊版用後者，於是沒被澆到的那幾株，sat 取到的是它們自己偏乾的近期讀值,\n// sat 幾乎等於 now、耗竭算出 0% —— 最需要水的反而顯示成不用澆。\n// 2026-08-22 實測：cactus-08/12/13-2 當天沒澆，舊版全報 0%，實際是 40-52%。\nanchor = src(start: -90d)\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"_time\"])\n  |> difference(columns: [\"_value\"], nonNegative: false)\n  |> filter(fn: (r) => r._value > JUMP)\n  |> group(columns: [\"plant_id\"]) |> last(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, anchor: r._time }))\n  |> group()\n\n// 飽和重量 = 自己那次澆水之後的最大值\nsatW = join(tables: {s: src(start: -90d) |> group(), a: anchor}, on: [\"plant_id\"])\n  |> filter(fn: (r) => r._time >= r.anchor)\n  |> group(columns: [\"plant_id\"]) |> max(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"sat\", v: r._value }))\n  |> group()\n\nnowW = src(start: -90d) |> group(columns: [\"plant_id\"]) |> last()\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"now\", v: r._value }))\n\n// 距離自己上次澆水幾天 —— 每株各自計算\nageW = anchor\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"days\",\n       v: float(v: int(v: now()) - int(v: r.anchor)) / 86400000000000.0 }))\n\n// ---- 分母：已完結澆水循環中，實測到的最大一次回落幅度 ----\n// 舊版用「sat − 60 天 p10」。那個 p10 取到的是上秤初期、盆子已乾很久的狀態，\n// 現在的澆水習慣從不回到那裡 —— 分母裡有一大塊是週級尺度上既不會被用掉、\n// 也不會被一次澆水補回來的深層核心水。大盆因此分母約 2 倍過大：\n// 實測循環幅度 ÷ 舊分母，>1300 g 的盆是 0.38–0.63，<500 g 的盆是 0.71–1.30。\n// 於是 80% 這個門檻等於是被小盆校準出來的，大盆永遠不會亮。\n//\n// 每筆標上它屬於第幾個澆水循環。difference 只覆寫 _value，先 duplicate 出 wt\n// 就能同時保有原重量與差分。group 之後補一次 sort：Flux 不保證 group 維持列序，\n// 而 last() 依賴它。\ncyc = src(start: -60d)\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"_time\"])\n  |> duplicate(column: \"_value\", as: \"wt\")\n  |> difference(columns: [\"_value\"], nonNegative: false, keepFirst: true)\n  |> map(fn: (r) => ({ r with isw: if exists r._value and r._value > JUMP then 1 else 0 }))\n  |> cumulativeSum(columns: [\"isw\"])\n  |> group(columns: [\"plant_id\", \"isw\"]) |> sort(columns: [\"_time\"])\n\nhi = cyc |> max(column: \"wt\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, c: r.isw, k: \"hi\", v: r.wt })) |> group()\nlo = cyc |> last(column: \"wt\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, c: r.isw, k: \"lo\", v: r.wt })) |> group()\ncmax = cyc |> last(column: \"wt\") |> group(columns: [\"plant_id\"]) |> max(column: \"isw\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, cmax: r.isw })) |> group()\n\ndrops = union(tables: [hi, lo]) |> group()\n  |> pivot(rowKey: [\"plant_id\", \"c\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, c: r.c, drop: r.hi - r.lo }))\n\n// c > 0     ：c = 0 是「窗口左緣 → 第一次澆水」的左截斷殘段，起點不是澆水，\n//             不算完結循環。實測 6/23 盆的殘段 >= 10 g（cactus-12 是 37 g）。\n// c < cmax  ：排除進行中的那一輪。\n// drop>=JUMP：排除順手補水造成的零幅度循環。\nspanCyc = join(tables: {d: drops, m: cmax}, on: [\"plant_id\"])\n  |> filter(fn: (r) => r.c > 0 and r.c < r.cmax and r.drop >= JUMP)\n  |> group(columns: [\"plant_id\"]) |> max(column: \"drop\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"cycsp\", v: r.drop }))\n  |> group()\n\n// 尚無完結循環的新盆暫用舊的 p10 定義，basis 欄會標示出來。\n// spanCyc 全空時 pivot 不會產生 cycsp 欄，exists 在該情況下回傳 false\n// 並落到這條退路（實測確認，不需要哨兵列）。\np10W = src(start: -60d) |> group(columns: [\"plant_id\"])\n  |> quantile(q: 0.1, method: \"exact_mean\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"p10\", v: r._value }))\n\nunion(tables: [nowW, satW, p10W, ageW, spanCyc]) |> group()\n  |> pivot(rowKey: [\"plant_id\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({ r with\n       span: if exists r.cycsp then r.cycsp else r.sat - r.p10,\n       basis: if exists r.cycsp then \"循環\" else \"暫用 p10\" }))\n  |> filter(fn: (r) => r.span > 5.0)\n  |> map(fn: (r) => ({\n       plant_id: r.plant_id,\n       now_g: r.now, sat_g: r.sat, trig_g: r.sat - r.span, span_g: r.span,\n       basis: r.basis,\n       depl_pct: (r.sat - r.now) / r.span * 100.0,\n       days: r.days }))\n  |> map(fn: (r) => ({ r with\n       habit: if r.depl_pct >= 100.0 then \"● 該澆水\" else \"○\",\n       obs80: if r.depl_pct >= 80.0 then \"● 該澆水\" else \"○\" }))\n  |> sort(columns: [\"depl_pct\"], desc: true)\n  |> keep(columns: [\"plant_id\",\"now_g\",\"sat_g\",\"trig_g\",\"span_g\",\"basis\",\n                    \"depl_pct\",\"habit\",\"obs80\",\"days\"])"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\n// 10 g 是全域的澆水判定門檻，與面板 2 的速率過濾、面板 11 的場次偵測同一個值。\nJUMP = 10.0\n\nsrc = (start) => from(bucket: \"sensors\")\n  |> range(start: start)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"\n       and r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])\n\n// ---- 只看還在養的盆 ----\n// 一顆 NFC tag 同時只會貼在一個盆上,所以「這顆 uid 最近一次讀值屬於哪個\n// plant_id」就是它現在的主人。換盆時 tag 移交給後繼者(cactus-03 -> 03b),\n// 舊 id 從此不再是任何 uid 的主人 —— 那就是「退役」的可觀測定義。\n//\n// 這個系統沒有退役旗標,而陳舊天數在這裡行不通:被換掉的盆最後一筆讀值就在\n// 換盆前不久,和一個單純幾天沒澆的盆分不開。uid 的歸屬則是當下事實。\n// 2026-08-31 實測:判出 26 株,正好等於 tag-map 的 26 筆綁定。\nlive = from(bucket: \"sensors\")\n  |> range(start: -90d)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"uid\"\n       and r.plant_id != \"unknown\")\n  |> group(columns: [\"_value\"])          // 依 uid 分組\n  |> last()                              // 每顆 uid 最近的一筆\n  |> group()\n  |> findColumn(fn: (key) => true, column: \"plant_id\")\n\n// 錨點是「這一株自己上次被澆水」，不是「上一個全體澆水場次」。\n// 舊版用後者，於是沒被澆到的那幾株，sat 取到的是它們自己偏乾的近期讀值,\n// sat 幾乎等於 now、耗竭算出 0% —— 最需要水的反而顯示成不用澆。\n// 2026-08-22 實測：cactus-08/12/13-2 當天沒澆，舊版全報 0%，實際是 40-52%。\nanchor = src(start: -90d)\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"_time\"])\n  |> difference(columns: [\"_value\"], nonNegative: false)\n  |> filter(fn: (r) => r._value > JUMP)\n  |> group(columns: [\"plant_id\"]) |> last(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, anchor: r._time }))\n  |> group()\n\n// 飽和重量 = 自己那次澆水之後的最大值\nsatW = join(tables: {s: src(start: -90d) |> group(), a: anchor}, on: [\"plant_id\"])\n  |> filter(fn: (r) => r._time >= r.anchor)\n  |> group(columns: [\"plant_id\"]) |> max(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"sat\", v: r._value }))\n  |> group()\n\nnowW = src(start: -90d) |> group(columns: [\"plant_id\"]) |> last()\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"now\", v: r._value }))\n\n// 距離自己上次澆水幾天 —— 每株各自計算\nageW = anchor\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"days\",\n       v: float(v: int(v: now()) - int(v: r.anchor)) / 86400000000000.0 }))\n\n// ---- 分母：已完結澆水循環中，實測到的最大一次回落幅度 ----\n// 舊版用「sat − 60 天 p10」。那個 p10 取到的是上秤初期、盆子已乾很久的狀態，\n// 現在的澆水習慣從不回到那裡 —— 分母裡有一大塊是週級尺度上既不會被用掉、\n// 也不會被一次澆水補回來的深層核心水。大盆因此分母約 2 倍過大：\n// 實測循環幅度 ÷ 舊分母，>1300 g 的盆是 0.38–0.63，<500 g 的盆是 0.71–1.30。\n// 於是 80% 這個門檻等於是被小盆校準出來的，大盆永遠不會亮。\n//\n// 每筆標上它屬於第幾個澆水循環。difference 只覆寫 _value，先 duplicate 出 wt\n// 就能同時保有原重量與差分。group 之後補一次 sort：Flux 不保證 group 維持列序，\n// 而 last() 依賴它。\ncyc = src(start: -60d)\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"_time\"])\n  |> duplicate(column: \"_value\", as: \"wt\")\n  |> difference(columns: [\"_value\"], nonNegative: false, keepFirst: true)\n  |> map(fn: (r) => ({ r with isw: if exists r._value and r._value > JUMP then 1 else 0 }))\n  |> cumulativeSum(columns: [\"isw\"])\n  |> group(columns: [\"plant_id\", \"isw\"]) |> sort(columns: [\"_time\"])\n\nhi = cyc |> max(column: \"wt\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, c: r.isw, k: \"hi\", v: r.wt })) |> group()\nlo = cyc |> last(column: \"wt\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, c: r.isw, k: \"lo\", v: r.wt })) |> group()\ncmax = cyc |> last(column: \"wt\") |> group(columns: [\"plant_id\"]) |> max(column: \"isw\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, cmax: r.isw })) |> group()\n\ndrops = union(tables: [hi, lo]) |> group()\n  |> pivot(rowKey: [\"plant_id\", \"c\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, c: r.c, drop: r.hi - r.lo }))\n\n// c > 0     ：c = 0 是「窗口左緣 → 第一次澆水」的左截斷殘段，起點不是澆水，\n//             不算完結循環。實測 6/23 盆的殘段 >= 10 g（cactus-12 是 37 g）。\n// c < cmax  ：排除進行中的那一輪。\n// drop>=JUMP：排除順手補水造成的零幅度循環。\nspanCyc = join(tables: {d: drops, m: cmax}, on: [\"plant_id\"])\n  |> filter(fn: (r) => r.c > 0 and r.c < r.cmax and r.drop >= JUMP)\n  |> group(columns: [\"plant_id\"]) |> max(column: \"drop\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"cycsp\", v: r.drop }))\n  |> group()\n\n// 尚無完結循環的新盆暫用舊的 p10 定義，basis 欄會標示出來。\n// spanCyc 全空時 pivot 不會產生 cycsp 欄，exists 在該情況下回傳 false\n// 並落到這條退路（實測確認，不需要哨兵列）。\np10W = src(start: -60d) |> group(columns: [\"plant_id\"])\n  |> quantile(q: 0.1, method: \"exact_mean\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"p10\", v: r._value }))\n\nunion(tables: [nowW, satW, p10W, ageW, spanCyc]) |> group()\n  |> pivot(rowKey: [\"plant_id\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({ r with\n       span: if exists r.cycsp then r.cycsp else r.sat - r.p10,\n       basis: if exists r.cycsp then \"循環\" else \"暫用 p10\" }))\n  |> filter(fn: (r) => r.span > 5.0)\n  |> map(fn: (r) => ({\n       plant_id: r.plant_id,\n       now_g: r.now, sat_g: r.sat, trig_g: r.sat - r.span, span_g: r.span,\n       basis: r.basis,\n       depl_pct: (r.sat - r.now) / r.span * 100.0,\n       days: r.days }))\n  |> map(fn: (r) => ({ r with\n       habit: if r.depl_pct >= 100.0 then \"● 該澆水\" else \"○\",\n       obs80: if r.depl_pct >= 80.0 then \"● 該澆水\" else \"○\" }))\n  |> filter(fn: (r) => contains(value: r.plant_id, set: live))\n  |> sort(columns: [\"depl_pct\"], desc: true)\n  |> keep(columns: [\"plant_id\",\"now_g\",\"sat_g\",\"trig_g\",\"span_g\",\"basis\",\n                    \"depl_pct\",\"habit\",\"obs80\",\"days\"])"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "renameByName": {},
+      "indexByName": {
+       "plant_id": 0,
+       "depl_pct": 1,
+       "obs80": 2,
+       "habit": 3,
+       "days": 4,
+       "now_g": 5,
+       "sat_g": 6,
+       "trig_g": 7,
+       "span_g": 8,
+       "basis": 9
+      }
+     }
     }
    ]
   },
@@ -690,7 +711,7 @@
    "id": 14,
    "type": "table",
    "title": "最久沒澆水 — 誰被忘記了",
-   "description": "最久沒被澆到的前 8 盆，依天數排序。\n\n上面那張「該澆水了嗎」是照乾度排序，會漏掉一種情況：**某盆單純被忘記了**。群體澆水時被跳過一次、下次又跳過，它就從視野裡消失 —— cactus-08 就這樣連續 11.7 天沒被澆到，而在舊的耗竭公式下它只顯示 81%，排在表中間，沒有任何東西把它推到眼前。\n\n所以這張只看兩件事：**距上次澆水幾天**，和**自那時起掉了幾克**。刻意不含耗竭% —— 天數本身就是要看的訊號，混進百分比反而會讓「久」被「還不夠乾」蓋掉。兩張要對著看：這裡排第一但掉重很少的盆，是喝得慢，不是被虧待。\n\n「掉了 g」= 該株自己上次澆水後的最大重量 減 現在。",
+   "description": "最久沒被澆到的前 8 盆，依天數排序。\n\n上面那張「該澆水了嗎」是照乾度排序，會漏掉一種情況：**某盆單純被忘記了**。群體澆水時被跳過一次、下次又跳過，它就從視野裡消失 —— cactus-08 就這樣連續 11.7 天沒被澆到，而在舊的耗竭公式下它只顯示 81%，排在表中間，沒有任何東西把它推到眼前。\n\n所以這張只看兩件事：**距上次澆水幾天**，和**自那時起掉了幾克**。刻意不含耗竭% —— 天數本身就是要看的訊號，混進百分比反而會讓「久」被「還不夠乾」蓋掉。兩張要對著看：這裡排第一但掉重很少的盆，是喝得慢，不是被虧待。\n\n「掉了 g」= 該株自己上次澆水後的最大重量 減 現在。\n\n只列**還在養的盆**（tag 仍歸屬於它，換盆退役的自動消失）**且已有澆水紀錄**的。新盆在第一次澆水前不會出現 —— 它的「距上次澆水」還不存在。",
    "datasource": {
     "type": "influxdb",
     "uid": "influxdb-monitor-air"
@@ -708,7 +729,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nJUMP = 10.0\n\nsrc = (start) => from(bucket: \"sensors\")\n  |> range(start: start)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"\n       and r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])\n\n// 每株自己上次被澆水的時間點（同面板「該澆水了嗎」的前半段）。\n// 這張刻意不計算耗竭% —— 它問的是另一個問題，不需要分母，\n// 也就不會在 repo 裡多出第三份分母定義。\nanchor = src(start: -90d)\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"_time\"])\n  |> difference(columns: [\"_value\"], nonNegative: false)\n  |> filter(fn: (r) => r._value > JUMP)\n  |> group(columns: [\"plant_id\"]) |> last(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, anchor: r._time }))\n  |> group()\n\nsatW = join(tables: {s: src(start: -90d) |> group(), a: anchor}, on: [\"plant_id\"])\n  |> filter(fn: (r) => r._time >= r.anchor)\n  |> group(columns: [\"plant_id\"]) |> max(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"sat\", v: r._value }))\n  |> group()\n\nnowW = src(start: -90d) |> group(columns: [\"plant_id\"]) |> last()\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"now\", v: r._value }))\n\nageW = anchor\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"days\",\n       v: float(v: int(v: now()) - int(v: r.anchor)) / 86400000000000.0 }))\n\nunion(tables: [nowW, satW, ageW]) |> group()\n  |> pivot(rowKey: [\"plant_id\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({\n       plant_id: r.plant_id, days: r.days, now_g: r.now, lost_g: r.sat - r.now }))\n  |> sort(columns: [\"days\"], desc: true)\n  |> limit(n: 8)"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nJUMP = 10.0\n\nsrc = (start) => from(bucket: \"sensors\")\n  |> range(start: start)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"weight_g\"\n       and r.quality == \"ok\" and r.plant_id != \"unknown\")\n  |> keep(columns: [\"_time\", \"_value\", \"plant_id\"])\n\n// ---- 只看還在養的盆 ----\n// 一顆 NFC tag 同時只會貼在一個盆上,所以「這顆 uid 最近一次讀值屬於哪個\n// plant_id」就是它現在的主人。換盆時 tag 移交給後繼者(cactus-03 -> 03b),\n// 舊 id 從此不再是任何 uid 的主人 —— 那就是「退役」的可觀測定義。\n//\n// 這個系統沒有退役旗標,而陳舊天數在這裡行不通:被換掉的盆最後一筆讀值就在\n// 換盆前不久,和一個單純幾天沒澆的盆分不開。uid 的歸屬則是當下事實。\n// 2026-08-31 實測:判出 26 株,正好等於 tag-map 的 26 筆綁定。\nlive = from(bucket: \"sensors\")\n  |> range(start: -90d)\n  |> filter(fn: (r) => r._measurement == \"plant_weight\" and r._field == \"uid\"\n       and r.plant_id != \"unknown\")\n  |> group(columns: [\"_value\"])          // 依 uid 分組\n  |> last()                              // 每顆 uid 最近的一筆\n  |> group()\n  |> findColumn(fn: (key) => true, column: \"plant_id\")\n\n// 每株自己上次被澆水的時間點（同面板「該澆水了嗎」的前半段）。\n// 這張刻意不計算耗竭% —— 它問的是另一個問題，不需要分母，\n// 也就不會在 repo 裡多出第三份分母定義。\nanchor = src(start: -90d)\n  |> group(columns: [\"plant_id\"]) |> sort(columns: [\"_time\"])\n  |> difference(columns: [\"_value\"], nonNegative: false)\n  |> filter(fn: (r) => r._value > JUMP)\n  |> group(columns: [\"plant_id\"]) |> last(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, anchor: r._time }))\n  |> group()\n\nsatW = join(tables: {s: src(start: -90d) |> group(), a: anchor}, on: [\"plant_id\"])\n  |> filter(fn: (r) => r._time >= r.anchor)\n  |> group(columns: [\"plant_id\"]) |> max(column: \"_value\")\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"sat\", v: r._value }))\n  |> group()\n\nnowW = src(start: -90d) |> group(columns: [\"plant_id\"]) |> last()\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"now\", v: r._value }))\n\nageW = anchor\n  |> map(fn: (r) => ({ plant_id: r.plant_id, k: \"days\",\n       v: float(v: int(v: now()) - int(v: r.anchor)) / 86400000000000.0 }))\n\nunion(tables: [nowW, satW, ageW]) |> group()\n  |> pivot(rowKey: [\"plant_id\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({\n       plant_id: r.plant_id, days: r.days, now_g: r.now, lost_g: r.sat - r.now }))\n  |> filter(fn: (r) => contains(value: r.plant_id, set: live))\n  // 沒有澆水紀錄的盆算不出「距上次澆水」,不屬於這張表要回答的問題。\n  // 而且 Flux 的 sort(desc:) 把 null 排在最前面 —— 不濾掉的話,每次新增\n  // 或換盆都會有一批空白列霸佔前幾名,正是這張面板要避免的失效。\n  |> filter(fn: (r) => exists r.days)\n  |> sort(columns: [\"days\"], desc: true)\n  |> limit(n: 8)"
     }
    ],
    "fieldConfig": {
@@ -759,7 +780,7 @@
          "mode": "absolute",
          "steps": [
           {
-           "color": "text",
+           "color": "transparent",
            "value": null
           },
           {
@@ -809,7 +830,21 @@
      }
     ]
    },
-   "transformations": []
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "renameByName": {},
+      "indexByName": {
+       "plant_id": 0,
+       "days": 1,
+       "now_g": 2,
+       "lost_g": 3
+      }
+     }
+    }
+   ]
   },
   {
    "id": 11,
