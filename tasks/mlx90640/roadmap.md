@@ -36,12 +36,16 @@ _細節 spec 在 [handoff.md](./handoff.md)(handoff 文件,當參考不當藍圖
   PSRAM 實際大小、SD 有無
 - 驗收:連拍 10 張不重啟不掉幀;一張 observation(RGB+JSON)可回讀;盤點表寫進本檔
 
-## Phase 1 — thermal parser(純軟體,現在可做)
+## Phase 1 — thermal parser ✅(2026-08-31 完成,2 輪 Codex loop 收斂)
 
-產出:`GY-MCU90640 UART bytes → ThermalFrame` 解析器 + 離線 fixture
-- frame sync(0x5A 0x5A)、1544B 解析、/100°C、Ta、checksum、timeout、壞 frame 恢復
-- fixture = 合成位元流(正常/截斷/checksum 錯/雜訊夾 frame)+ expected,diff = 驗收
-- 驗收:fixture 全過;介面只暴露 ThermalFrame,不漏 raw UART
+產出:`src/s3cam/thermal/gymcu_parser.{h,cpp}`(純 C++,同一份碼進韌體與 host 測試)
++ `test/thermal/`(host runner + 合成 fixture,expected 由公式獨立推導)
+- 八案例+timeout 契約全過:clean×3、雜訊前綴(孤 0x5A)、checksum 壞恢復、700B 截斷恢復、
+  **dense_sync**(敵意 1538×0x5A 壞幀,迭代 resync 防 stack overflow 的回歸)、bad_header、
+  負溫 int16、tail_sync(兩段式恢復);discardPartial() 承擔 roadmap 的 timeout 契約
+- chunking 不變性 + latest-wins 不變量(len(frames)+overwritten==frames_ok)
+- frame layout 常數(TYPE/SUBTYPE)標 VERIFY-ON-HARDWARE:模組到手後 Phase 2 對實流
+- timeout 歸 Phase 2 的 UART 讀取層(parser 是純 byte 機器)
 
 ## Phase 2 — 硬體 bring-up 🔧
 
