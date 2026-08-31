@@ -208,6 +208,26 @@
     "type": "str"
    },
    {
+    "label": "cactus-03b",
+    "value": "cactus-03b",
+    "type": "str"
+   },
+   {
+    "label": "cactus-05b",
+    "value": "cactus-05b",
+    "type": "str"
+   },
+   {
+    "label": "cactus-04b",
+    "value": "cactus-04b",
+    "type": "str"
+   },
+   {
+    "label": "cactus-09b",
+    "value": "cactus-09b",
+    "type": "str"
+   },
+   {
     "label": "white-ref",
     "value": "white-ref",
     "type": "str"
