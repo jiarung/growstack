@@ -42,9 +42,12 @@
 # ANY query failure the script exits non-zero and touches nothing: a failed
 # query means "we don't know", not "the references are invalid".
 #
-# Exit codes: 0 ok · 1 query/parse failure (nothing touched) · 4 published, but
-# some plant has no tag in tag-map.json (visible in cron mail; refs for the
-# others were still published).
+# A plant with history but no tag is NORMAL, not a fault: repotting retires an id
+# and moves its tag to the successor, so the list only ever grows (5 as of
+# 2026-08-31). It used to warn per plant and exit 4 — five lines an hour that no
+# action could ever clear. Now it is one informational line and exit 0.
+#
+# Exit codes: 0 ok · 1 query/parse failure (nothing touched).
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
@@ -85,12 +88,9 @@ PY
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 docker exec -i "$INFLUX" influx query --org "$ORG" --raw -f /dev/stdin <<<"$FLUX" > "$TMP/rows.csv"
 
-# CSV + tag-map -> one publish plan: "topic<TAB>payload" lines, plus warnings.
+# CSV + tag-map -> one publish plan: "topic<TAB>payload" lines, plus notices.
 # All validation lives here; the shell below only ships what this emits.
-# Exit 4 (an untagged plant) still publishes the rest, so it must not trip set -e
-# here — it is re-raised at the end where cron can see it.
-PLAN_RC=0
-python3 - "$TMP" "$TAG_MAP" "$PREFIX" > "$TMP/plan" <<'PY' || PLAN_RC=$?
+python3 - "$TMP" "$TAG_MAP" "$PREFIX" > "$TMP/plan" <<'PY'
 import csv, datetime as dt, json, math, sys, os
 tmp, tag_map_path, prefix = sys.argv[1], sys.argv[2], sys.argv[3]
 
@@ -164,11 +164,10 @@ for r in sorted(rows, key=lambda r: r["plant_id"]):
     for uid in uids:
         print(f"{prefix}/{uid}\t{payload}")
 
-for plant in untagged:
-    print(f"WARNING: {plant} has sat/dry but no tag in tag-map.json — no ref published", file=sys.stderr)
-sys.exit(4 if untagged else 0)
+if untagged:
+    print(f"note: {len(untagged)} retired id(s) with history but no tag, no ref published: "
+          + ", ".join(untagged), file=sys.stderr)
 PY
-[ "$PLAN_RC" -eq 0 ] || [ "$PLAN_RC" -eq 4 ] || exit "$PLAN_RC"
 
 cut -f1 "$TMP/plan" | sort > "$TMP/expected"
 N="$(wc -l < "$TMP/expected" | tr -d ' ')"
@@ -199,5 +198,3 @@ if [ -n "$STALE" ]; then
     echo "cleared stale retained: $topic"
   done <<<"$STALE"
 fi
-
-exit "$PLAN_RC"

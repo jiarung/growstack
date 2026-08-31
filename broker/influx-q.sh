@@ -59,11 +59,16 @@ def fmt(c, v):
             return dt.datetime.fromisoformat(v.replace("Z", "+00:00")).astimezone(tz).strftime("%m-%d %H:%M:%S")
         except ValueError:
             return v
-    try:
-        f = float(v)
-        return f"{f:g}"
-    except (ValueError, TypeError):
-        return v
+    # Only compact things that are actually decimals. A uid like 53486417230001
+    # parses as a float and prints as 5.34864e+13, and 536E6417230001 is read as
+    # scientific notation (536e6417230001) and comes out `inf` — the data is fine,
+    # the display was lying. Integers already print identically without this.
+    if "." in v:
+        try:
+            return f"{float(v):g}"
+        except (ValueError, TypeError):
+            pass
+    return v
 
 w = {c: max(len(c), max(len(fmt(c, r.get(c, ""))) for r in rows)) for c in cols}
 print("  ".join(c.ljust(w[c]) for c in cols))
