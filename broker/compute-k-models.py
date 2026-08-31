@@ -19,6 +19,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -405,6 +406,23 @@ INFLUX = ["docker", "exec", "-i", "-e", "INFLUX_TOKEN", "monitor-air-influxdb",
 MQTT_CONTAINER = os.environ.get("MQTT_CONTAINER", "monitor-air-mqtt")
 
 
+def _iso(t):
+    """Parse an InfluxDB RFC3339 timestamp.
+
+    Influx returns NANOSECOND precision (9 fractional digits) and
+    datetime.fromisoformat only accepts 3 or 6 before Python 3.11. Cron runs the
+    system interpreter (3.8.10 here) while an interactive shell may have a newer
+    one earlier on PATH — so this crashed ONLY under cron, after a manual run had
+    "proved" the pipeline worked. Truncate to microseconds; nothing here needs
+    finer than that. Test any cron change with `env -i PATH=/usr/bin:/bin`.
+    """
+    t = t.replace("Z", "+00:00")
+    m = re.match(r"^(.*?)\.(\d+)(.*)$", t)
+    if m:                       # pad AND truncate: 3.8 accepts exactly 3 or 6
+        t = f"{m.group(1)}.{m.group(2)[:6].ljust(6, '0')}{m.group(3)}"
+    return datetime.fromisoformat(t)
+
+
 def influx_query(flux):
     import csv as _csv
     import io as _io
@@ -455,7 +473,7 @@ from(bucket: "sensors")
 ''')
     photone_rows = []
     for r in ph:
-        row = {"ts": datetime.fromisoformat(r["_time"].replace("Z", "+00:00")),
+        row = {"ts": _iso(r["_time"]),
                "device": r.get("device"), "source": r.get("source")}
         for k in ("paired", "lux", "lux_at", "lux_ref_at", "ppfd", "gain_x",
                   "tint_ms", "config_override", "source_override", "lamp_state",
@@ -479,7 +497,7 @@ from(bucket: "sensors")
         v = fnum(r, "_value")
         if v is None or not _math.isfinite(v):   # float("NaN") parses — reject here too
             continue
-        ts = datetime.fromisoformat(r["_time"].replace("Z", "+00:00"))
+        ts = _iso(r["_time"])
         light_by_loc.setdefault(r.get("location", ""), []).append((ts, v))
 
     # lux_ref pre-aggregated to the 5-min grid: mean per cell, empty cells absent
@@ -499,7 +517,7 @@ from(bucket: "sensors")
         if v is None or not _math.isfinite(v):
             continue
         # aggregateWindow stamps the window END; the cell starts 5m earlier
-        ts = datetime.fromisoformat(r["_time"].replace("Z", "+00:00")) - timedelta(
+        ts = _iso(r["_time"]) - timedelta(
             seconds=kmodels.CELL_S)
         loc = kmodels.station_location(registry["station_map"], r.get("device", ""), ts)
         if loc:
@@ -524,7 +542,7 @@ from(bucket: "sensors")
     for r in pr:
         key = (r.get("target"), r.get("source"), r.get("regime"), r.get("epoch"))
         row = {"target": key[0], "source": key[1], "regime": key[2], "epoch": key[3],
-               "adopted_at": datetime.fromisoformat(r["_time"].replace("Z", "+00:00"))
+               "adopted_at": _iso(r["_time"])
                if r.get("_time") else computed_at,
                "value": fnum(r, "value"),
                "unit": r.get("unit") or kadopt.UNITS.get(key[0], ""),

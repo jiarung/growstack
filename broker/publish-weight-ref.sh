@@ -129,16 +129,28 @@ if not rows:
 
 untagged = []
 published = set()          # plants that got a full/provisional ref this round
+unwatered = []          # no watering event yet -> no sat -> no ref
 for r in sorted(rows, key=lambda r: r["plant_id"]):
     plant = r["plant_id"]
     # dry_g is the panel's trig_g — the weight this pot reaches when it has given
     # back as much water as it ever has. The firmware's (sat-w)/(sat-dry) then IS
     # the panel's depletion%, so src/ needs no change for this to take effect.
+    # A pot with no watering event on record has no saturation reference at all
+    # (the panel joins satW on the anchor, so sat is null). That is the normal
+    # state of a pot added or repotted today — not a schema break. Crashing on it
+    # stopped EVERY ref from publishing for three runs on 2026-08-31.
+    if not (r.get("sat_g") or "").strip():
+        unwatered.append(plant)
+        continue
     try:
-        sat, dry = float(r["sat_g"]), float(r["trig_g"])
+        sat = float(r["sat_g"])
     except (KeyError, ValueError):
         print(f"bad row for {plant}: {r} — schema changed?", file=sys.stderr)
         sys.exit(1)
+    try:                                   # absent span -> provisional tier below
+        dry = float(r["trig_g"])
+    except (KeyError, ValueError):
+        dry = float("nan")
     if not math.isfinite(sat):
         print(f"bad values for {plant}: sat={sat}", file=sys.stderr)
         sys.exit(1)
@@ -193,6 +205,9 @@ for plant in name_only:
 if name_only:
     print("name-only (no watering anchor yet): " + ", ".join(name_only), file=sys.stderr)
 
+if unwatered:
+    print(f"note: {len(unwatered)} pot(s) with no watering event yet, no ref: "
+          + ", ".join(unwatered), file=sys.stderr)
 if untagged:
     print(f"note: {len(untagged)} retired id(s) with history but no tag, no ref published: "
           + ", ".join(untagged), file=sys.stderr)
