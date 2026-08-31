@@ -82,18 +82,37 @@ void oledBegin() {
     logf("[measure] OLED %s\n", oledOk ? "ready" : "begin FAILED");
 }
 
+// Header line for every tag-bound screen: the plant's NAME when the retained
+// ref carries one ("cactus-03b" — same payload that feeds the diff line), the
+// raw UID otherwise. One source of truth for what "this plant" looks like.
+void oledTagHeader() {
+    const char* plant = weightRefPlant(curUid);
+    if (plant) { oled.println(plant); }
+    else       { oled.print("Tag "); oled.println(curUid); }
+}
+
 // "-165g  used 87%" at y=44 — current weight against the retained watering ref for
 // this tag: grams short of the last full watering, and how much of the observed
 // water span (sat-dry, span>5g guaranteed by the cache) is gone. Drawn only with a
 // calibrated scale — raw counts must never meet a gram baseline — and a cached ref;
 // otherwise the line is simply absent, and the screens look exactly as before.
 void oledRefLine(float w, bool calibrated) {
+    if (!calibrated) return;
     float sat, dry;
-    if (!calibrated || !weightRefLookup(curUid, &sat, &dry)) return;
     char line[24];
-    if (w > sat) snprintf(line, sizeof(line), "+%.0fg  wet", (double)(w - sat));
-    else snprintf(line, sizeof(line), "-%.0fg  used %.0f%%",
-                  (double)(sat - w), (double)((sat - w) / (sat - dry) * 100.0f));
+    if (weightRefLookup(curUid, &sat, &dry)) {           // full ref: earned span
+        if (w > sat) snprintf(line, sizeof(line), "+%.0fg  wet", (double)(w - sat));
+        else snprintf(line, sizeof(line), "-%.0fg  used %.0f%%",
+                      (double)(sat - w), (double)((sat - w) / (sat - dry) * 100.0f));
+    } else if (weightRefSat(curUid, &sat)) {             // provisional: new pot
+        // absolute drawdown ONLY — a % against an unmeasured span reads "drier
+        // than reality" and nudges overwatering, the cactus-killing direction.
+        // The % appears by itself once the pot earns a full dry-down cycle.
+        if (w > sat) snprintf(line, sizeof(line), "+%.0fg  wet", (double)(w - sat));
+        else snprintf(line, sizeof(line), "-%.0fg  since wtr", (double)(sat - w));
+    } else {
+        return;
+    }
     oled.setTextSize(1);
     oled.setCursor(0, 44);
     oled.print(line);
@@ -138,20 +157,20 @@ void oledRender() {
             oled.print((now - loadSince) > NUDGE_MS ? ">> SCAN TAG to save <<" : "scan tag to save");
         }
     } else if (mstate == M_STABILIZING) {
-        oled.print("Tag "); oled.println(curUid);
+        oledTagHeader();
         oled.setCursor(0, 22); oled.setTextSize(2);
         if (sw.valid) { oled.print(sw.mean_g, 1); oled.println(" g"); } else oled.println("-- g");
         if (sw.valid) oledRefLine(sw.mean_g, sw.calibrated);
         oled.setTextSize(1); oled.setCursor(0, 54); oled.print("stabilizing r=");
         if (sw.valid) oled.print(sw.range_g, 1);
     } else if (mstate == M_AWAIT_ACK) {
-        oled.print("Tag "); oled.println(curUid);
+        oledTagHeader();
         oled.setCursor(0, 22); oled.setTextSize(2); oled.print(lastWeight, 1); oled.println(" g");
         oledRefLine(lastWeight, sw.calibrated);
         oled.setTextSize(1); oled.setCursor(0, 54); oled.print("sending");
         for (int i = 0; i < retries; i++) oled.print('.');
     } else {  // M_DONE
-        oled.print("Tag "); oled.println(curUid);
+        oledTagHeader();
         oled.setCursor(0, 22); oled.setTextSize(2);
         if (doneResult == R_UNSTABLE) oled.println("UNSTABLE");
         else { oled.print(lastWeight, 1); oled.println(" g"); oledRefLine(lastWeight, sw.calibrated); }

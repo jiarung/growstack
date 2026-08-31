@@ -412,16 +412,25 @@ review step before any `CAL` is actually adopted.
 
 `publish-weight-ref.sh` gives the station's OLED the figure it shows while you
 hold a pot: how far this plant has fallen from its last full watering. It writes
-one retained MQTT message per tag —
+one retained MQTT message per tag, in one of two tiers —
 
 ```
-monitor-air/ref/weight/<uid>  {"plant_id":…,"sat_g":…,"dry_g":…,"anchor_day":…}
+full        monitor-air/ref/weight/<uid>  {"plant_id":…,"sat_g":…,"dry_g":…,"anchor_day":…}
+provisional monitor-air/ref/weight/<uid>  {"plant_id":…,"sat_g":…,"provisional":true,"anchor_day":…}
 ```
 
 — where `sat_g` is the plant's peak since **its own** last watering and `dry_g` is
 the weight it reaches once it has given back as much water as it ever has (`sat`
 minus the largest drawdown that plant completed in 60 days). The firmware's
 `(sat-w)/(sat-dry)` is therefore exactly the 該澆水了嗎 panel's depletion%.
+
+A **provisional** ref is what a plant gets while its span is not yet EARNED by
+a completed dry-down cycle (the panel's basis ≠ "循環": new pot, repot, or a
+too-small span): the OLED shows the absolute drawdown ("-87g since wtr") and
+**no percentage**, because a % against an unearned span errs toward "drier than
+reality" and nudges overwatering. The plant graduates to a full ref — and the %
+appears — by completing its first real dry-down cycle; nothing to configure. The same payload also carries `plant_id`,
+which the OLED shows as the header ("cactus-03b") instead of the raw tag UID.
 
 **The script does not define any of that** — it reads the Flux straight out of
 daily.json panel 10 and ships the result. The two used to carry separate copies:

@@ -15,6 +15,17 @@
 // inverted values — is dropped without touching the cache.
 void weightRefOnMessage(const char* uid, const uint8_t* payload, unsigned int len);
 
-// Look up a cached ref. Returns false when the UID has no valid entry — the caller
-// (the OLED) simply doesn't draw the line.
+// Look up a FULL cached ref (sat + earned dry span). Returns false when the UID
+// has no valid entry OR only a provisional one — the caller (the OLED) then
+// falls back to weightRefSat() and never fabricates a percentage.
 bool weightRefLookup(const char* uid, float* sat_g, float* dry_g);
+
+// The sat anchor alone — true for full AND provisional refs. Provisional = the
+// broker saw a watering anchor but no trustworthy span yet (new pot / repot):
+// the honest display is the absolute drawdown, "-87g since wtr".
+bool weightRefSat(const char* uid, float* sat_g);
+
+// The plant's human name ("cactus-03b") from the same retained ref, or nullptr
+// when unknown/unnamed — the OLED then falls back to the raw UID. Points into
+// the cache: valid until the next message for this UID (single-threaded loop).
+const char* weightRefPlant(const char* uid);
