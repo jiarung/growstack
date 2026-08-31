@@ -32,7 +32,7 @@ from(bucket:"sensors") |> range(start:-2h)
   |> filter(fn:(r)=> r._measurement=="light" and r._field=="on")
   |> keep(columns:["_time","_value","location","source"]) |> tail(n:5)'
 ```
-- [ ] PASS = 新 rows 同時有 `location`、`source` 欄(source ∈ auto|manual|seed|checkpoint)且 `on` 為 1/0
+- [ ] PASS = 新 rows 同時有 `location`、`source` 欄(source ∈ auto|manual|seed|checkpoint|poll)且 `on` 為 1/0
 
 ## Stage 2 — light.py(checkpoint)
 

@@ -63,6 +63,7 @@ MIN_HOLD = 5 * 60        # after a switch, hold ≥ this (matches MANUAL_HOLD; l
 STALE = 5 * 60           # lux older than this → treat as no reading (see decide())
 TICK = 60                # decision cadence, seconds
 MANUAL_HOLD = 5 * 60     # an external cmd suppresses auto for this long
+POLL_EVERY = 10 * 60     # re-read the plug this often (see do_poll)
 
 # ---- env ----
 LOC = os.getenv("LIGHT_LOCATION", "livingroom")
@@ -96,10 +97,53 @@ def should_checkpoint(now_local, last_date):
     return now_local.time() >= CHECKPOINT_AT and last_date != now_local.date()
 
 
-def checkpoint_payload(is_on):
-    """Retained state message carrying checkpoint provenance. Pure (selftested)."""
+def observed_payload(is_on, source):
+    """Retained state message for a state we READ off the plug rather than
+    commanded. Pure (selftested)."""
     return json.dumps({"state": "ON" if is_on else "OFF",
-                       "on": 1 if is_on else 0, "source": "checkpoint"})
+                       "on": 1 if is_on else 0, "source": source})
+
+
+def checkpoint_payload(is_on):
+    """Named separately because the k-model contract calls this row out by name."""
+    return observed_payload(is_on, "checkpoint")
+
+
+async def do_poll(read_state, publish_retained, cached, log=print):
+    """Re-read the plug and report its REAL state when it disagrees with what the
+    controller last commanded.
+
+    drive() is idempotent against st["current"] — the controller's memory of its
+    own last command — so any switch made outside MQTT (the Tapo app, the physical
+    button, a plug that comes back OFF after a power cut) leaves that memory lying.
+    Auto then does nothing at all, SILENTLY: every tick computes the right target,
+    compares it to the stale value, and returns early. 2026-08-31: an app-side OFF
+    at midday went unnoticed until the next morning's 08:00, costing that day's
+    top-up. Between startup and the 03:00 checkpoint the controller was open-loop.
+
+    Publishing matters as much as resyncing: the light history is what the k-model
+    reads lamp_state back from, so a lamp that was off for six hours while Influx
+    said ON is wrong data, not just a missed switch.
+
+    Returns 'ON'/'OFF' when the state drifted (caller resyncs and lets auto act),
+    None when it matched or the read failed. Never raises. Dependencies injected so
+    the selftest exercises this control flow rather than a copy of it."""
+    try:
+        is_on = await read_state()
+    except Exception as e:
+        log(f"poll: plug read failed: {e!r}", flush=True)
+        return None
+    state = "ON" if is_on else "OFF"
+    if state == cached:
+        return None
+    try:
+        await publish_retained(observed_payload(is_on, "poll"))
+    except Exception as e:
+        # The resync is still worth doing: acting on the truth beats staying wedged
+        # because one publish failed. The row is lost; the next drift republishes.
+        log(f"poll: state publish failed: {e!r}", flush=True)
+    log(f"poll: plug is {state} but controller had {cached} — resyncing", flush=True)
+    return state
 
 
 async def do_checkpoint(read_state, publish_retained, log=print):
@@ -217,9 +261,16 @@ async def _device(holder):
 
 
 async def plug_is_on(holder):
-    dev = await _device(holder)
-    await dev.update()
-    return dev.is_on
+    # Drop the cached handle on failure exactly as set_plug does: without this a
+    # dead device object is retried forever, which matters now that do_poll reads
+    # every 10 min rather than once a day.
+    try:
+        dev = await _device(holder)
+        await dev.update()
+        return dev.is_on
+    except Exception:
+        holder.pop("dev", None)            # force rediscover next attempt
+        raise
 
 
 async def set_plug(holder, target):
@@ -297,6 +348,7 @@ async def run():
         async def tick():
             ext = {"on": False, "day": None}   # evening top-up, re-evaluated each tick
             ckpt = {"day": None}               # daily state checkpoint marker
+            poll = {"at": time.time()}         # last plug re-read (startup seeded it)
             while True:
                 now = time.time()
                 now_local = datetime.now(TZ)
@@ -312,6 +364,18 @@ async def run():
                     if state is not None:
                         st["current"] = state          # sync drift too
                     ckpt["day"] = now_local.date()
+
+                # Same reconciliation, but every POLL_EVERY instead of once a day —
+                # a switch made outside MQTT is otherwise invisible until 03:00.
+                if now - poll["at"] >= POLL_EVERY:
+                    poll["at"] = now
+                    state = await do_poll(
+                        lambda: asyncio.wait_for(plug_is_on(dev), timeout=30),
+                        lambda payload: client.publish(STATE_TOPIC, payload,
+                                                       qos=1, retain=True),
+                        st["current"])
+                    if state is not None:
+                        st["current"] = state   # auto acts on it from this tick on
 
                 # Evening top-up: inside [HARD_OFF, EXTEND_END), keep the window open
                 # while today's DLI is still short of DLI_TARGET. Re-checked EVERY tick
@@ -417,6 +481,24 @@ def selftest():
     assert _run(do_checkpoint(read_fail, pub, log=lambda *a, **k: None)) is None, \
         "3 failures → give up for the day, never raise"
     assert fails["n"] == 3 and published == [], "exactly 3 attempts, nothing published"
+
+    # poll control flow — the drift case is the whole point, so test both branches
+    published.clear()
+    assert _run(do_poll(read_ok, pub, "ON", log=lambda *a, **k: None)) is None, \
+        "plug agrees with the cached state → nothing to do"
+    assert published == [], "no drift must not write a row (144 polls/day otherwise)"
+    assert _run(do_poll(read_ok, pub, "OFF", log=lambda *a, **k: None)) == "ON", \
+        "plug ON while controller had OFF → report the drift"
+    assert json.loads(published[0]) == {"state": "ON", "on": 1, "source": "poll"}, \
+        "drift row must carry its own provenance, not masquerade as auto"
+    published.clear()
+    assert _run(do_poll(read_fail, pub, "ON", log=lambda *a, **k: None)) is None, \
+        "unreachable plug → no resync, no row, no raise"
+    assert published == []
+    async def pub_fail(payload): raise OSError("broker gone")
+    assert _run(do_poll(read_ok, pub_fail, "OFF", log=lambda *a, **k: None)) == "ON", \
+        "a failed publish must not block the resync — acting on truth beats staying wedged"
+
     print("selftest OK")
 
 
