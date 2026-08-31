@@ -394,7 +394,12 @@ def run_fixture(fdir, write_expected):
 
 # ---------------------------------------------------------------- live mode
 
-INFLUX = ["docker", "exec", "-e", "INFLUX_TOKEN", "monitor-air-influxdb",
+# `docker exec` WITHOUT -i does not attach stdin: `influx write` then reads EOF,
+# writes nothing, and exits 0 — a silent no-op. Reads were unaffected because the
+# query path passes flux as an argument, so the pipeline looked healthy while the
+# k_model/k_adopted writes went nowhere (2026-08-31: "10 bucket(s) written" with
+# zero rows in the bucket, across all time).
+INFLUX = ["docker", "exec", "-i", "-e", "INFLUX_TOKEN", "monitor-air-influxdb",
           "influx"]
 # same override convention as publish-weight-ref.sh
 MQTT_CONTAINER = os.environ.get("MQTT_CONTAINER", "monitor-air-mqtt")
