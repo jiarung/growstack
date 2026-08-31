@@ -127,5 +127,8 @@ with `#`.
 
 - [`FLOWS.md`](FLOWS.md) — what each measurement is, its tags, and whether the
   pipeline feeding it is currently alive.
+- [`MAINTENANCE.md`](MAINTENANCE.md) — the *write* side of the same coin: a
+  `docker exec` missing `-i` stores nothing and exits 0, and an `influx delete`
+  predicate that matches nothing does too.
 - [`README.md`](README.md#data-contract-the-firmware-must-follow-this) — the
   telemetry contract the firmware writes against.

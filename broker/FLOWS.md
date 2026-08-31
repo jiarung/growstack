@@ -170,7 +170,11 @@ share one value domain on purpose — that is what lets the two join per plant.
    landed in InfluxDB (test points deleted afterwards). **Confirmed on real hardware** the
    same day: `staging-01` published a genuine weigh at 16:38:36 UTC and it stored as
    `plant_weight device=staging-01 plant_id=cactus-01 uid=00A8635C weight_g=334.6`.
-3. **Single-file bind mounts are stale, and a restart will not fix them.** Docker binds a
+3. **Single-file bind mounts are stale, and a restart will not fix them.**
+   (Recurring — the check and the fix are also in
+   [`MAINTENANCE.md`](MAINTENANCE.md#deployment-what-a-change-actually-requires);
+   both mounts were found detached again on 2026-08-31.)
+   Docker binds a
    single-file mount by **inode**, so an editor that writes-new-then-renames silently detaches
    the container from the file. This has already happened to `telegraf.conf`:
 

@@ -56,6 +56,7 @@ shouts when something goes quiet.
 | [`broker/node-red/README.md`](broker/node-red/README.md) | the phone control surface and the weigh-station flow |
 | [`broker/MEASUREMENT-STATION.md`](broker/MEASUREMENT-STATION.md) | weigh-station contract: MQTT topics, ack/dedup rules, tag→plant map |
 | [`broker/QUERYING.md`](broker/QUERYING.md) | asking InfluxDB directly — query shapes, schema discovery, and the four traps that have each caused a wrong conclusion |
+| [`broker/MAINTENANCE.md`](broker/MAINTENANCE.md) | keeping it running: the failure classes that recur here, what a change needs redeployed, routine checks, and the repot/retire procedure |
 
 **Calibration and analysis** — these form one chain, in order:
 
