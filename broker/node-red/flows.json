@@ -228,6 +228,36 @@
     "type": "str"
    },
    {
+    "label": "cactus-nature-evapotranspiration",
+    "value": "cactus-nature-evapotranspiration",
+    "type": "str"
+   },
+   {
+    "label": "cactus-21",
+    "value": "cactus-21",
+    "type": "str"
+   },
+   {
+    "label": "cactus-22",
+    "value": "cactus-22",
+    "type": "str"
+   },
+   {
+    "label": "cactus-23",
+    "value": "cactus-23",
+    "type": "str"
+   },
+   {
+    "label": "cactus-24",
+    "value": "cactus-24",
+    "type": "str"
+   },
+   {
+    "label": "cactus-water-ref",
+    "value": "cactus-water-ref",
+    "type": "str"
+   },
+   {
     "label": "white-ref",
     "value": "white-ref",
     "type": "str"
