@@ -20,12 +20,20 @@ void weightRefOnMessage(const char* uid, const uint8_t* payload, unsigned int le
 // falls back to weightRefSat() and never fabricates a percentage.
 bool weightRefLookup(const char* uid, float* sat_g, float* dry_g);
 
-// The sat anchor alone — true for full AND provisional refs. Provisional = the
-// broker saw a watering anchor but no trustworthy span yet (new pot / repot):
-// the honest display is the absolute drawdown, "-87g since wtr".
+// The sat anchor alone — true for full AND provisional refs, false for
+// name-only ones. Provisional = the broker saw a watering anchor but no
+// trustworthy span yet (new pot / repot): the honest display is the absolute
+// drawdown, "-87g since wtr". Name-only = not even an anchor (never watered
+// on the scale): the ref exists solely so weightRefPlant() can name the pot.
 bool weightRefSat(const char* uid, float* sat_g);
 
 // The plant's human name ("cactus-03b") from the same retained ref, or nullptr
 // when unknown/unnamed — the OLED then falls back to the raw UID. Points into
 // the cache: valid until the next message for this UID (single-threaded loop).
+// Names longer than the OLED line are stored truncated (display data only).
 const char* weightRefPlant(const char* uid);
+
+// Drop every cached entry. Call on each MQTT (re)connect before the retained
+// replay: a topic cleared while the station was offline sends no tombstone on
+// resubscribe, so stale entries can only die by starting from empty.
+void weightRefClearAll();

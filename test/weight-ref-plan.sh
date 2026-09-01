@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Offline test for publish-weight-ref.sh's plan generation (the two-tier
-# full/provisional logic). Extracts the script's own embedded python — never a
+# Offline test for publish-weight-ref.sh's plan generation (the three-tier
+# full/provisional/name-only logic). Extracts the script's own embedded python — never a
 # copy — and replays a synthetic panel CSV + tag map through it.
 #
 #   ./test/weight-ref-plan.sh      # PASS or loud diff; nonzero exit on FAIL
@@ -22,7 +22,7 @@ q = next(p for p in panel["panels"] if p["id"] == 10)["targets"][0]["query"]
 assert "|> filter(fn: (r) => r.span > 5.0)" in q, "panel 10 span filter changed — script contract broken"
 assert '"basis"' in q or "basis" in q, "panel 10 no longer outputs basis — tier logic broken"
 
-m = re.search(r"python3 - \"\$TMP\" \"\$TAG_MAP\" \"\$PREFIX\" > \"\$TMP/plan\" <<'PY' \|\| PLAN_RC=\$\?\n(.*?)\nPY\n",
+m = re.search(r"python3 - \"\$TMP\" \"\$TAG_MAP\" \"\$PREFIX\" > \"\$TMP/plan\" <<'PY'\n(.*?)\nPY\n",
               src, re.S)
 assert m, "plan heredoc not found in publish-weight-ref.sh"
 plan_py = m.group(1)
@@ -36,14 +36,16 @@ with open(os.path.join(d, "rows.csv"), "w", newline="") as f:
     w.writerow(["cactus-15b", "380.0", "378.0", "1.2", "暫用 p10"])  # tiny span -> provisional
     w.writerow(["cactus-16", "500.0", "460.0", "2.0", "暫用 p10"])   # BIG span but p10 basis -> provisional
     w.writerow(["cactus-20", "432.04", "427.01", "2.0", "循環"])     # raw 5.03 rounds to 5.0 -> provisional
-    w.writerow(["cactus-99", "500.0", "400.0", "2.0", "循環"])       # no tag -> warning, exit 4
+    w.writerow(["cactus-99", "500.0", "400.0", "2.0", "循環"])       # no tag -> informational note
 tagmap = os.path.join(d, "tag-map.json")
 json.dump({"AABBCCDD": "cactus-03b", "11223344": "cactus-15b",
-           "22334455": "cactus-16", "55667788": "cactus-20"}, open(tagmap, "w"))
+           "22334455": "cactus-16", "55667788": "cactus-20",
+           "99AABBCC": "cactus-05b"}, open(tagmap, "w"))   # 05b: mapped, NO panel row
 
 r = subprocess.run(["python3", "-", d, tagmap, "monitor-air/ref/weight"],
                    input=plan_py, capture_output=True, text=True)
-assert r.returncode == 4, f"expected exit 4 (untagged warning), got {r.returncode}: {r.stderr}"
+# untagged plants are NORMAL (repot retires ids) — informational, exit 0
+assert r.returncode == 0, f"expected exit 0, got {r.returncode}: {r.stderr}"
 lines = dict(l.split("\t") for l in r.stdout.strip().splitlines())
 
 full = json.loads(lines["monitor-air/ref/weight/AABBCCDD"])
@@ -53,7 +55,35 @@ for uid, why in (("11223344", "tiny span"), ("22334455", "p10 basis despite big 
     p = json.loads(lines[f"monitor-air/ref/weight/{uid}"])
     assert p.get("provisional") is True and "dry_g" not in p, (why, p)
     assert isinstance(p["sat_g"], float), (why, p)
-assert "cactus-99" in r.stderr and "no ref published" in r.stderr
+assert "cactus-99" in r.stderr and "no ref published" in r.stderr  # informational note
+# name-only tier: a mapped plant with NO watering anchor (absent from the
+# panel CSV entirely) still gets a ref carrying just the name
+no = json.loads(lines["monitor-air/ref/weight/99AABBCC"])
+assert no == {"plant_id": "cactus-05b", "name_only": True}, no
+assert "name-only (no watering anchor yet): cactus-05b" in r.stderr
+
+# ZERO anchored plants: a real state (all anchors aged out) — every mapped
+# uid downgrades to name-only, loudly, exit 0
+with open(os.path.join(d, "rows.csv"), "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["#group", "x"])
+    w.writerow(["plant_id", "sat_g", "trig_g", "days", "basis"])
+r0 = subprocess.run(["python3", "-", d, tagmap, "monitor-air/ref/weight"],
+                    input=plan_py, capture_output=True, text=True)
+assert r0.returncode == 0, (r0.returncode, r0.stderr)
+assert "ZERO anchored plants" in r0.stderr
+lines0 = dict(l.split("	") for l in r0.stdout.strip().splitlines())
+assert len(lines0) == 5, lines0          # all five mapped uids
+for uid in ("AABBCCDD", "11223344", "22334455", "55667788", "99AABBCC"):
+    nn = json.loads(lines0[f"monitor-air/ref/weight/{uid}"])
+    assert nn.get("name_only") is True and "sat_g" not in nn, (uid, nn)
+
+# restore the normal CSV for the bad-basis case below
+with open(os.path.join(d, "rows.csv"), "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["#group", "x"])
+    w.writerow(["plant_id", "sat_g", "trig_g", "days", "basis"])
+    w.writerow(["cactus-03b", "432.0", "245.0", "3.5", "循環"])
 
 # a malformed basis must abort the WHOLE round (schema drift detection)
 with open(os.path.join(d, "rows.csv"), "a", newline="") as f:

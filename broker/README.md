@@ -412,12 +412,19 @@ review step before any `CAL` is actually adopted.
 
 `publish-weight-ref.sh` gives the station's OLED the figure it shows while you
 hold a pot: how far this plant has fallen from its last full watering. It writes
-one retained MQTT message per tag, in one of two tiers —
+one retained MQTT message per tag, in one of three tiers —
 
 ```
 full        monitor-air/ref/weight/<uid>  {"plant_id":…,"sat_g":…,"dry_g":…,"anchor_day":…}
 provisional monitor-air/ref/weight/<uid>  {"plant_id":…,"sat_g":…,"provisional":true,"anchor_day":…}
+name-only   monitor-air/ref/weight/<uid>  {"plant_id":…,"name_only":true}
 ```
+
+Every uid in tag-map.json always has a retained ref. **name-only** is the floor:
+a mapped pot that has never been watered on the scale — nothing honest to say
+about water yet, but the OLED still greets it by name instead of a raw UID.
+Tiers upgrade in place as the plant earns them (first scale-witnessed watering
+creates the anchor → provisional; first completed dry-down → full).
 
 — where `sat_g` is the plant's peak since **its own** last watering and `dry_g` is
 the weight it reaches once it has given back as much water as it ever has (`sat`
@@ -452,9 +459,10 @@ run once. Nothing alerts on that: the references simply go stale, and a stale
 reference looks exactly like a current one on a 128x64 display. When they were
 finally refreshed by hand, the anchor day jumped from 2026-08-15 to 2026-08-21.
 
-If a tag has no retained reference the OLED shows no water figures for it, which
-is a useful way to spot a plant that is registered in `tag-map.json` but has no
-usable weight history yet.
+Every tag in `tag-map.json` carries at least a name-only retained ref, so "no
+water figures but a proper plant name" IS the signal that a mapped pot has no
+usable weight history yet — while a raw hex UID on the OLED now means the tag
+is not mapped at all (or Node-RED/tag-map is broken).
 
 ## Backups (to the HDD)
 

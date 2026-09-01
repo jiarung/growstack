@@ -254,6 +254,10 @@ void handleReflectCmd(const char* raw) {
 void onConnected() {
     client.subscribe(reflectCmdTopic, 1);
     client.subscribe(measureAckTopic, 1);               // measurement-station acks
+    // a ref topic CLEARED while we were offline sends no tombstone on
+    // resubscribe — start the cache empty and let the retained replay
+    // rebuild the current truth (the honest way to forget deleted tags)
+    weightRefClearAll();
     client.subscribe(WEIGHT_REF_FILTER, 1);             // retained watering refs -> cache
     client.subscribe(diagCmdTopic, 1);                  // remote forensic trigger
     client.publish(reflectAvailTopic, "online", true);  // retained

@@ -9,10 +9,17 @@
 # of the 該澆水了嗎 panel (daily.json id 10) and ships what it computes. sat_g is
 # each plant's max since ITS OWN last watering; dry_g is the panel's trig_g, i.e.
 # sat minus the largest drawdown that plant has actually completed in 60 days.
-# Two tiers, retained at QoS 1 per tag UID:
+# Three tiers, retained at QoS 1 per tag UID:
 #
 #   full        monitor-air/ref/weight/<uid>  {"plant_id":...,"sat_g":...,"dry_g":...,"anchor_day":...}
 #   provisional monitor-air/ref/weight/<uid>  {"plant_id":...,"sat_g":...,"provisional":true,"anchor_day":...}
+#   name-only   monitor-air/ref/weight/<uid>  {"plant_id":...,"name_only":true}
+#
+# name-only = the tag is mapped but the plant has NO watering anchor yet (a new
+# pot that has never been watered on the scale): there is nothing honest to say
+# about water, but the OLED can still greet the plant by name instead of a raw
+# UID. EVERY uid in tag-map.json therefore always has a retained ref; the tiers
+# upgrade in place (name-only -> provisional -> full) as the plant earns them.
 #
 # Provisional = the plant HAS a watering anchor but the panel itself refuses to
 # score it (span <= 5 g: new pot, repot, tiny history): the OLED then shows the
@@ -20,7 +27,7 @@
 # too-small span reads "drier than reality" and nudges overwatering. The tier
 # is decided here by the SAME panel rows: the panel's span>5g display filter is
 # asserted and stripped below, so span-poor plants surface instead of vanishing.
-# Plants with no watering anchor at all stay absent (nothing honest to show).
+# Plants with no watering anchor at all get the name-only floor (see above).
 #
 # PRECISE GUARANTEE: the OLED shows a % ONLY for spans earned by a completed
 # dry-down cycle (the panel's basis == "循環"). 暫用-p10 rows go provisional
@@ -30,11 +37,11 @@
 # completed cycle in 60d drops from % to the absolute line until it earns one;
 # regulars with normal watering cadence all carry 循環 basis and keep their %.)
 #
-# DEPLOY ORDER: flash the station firmware that understands provisional refs
-# BEFORE first running this version. Old firmware drops a dry-less payload but
-# keeps any previously cached full ref in RAM until reboot — a full->provisional
-# demotion would leave it showing a stale % (retained clearing can't fix an
-# offline station either; ordering is the real fix, and we own the one station).
+# DEPLOY ORDER: flash the station firmware that understands provisional AND
+# name-only refs BEFORE first running this version. Old firmware drops payloads
+# missing sat_g/dry_g but keeps any previously cached full ref in RAM until
+# reboot — a demotion would leave it showing a stale % (retained clearing can't
+# fix an offline station either; ordering is the real fix, one station, ours).
 #
 # Retained lifecycle: after a SUCCESSFUL query round, this round's valid set is
 # authoritative — any previously retained ref not in it (plant re-tagged, data
@@ -107,13 +114,21 @@ for r in csv.reader(open(os.path.join(tmp, "rows.csv"))):
     rows.append(dict(zip(hdr, r)))
 rows = [r for r in rows if r.get("plant_id")]
 
-# An empty result after a "successful" query is indistinguishable from a data
-# problem — clearing every retained ref over it would be destructive. Bail.
+# ZERO anchored plants is a real state, not only a data problem: every anchor
+# can age out of the panel's 90d window. Since the name-only floor exists, the
+# honest move is to publish the downgrade (stale full/provisional refs would
+# otherwise keep showing water lines nobody earned) — but LOUDLY, because a
+# panel schema break can also masquerade as an empty result. The per-row
+# sat/basis hard-bails still catch broken columns before this point when rows
+# DO come back.
 if not rows:
-    print("no plants passed the span filter — refusing to touch retained refs", file=sys.stderr)
-    sys.exit(1)
+    print("WARNING: panel returned ZERO anchored plants — every mapped uid is "
+          "being downgraded to a name-only ref. Expected only if all watering "
+          "anchors aged out of the 90d window; otherwise check panel 10.",
+          file=sys.stderr)
 
 untagged = []
+published = set()          # plants that got a full/provisional ref this round
 for r in sorted(rows, key=lambda r: r["plant_id"]):
     plant = r["plant_id"]
     # dry_g is the panel's trig_g — the weight this pot reaches when it has given
@@ -163,6 +178,20 @@ for r in sorted(rows, key=lambda r: r["plant_id"]):
         print(f"provisional (span not yet earned): {plant}", file=sys.stderr)
     for uid in uids:
         print(f"{prefix}/{uid}\t{payload}")
+    published.add(plant)
+
+# NAME-ONLY tier: every mapped uid whose plant produced no panel row (no
+# watering anchor yet — brand-new pot) still gets a ref carrying just the
+# name, so the OLED greets the plant instead of showing a raw UID. Upgrades
+# happen in place: the plant's first scale-witnessed watering (>10g jump)
+# creates its anchor and the next round overwrites this topic.
+name_only = sorted(p for p in plant_to_uids if p not in published)
+for plant in name_only:
+    payload = json.dumps({"plant_id": plant, "name_only": True})
+    for uid in plant_to_uids[plant]:
+        print(f"{prefix}/{uid}\t{payload}")
+if name_only:
+    print("name-only (no watering anchor yet): " + ", ".join(name_only), file=sys.stderr)
 
 if untagged:
     print(f"note: {len(untagged)} retired id(s) with history but no tag, no ref published: "
