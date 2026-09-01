@@ -388,6 +388,11 @@ bool mqttPublish(const SensorReading& r) {
                  addField("gas", r.gas, r.gasValid) &&
                  addField("lux", r.lux, r.luxValid) &&
                  addField("lux_ref", r.lux_ref, r.lux_refValid) &&
+                 // SHT40: its OWN fields, never merged into temp/hum (same rule
+                 // as lux vs lux_ref) — the BME680 reading is taken beside a
+                 // 320 degC gas heater, so keeping both is the whole point
+                 addField("temp_sht", r.temp_sht, r.temp_shtValid) &&
+                 addField("hum_sht", r.hum_sht, r.hum_shtValid) &&
                  // DIAG: WiFi signal (dBm) — correlate weak rssi with freezes/gaps on Grafana.
                  addField("rssi", (float)WiFi.RSSI(), WiFi.status() == WL_CONNECTED);
     if (!built || n + 2 > cap) {  // +2: closing '}' and NUL
@@ -446,10 +451,11 @@ bool mqttPublishHealth(const SensorHealth& h, bool pn532, const char* resetReaso
     // Presence as 1.0/0.0 floats (stable InfluxDB field types, like telemetry/spectrum).
     char payload[288];
     int n = snprintf(payload, sizeof(payload),
-        "{\"bme\":%.1f,\"lux\":%.1f,\"lux_ref\":%.1f,\"as7341\":%.1f,\"as7263\":%.1f,"
-        "\"hx711\":%.1f,\"pn532\":%.1f,\"i2c_n\":%d",
-        h.bme ? 1.0 : 0.0, h.lux ? 1.0 : 0.0, h.lux_ref ? 1.0 : 0.0, h.as7341 ? 1.0 : 0.0,
-        h.as7263 ? 1.0 : 0.0, h.hx711 ? 1.0 : 0.0, pn532 ? 1.0 : 0.0, h.i2c_n);
+        "{\"bme\":%.1f,\"lux\":%.1f,\"lux_ref\":%.1f,\"sht4x\":%.1f,\"as7341\":%.1f,"
+        "\"as7263\":%.1f,\"hx711\":%.1f,\"pn532\":%.1f,\"i2c_n\":%d",
+        h.bme ? 1.0 : 0.0, h.lux ? 1.0 : 0.0, h.lux_ref ? 1.0 : 0.0, h.sht4x ? 1.0 : 0.0,
+        h.as7341 ? 1.0 : 0.0, h.as7263 ? 1.0 : 0.0, h.hx711 ? 1.0 : 0.0, pn532 ? 1.0 : 0.0,
+        h.i2c_n);
     if (n < 0 || (size_t)n >= sizeof(payload)) { logln("[mqtt] health publish aborted: overflow"); return false; }
 
     // spectrum_read_ms: OMIT when NaN (no ambient read yet) — bare `nan` is invalid JSON.

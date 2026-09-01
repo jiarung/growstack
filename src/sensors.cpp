@@ -12,6 +12,7 @@ static inline bool finiteF(float v) {
 #include <BH1750.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
+#include <Adafruit_SHT4x.h>
 #include <Adafruit_AS7341.h>
 #include "as7341_diag.h"    // serial 'd' — failure-state forensic over direct Wire
 #include "mqtt_client.h"    // reflectBusy(): the forensic must not preempt a reflect read
@@ -33,6 +34,7 @@ constexpr uint8_t I2C_SCL = 18;
 // but shielded from the grow lamp -> lux_ref; lux - lux_ref ≈ the lamp's share).
 constexpr uint8_t BH1750_ADDR_MAIN = 0x23;
 constexpr uint8_t BH1750_ADDR_REF  = 0x5C;
+constexpr uint8_t SHT4X_ADDR       = 0x44;   // GY-SHT40 (0x45 variants exist; ours is 0x44)
 constexpr uint8_t AS7341_ADDR      = 0x39;
 // Ambient AS7341 profile — single source of truth for begin/recovery/re-assert AND
 // for the config identity published with every spectrum reading (gain_x/tint_ms):
@@ -55,6 +57,8 @@ constexpr float    AMBIENT_TINT_MS = (AMBIENT_ATIME + 1) * (AMBIENT_ASTEP + 1) *
 Adafruit_BME680 bme;
 BH1750 lightMeter;     // primary    @ 0x23 -> lux
 BH1750 lightMeterRef;  // reference  @ 0x5C -> lux_ref
+Adafruit_SHT4x sht4x;  // temp/RH    @ 0x44 -> temp_sht / hum_sht
+bool sht4xOk = false;
 Adafruit_AS7341 as7341;  // visible spectral @ 0x39 -> spectrum topic
 AS726X as7263;           // NIR spectral @ 0x49 -> joins the reflect read (red-edge/NIR)
 
@@ -117,6 +121,19 @@ bool sensorsBegin() {
     bh1750Ok    = beginBh1750At(lightMeter,    BH1750_ADDR_MAIN, "#1 (lux)");
     bh1750RefOk = beginBh1750At(lightMeterRef, BH1750_ADDR_REF,  "#2 (lux_ref)");
 
+    // SHT40 temp/RH @ 0x44. Config stated explicitly rather than inherited: HIGH
+    // precision (~10 ms, irrelevant against a 15 s tick) and the on-chip heater
+    // OFF — the heater exists to burn off condensation and would bias every
+    // reading it touches, which is the opposite of what a reference sensor is for.
+    sht4xOk = sht4x.begin(&Wire);
+    if (sht4xOk) {
+        sht4x.setPrecision(SHT4X_HIGH_PRECISION);
+        sht4x.setHeater(SHT4X_NO_HEATER);
+        logf("[sensors] SHT40 ok @ 0x%02X\n", SHT4X_ADDR);
+    } else {
+        logf("[sensors] SHT40 NOT found @ 0x%02X\n", SHT4X_ADDR);
+    }
+
     // AS7341 spectral @ fixed 0x39. LED stays off — ambient readings only; the LED
     // would contaminate the spectrum (it's for reflectance, a later phase).
     as7341Ok = as7341.begin();
@@ -144,7 +161,7 @@ bool sensorsBegin() {
     hx711Begin();  // load cell (own GPIOs; no presence check — is_ready() gates reads)
     leafProbeBegin();  // leaf-absorption checker: LED pin low, ADC needs no setup
 
-    return bmeOk || bh1750Ok || bh1750RefOk || as7341Ok || as7263Ok;
+    return bmeOk || bh1750Ok || bh1750RefOk || sht4xOk || as7341Ok || as7263Ok;
 }
 
 // Live presence probe: does a device ACK this address right now? One cheap I2C start/stop.
@@ -183,14 +200,15 @@ SensorHealth sensorsHealth() {
     h.bme     = bmeAddr ? i2cPresent(bmeAddr) : (i2cPresent(0x77) || i2cPresent(0x76));
     h.lux     = i2cPresent(BH1750_ADDR_MAIN);
     h.lux_ref = i2cPresent(BH1750_ADDR_REF);
+    h.sht4x   = i2cPresent(SHT4X_ADDR);
     h.as7341  = i2cPresent(AS7341_ADDR);
     h.as7263  = i2cPresent(0x49);
     h.hx711   = (hxCount > 0) && (millis() - hxLastMs) <= HX711_STALE_MS;
-    // Count only KNOWN devices (5 sensors + OLED 0x3C), NOT a full 1..126 scan: on a wedged
+    // Count only KNOWN devices (6 sensors + OLED 0x3C), NOT a full 1..126 scan: on a wedged
     // bus every probe hits the ~50ms Wire timeout, so a full scan would block ~127×50ms ≈ 6s.
-    // All-zero here still flags a wedge (every known device NACKs at once). Bounded to ~6 probes.
-    h.i2c_n = (int)h.bme + (int)h.lux + (int)h.lux_ref + (int)h.as7341 + (int)h.as7263
-              + (i2cPresent(0x3C) ? 1 : 0);
+    // All-zero here still flags a wedge (every known device NACKs at once). Bounded to ~7 probes.
+    h.i2c_n = (int)h.bme + (int)h.lux + (int)h.lux_ref + (int)h.sht4x
+              + (int)h.as7341 + (int)h.as7263 + (i2cPresent(0x3C) ? 1 : 0);
     h.spectrum_read_ms = lastSpectrumReadMs;
     return h;
 }
@@ -218,6 +236,14 @@ SensorReading sensorsRead() {
         if (lux >= 0.0f && finiteF(lux)) {
             r.lux_ref = lux;
             r.lux_refValid = true;
+        }
+    }
+
+    if (sht4xOk) {
+        sensors_event_t hum, temp;
+        if (sht4x.getEvent(&hum, &temp)) {   // false = CRC/bus failure this round
+            if (finiteF(temp.temperature))       { r.temp_sht = temp.temperature;       r.temp_shtValid = true; }
+            if (finiteF(hum.relative_humidity))  { r.hum_sht = hum.relative_humidity;   r.hum_shtValid = true; }
         }
     }
 
@@ -322,7 +348,12 @@ void hx711SerialCmd() {
                 if (buf[0] == 't')      hx711Tare();
                 else if (buf[0] == 'c') hx711Calibrate(atof(buf + 1));
                 else if (buf[0] == 'i') {   // live I2C scan — bus-health check without rebooting
-                    logln("[i2c] scan (expect 0x24 0x39 0x49 0x3C):");
+                    // Expected set, from what this firmware actually configures:
+                    // BME680 0x76/0x77 · BH1750 0x23 + 0x5C · SHT40 0x44 ·
+                    // AS7341 0x39 · AS7263 0x49 · OLED 0x3C. (The old note here
+                    // listed 0x24 and omitted the ref BH1750 — it predated both
+                    // the second light sensor and the SHT40.)
+                    logln("[i2c] scan (expect 0x23 0x39 0x3C 0x44 0x49 0x5C 0x76|0x77):");
                     int found = 0;
                     for (uint8_t a = 1; a < 127; a++) {
                         Wire.beginTransmission(a);
@@ -338,8 +369,10 @@ void hx711SerialCmd() {
                 }
                 else if (buf[0] == 'h') {   // live sensor-health snapshot (presence re-probe)
                     SensorHealth sh = sensorsHealth();
-                    logf("[health] bme=%d lux=%d lux_ref=%d as7341=%d as7263=%d hx711=%d i2c_n=%d read_ms=%.0f\n",
-                         (int)sh.bme, (int)sh.lux, (int)sh.lux_ref, (int)sh.as7341, (int)sh.as7263,
+                    logf("[health] bme=%d lux=%d lux_ref=%d sht4x=%d as7341=%d as7263=%d "
+                         "hx711=%d i2c_n=%d read_ms=%.0f\n",
+                         (int)sh.bme, (int)sh.lux, (int)sh.lux_ref, (int)sh.sht4x,
+                         (int)sh.as7341, (int)sh.as7263,
                          (int)sh.hx711, sh.i2c_n, sh.spectrum_read_ms);
                 }
                 else if (buf[0] == 'p') {   // leaf-probe TIA output (BPW34+LM358 on GPIO8), in mV

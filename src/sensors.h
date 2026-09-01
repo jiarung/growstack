@@ -12,6 +12,14 @@ struct SensorReading {
     float gas      = NAN;  // kOhm
     float lux      = NAN;  // lux      — primary BH1750 @ 0x23 (plant location, lit by the grow lamp)
     float lux_ref  = NAN;  // lux      — reference BH1750 @ 0x5C (same spot ~10cm away, shielded from the grow lamp → ambient only; lux - lux_ref ≈ the lamp's contribution)
+    // SHT40 @ 0x44 — a SECOND temp/RH source, deliberately NOT merged into
+    // temp/hum: same rule as the two BH1750s, one field per physical sensor.
+    // The BME680's own RH/temp sit next to a 320 degC gas heater, so the two
+    // disagreeing is expected and worth watching — that comparison is the
+    // point, and swapping which one downstream calls canonical is a later,
+    // deliberate migration, not a side effect of plugging a sensor in.
+    float temp_sht = NAN;  // degC
+    float hum_sht  = NAN;  // %RH
 
     bool tempValid     = false;
     bool humValid      = false;
@@ -19,6 +27,8 @@ struct SensorReading {
     bool gasValid      = false;
     bool luxValid      = false;
     bool lux_refValid  = false;
+    bool temp_shtValid = false;
+    bool hum_shtValid  = false;
 };
 
 // One ambient spectral snapshot from the AS7341 (10 channels). Kept SEPARATE from
@@ -45,6 +55,7 @@ struct SensorHealth {
     bool bme     = false;  // BME680  @ 0x77/0x76
     bool lux     = false;  // BH1750  @ 0x23 (primary)
     bool lux_ref = false;  // BH1750  @ 0x5C (reference)
+    bool sht4x   = false;  // SHT40   @ 0x44 (temp/RH reference)
     bool as7341  = false;  // AS7341  @ 0x39 (visible spectral)
     bool as7263  = false;  // AS7263  @ 0x49 (NIR spectral)
     bool hx711   = false;  // load cell: a fresh sample within HX711_STALE_MS

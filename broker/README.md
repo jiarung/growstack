@@ -103,7 +103,8 @@ docker compose exec -T influxdb influx delete --bucket sensors \
 - **Topic:** `monitor-air/<device>/telemetry` (e.g. `monitor-air/sensor-01/telemetry`)
 - **Payload (JSON, all values floats):**
   ```json
-  {"temp":24.8,"hum":51.2,"pressure":1009.3,"gas":12.4,"lux":350.0,"lux_ref":8.1}
+  {"temp":24.8,"hum":51.2,"pressure":1009.3,"gas":12.4,"lux":350.0,"lux_ref":8.1,
+   "temp_sht":24.3,"hum_sht":53.9}
   ```
   Keep every field a float (`lux:350.0`, not `350`) — InfluxDB fixes a field's
   type on first write, and int/float drift causes partial write failures.
@@ -112,6 +113,13 @@ docker compose exec -T influxdb influx delete --bucket sensors \
 `lux` is the BH1750 at the plant (sees the grow lamp); `lux_ref` is a second,
 shielded BH1750 beside it (ambient only). `lux - lux_ref` is the lamp's own
 contribution.
+
+`temp_sht`/`hum_sht` come from an SHT40 (0x44), a second temp/RH source kept in
+its own fields for the same reason the two BH1750s are: one field per physical
+sensor, never merged. The BME680's `temp`/`hum` are measured beside its own
+320 °C gas heater, so expect the pair to disagree — that comparison is why the
+SHT40 is there. `temp`/`hum` stay canonical for every existing panel and alert
+until a deliberate migration says otherwise.
 
 Telegraf maps this to measurement `air`, tag `device` (2nd topic segment), and
 one float field per key.
