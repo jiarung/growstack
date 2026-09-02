@@ -9,6 +9,7 @@
 #include "../secrets.h"
 #include "camera.h"
 #include "endpoints.h"
+#include "rangefinder.h"
 
 // Away-from-home bring-up: put the hotspot's creds in secrets.h as
 //   #define S3CAM_WIFI_SSID "..."
@@ -51,6 +52,11 @@ void setup() {
         Serial.println("[wifi] NOT connected — endpoints will start anyway; "
                        "check S3CAM_WIFI_SSID in secrets.h (AP isolation? see phase-1b.md risks)");
     }
+
+    // rangefinder before the camera: it owns its own I2C pins, and knowing
+    // whether it answered belongs in the same boot log as the sensor probe.
+    // Its absence is never fatal — distance simply reports null.
+    rangefinderBegin();
 
     camOk = cameraInit();
     if (camOk && endpointsStart()) {

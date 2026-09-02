@@ -5,6 +5,11 @@
 // the single httpd task, so a /capture issued DURING a stream waits (it does
 // not run concurrently and does not fail fast) — close the stream first.
 //
+// HANDLER STACK: the httpd task gets 4 KB. A multi-KB local buffer in a
+// handler overflows it and panics the core ("Stack canary watchpoint
+// triggered (httpd)") — build long responses with httpd_resp_send_chunk() and
+// a small line buffer instead of assembling them in one array.
+//
 //   GET /            tiny index: links + sensor/PSRAM status
 //   GET /stream      MJPEG live view (sensor drops to VGA while streaming)
 //   GET /capture     fresh full-res still -> image/jpeg, X-Capture-Id header

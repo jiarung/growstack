@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "camera.h"
+#include "rangefinder.h"
 
 static httpd_handle_t server = nullptr;
 
@@ -30,6 +31,47 @@ static bool makeCaptureId(char* out, size_t n) {
     return false;
 }
 
+// ---- pairing a distance with an exposure -----------------------------------
+// The rangefinder cannot measure DURING the exposure, so a single reading
+// beside a capture is only as good as the assumption that nothing moved. This
+// brackets the frame instead: one reading before, one after. Agreement means
+// the scene held still across the whole capture and the distance genuinely
+// describes that frame; disagreement is reported as such rather than silently
+// attaching one of two different distances to the image. (The scan workflow is
+// stop-settle-capture, so agreement is the normal case; a hand-held target
+// being walked around is exactly when this fires — and should.)
+constexpr uint16_t RANGE_AGREE_MM = 30;
+
+struct PairedRange {
+    bool valid = false;
+    uint16_t mm = 0;
+    char reason[32] = "";     // why not, when !valid
+};
+
+static PairedRange pairRange(const Range& before, const Range& after) {
+    PairedRange p;
+    if (before.api_err || after.api_err) {
+        snprintf(p.reason, sizeof(p.reason), "driver_err:%d",
+                 (int)(before.api_err ? before.api_err : after.api_err));
+        return p;
+    }
+    if (!before.valid || !after.valid) {
+        snprintf(p.reason, sizeof(p.reason), "no_distance:s%u",
+                 (unsigned)(before.valid ? after.status : before.status));
+        return p;
+    }
+    int diff = (int)after.mm - (int)before.mm;
+    if (diff < 0) diff = -diff;
+    if (diff > RANGE_AGREE_MM) {
+        snprintf(p.reason, sizeof(p.reason), "moved:%u->%u",
+                 (unsigned)before.mm, (unsigned)after.mm);
+        return p;
+    }
+    p.valid = true;
+    p.mm = (uint16_t)((before.mm + after.mm) / 2);
+    return p;
+}
+
 // ---- the /observation-held frame (PSRAM copy; same exposure as its JSON) ----
 static uint8_t* heldJpg = nullptr;
 static size_t heldLen = 0;
@@ -40,35 +82,111 @@ static esp_err_t indexHandler(httpd_req_t* req) {
     char body[400];
     snprintf(body, sizeof(body),
              "s3cam bring-up (phase 1B)\n"
-             "sensor: %s\npsram: %u bytes (free %u)\nheap free: %u\n\n"
+             "sensor: %s\nrangefinder: %s\n"
+             "psram: %u bytes (free %u)\nheap free: %u\n\n"
              "GET /stream      MJPEG live view\n"
-             "GET /capture     full-res still (X-Capture-Id header)\n"
+             "GET /capture     full-res still (X-Capture-Id + X-Range-Mm headers)\n"
              "GET /observation still + observation JSON (pairs with /last.jpg)\n"
-             "GET /last.jpg    the frame the last /observation held\n",
-             cameraSensorName(), ESP.getPsramSize(), ESP.getFreePsram(),
-             ESP.getFreeHeap());
+             "GET /last.jpg    the frame the last /observation held\n"
+             "GET /range?n=20  raw rangefinder burst (no camera) — is it ranging?\n",
+             cameraSensorName(), rangefinderPresent() ? "VL53L0X" : "absent",
+             ESP.getPsramSize(), ESP.getFreePsram(), ESP.getFreeHeap());
     httpd_resp_set_type(req, "text/plain");
     return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
 }
 
+// GET /range?n=20 — raw rangefinder burst, no camera involved. The instrument
+// for "is this sensor actually ranging, or reporting the same number forever":
+// a constant value while the scene changes is not a measurement.
+static esp_err_t rangeHandler(httpd_req_t* req) {
+    int n = 20;
+    char q[32];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        char v[8];
+        if (httpd_query_key_value(q, "n", v, sizeof(v)) == ESP_OK) {
+            n = atoi(v);
+            if (n < 1) n = 1;
+            if (n > 40) n = 40;   // each read paces at the timing budget
+        }
+    }
+    // CHUNKED, with a small line buffer: the httpd task's stack is 4 KB, so a
+    // multi-KB local here overflows it (a 2048-byte body did exactly that —
+    // "Stack canary watchpoint triggered (httpd)"). Streaming also means `n`
+    // has no buffer-imposed ceiling.
+    char line[128];
+    httpd_resp_set_type(req, "text/plain");
+    int m = snprintf(line, sizeof(line),
+                     "VL53L0X %s - %d readings, ~%lus\n"
+                     "  status 0=valid 4=out of range, others=signal/sigma fail\n\n",
+                     rangefinderPresent() ? "present" : "ABSENT", n,
+                     (unsigned long)(n * rangefinderIntervalMs() / 1000));
+    httpd_resp_send_chunk(req, line, m);
+
+    uint16_t mn = 0xFFFF, mx = 0;
+    int valid = 0;
+    for (int i = 0; i < n; i++) {
+        Range rg = rangefinderRead();
+        if (rg.valid) {
+            valid++;
+            if (rg.mm < mn) mn = rg.mm;
+            if (rg.mm > mx) mx = rg.mm;
+            m = snprintf(line, sizeof(line), "  %2d  %5u mm  status %u\n",
+                         i + 1, (unsigned)rg.mm, (unsigned)rg.status);
+        } else if (rg.api_err != 0) {
+            m = snprintf(line, sizeof(line), "  %2d      --      driver error %d\n",
+                         i + 1, (int)rg.api_err);
+        } else {
+            m = snprintf(line, sizeof(line), "  %2d      --      status %u (no distance)\n",
+                         i + 1, (unsigned)rg.status);
+        }
+        if (httpd_resp_send_chunk(req, line, m) != ESP_OK) return ESP_FAIL;
+        delay(rangefinderIntervalMs());   // derived from the timing budget
+    }
+    if (valid) {
+        m = snprintf(line, sizeof(line),
+                     "\n%d/%d valid, spread %u..%u mm (%u mm)\n",
+                     valid, n, (unsigned)mn, (unsigned)mx, (unsigned)(mx - mn));
+        httpd_resp_send_chunk(req, line, m);
+        const char* hint =
+            "A spread of 0 while the scene changes means it is NOT ranging:\n"
+            "check the factory film over the window, and that nothing sits in\n"
+            "front of it (wire, glue, mounting lip) within a few cm.\n";
+        httpd_resp_send_chunk(req, hint, strlen(hint));
+    } else {
+        m = snprintf(line, sizeof(line),
+                     "\n0/%d valid - nothing in range, or the sensor is not answering.\n", n);
+        httpd_resp_send_chunk(req, line, m);
+    }
+    return httpd_resp_send_chunk(req, nullptr, 0);   // terminate the chunked body
+}
+
 static esp_err_t captureHandler(httpd_req_t* req) {
+    Range before = rangefinderRead();     // bracket the exposure — see pairRange
     camera_fb_t* fb = cameraCapture();
     if (!fb) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "capture failed");
         return ESP_FAIL;
     }
+    PairedRange rg = pairRange(before, rangefinderRead());
     char id[40];
     makeCaptureId(id, sizeof(id));
+    // range rides on a HEADER so a plain `curl -O` still gets a usable file
+    // while `curl -D -` yields the distance
+    char rangeHdr[40];
+    if (rg.valid) snprintf(rangeHdr, sizeof(rangeHdr), "%u", (unsigned)rg.mm);
+    else          snprintf(rangeHdr, sizeof(rangeHdr), "invalid:%s", rg.reason);
     httpd_resp_set_type(req, "image/jpeg");
     httpd_resp_set_hdr(req, "X-Capture-Id", id);
+    httpd_resp_set_hdr(req, "X-Range-Mm", rangeHdr);
     esp_err_t r = httpd_resp_send(req, (const char*)fb->buf, fb->len);
-    Serial.printf("[http] /capture %s: %u bytes %s\n", id, (unsigned)fb->len,
-                  r == ESP_OK ? "ok" : "SEND FAILED");
+    Serial.printf("[http] /capture %s: %u bytes range=%s %s\n", id, (unsigned)fb->len,
+                  rangeHdr, r == ESP_OK ? "ok" : "SEND FAILED");
     cameraRelease(fb);
     return r;
 }
 
 static esp_err_t observationHandler(httpd_req_t* req) {
+    Range rgBefore = rangefinderRead();   // bracket the exposure — see pairRange
     camera_fb_t* fb = cameraCapture();
     if (!fb) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "capture failed");
@@ -86,6 +204,7 @@ static esp_err_t observationHandler(httpd_req_t* req) {
     }
     char id[40];
     bool synced = makeCaptureId(id, sizeof(id));
+    PairedRange rg = pairRange(rgBefore, rangefinderRead());
     memcpy(copy, fb->buf, fb->len);
     size_t w = fb->width, h = fb->height, len = fb->len;
     cameraRelease(fb);
@@ -110,8 +229,21 @@ static esp_err_t observationHandler(httpd_req_t* req) {
         tsField = ts;
     }
 
+    // an unmeasurable distance is null, never a number; the REASON is a string
+    // rather than a bare status code, because "the sensor said out of range",
+    // "the driver call failed" and "the scene moved mid-capture" are different
+    // facts and a single numeric field cannot tell them apart honestly
+    char rangeField[16], reasonField[40];
+    if (rg.valid) {
+        snprintf(rangeField, sizeof(rangeField), "%u", (unsigned)rg.mm);
+        snprintf(reasonField, sizeof(reasonField), "null");
+    } else {
+        snprintf(rangeField, sizeof(rangeField), "null");
+        snprintf(reasonField, sizeof(reasonField), "\"%s\"", rg.reason);
+    }
+
     // handoff §7 schema; pose/thermal/environment stay null in phase 1B
-    char body[512];
+    char body[576];
     snprintf(body, sizeof(body),
              "{\n"
              "  \"capture_id\": \"%s\",\n"
@@ -120,12 +252,15 @@ static esp_err_t observationHandler(httpd_req_t* req) {
              "  \"uptime_ms\": %lu,\n"
              "  \"plant_id\": null,\n"
              "  \"pose\": null,\n"
+             "  \"range_mm\": %s,\n"
+             "  \"range_invalid_reason\": %s,\n"
              "  \"rgb\": {\"file\": \"%s.jpg\", \"width\": %u, \"height\": %u, \"bytes\": %u},\n"
              "  \"thermal\": null,\n"
              "  \"environment\": null\n"
              "}\n",
              heldId, tsField, synced ? "ntp" : "unsynced",
              (unsigned long)millis(),
+             rangeField, reasonField,
              heldId, (unsigned)w, (unsigned)h, (unsigned)len);
     httpd_resp_set_type(req, "application/json");
     esp_err_t r = httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
@@ -186,6 +321,7 @@ bool endpointsStart() {
         {"/capture",     HTTP_GET, captureHandler,     nullptr, false, false, nullptr},
         {"/observation", HTTP_GET, observationHandler, nullptr, false, false, nullptr},
         {"/last.jpg",    HTTP_GET, lastJpgHandler,     nullptr, false, false, nullptr},
+        {"/range",       HTTP_GET, rangeHandler,       nullptr, false, false, nullptr},
     };
     for (auto& u : routes) {
         if (httpd_register_uri_handler(server, &u) != ESP_OK) {
