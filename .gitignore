@@ -25,8 +25,10 @@ tasks/
 # Rendered from rules.yaml.tmpl by broker/start.sh (bakes LIGHT_WINDOW_* from .env)
 broker/grafana/provisioning/alerting/rules.yaml
 
-# Photone CAL recording audit log (runtime data, per-host)
-broker/photone-log.csv
+# Photone CAL recording audit log (runtime data, per-host). Glob, not a literal
+# path: record-photone.sh rotates a file whose header has aged out to
+# photone-log.pre-<stamp>.csv, and those rotations are runtime data too.
+broker/photone-log*.csv
 
 # Written daily by the influx-backup cron (see broker/README.md)
 broker/backup/backup.log
