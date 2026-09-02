@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""k-model adoption engine, pure core (Phase C of tasks/photone-cal-pipeline.md).
+"""k-model adoption engine, pure core (Phase C of docs/photone-cal-pipeline.md).
 
 The sticky per-bucket "currently adopted value" with its brake: consumers read
 ONLY k_adopted. Everything here is deterministic and I/O-free; the orchestrator

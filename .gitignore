@@ -17,6 +17,9 @@ broker/.env
 docs/PROGRESS.md
 
 # Internal planning / lessons — kept local, not for the public repo
+# Scratch notes and working plans. Anything the CODE cites as its
+# contract belongs in docs/ instead — a doc that ships nowhere left
+# five modules pointing at a file the repo did not contain.
 tasks/
 
 # Rendered from rules.yaml.tmpl by broker/start.sh (bakes LIGHT_WINDOW_* from .env)

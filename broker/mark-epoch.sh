@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Append-only registry for the k-model pipeline (tasks/photone-cal-pipeline.md):
+# Append-only registry for the k-model pipeline (docs/photone-cal-pipeline.md):
 # epochs (a hardware/instrument state change per calibration target) and the
 # station-map (device -> light_location, time-versioned). The estimator never
 # mixes data across an epoch boundary, so a missing mark silently corrupts a

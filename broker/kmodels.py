@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""k-model pipeline, pure computation core (Phase B of tasks/photone-cal-pipeline.md).
+"""k-model pipeline, pure computation core (Phase B of docs/photone-cal-pipeline.md).
 
 Everything here is deterministic and I/O-free: rows in, artifacts out. The
 orchestrator (compute-k-models.py) owns Influx/MQTT/files and feeds this module

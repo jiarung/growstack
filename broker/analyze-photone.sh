@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # LEGACY QUICK-LOOK ONLY — eyeball the Photone pairing CSV in ten seconds.
-# NOT part of the k-model pipeline (tasks/photone-cal-pipeline.md): the pipeline's
+# NOT part of the k-model pipeline (docs/photone-cal-pipeline.md): the pipeline's
 # canonical input is the Influx `photone` measurement, its estimator spec differs
 # (log-space, session-level, evidence_rev), and nothing is ever baked into
 # firmware. Use compute-k-models.sh (Phase B) for anything that feeds a decision.

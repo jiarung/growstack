@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Canonical consumer join, pure reference implementation (Phase D of
-tasks/photone-cal-pipeline.md).
+docs/photone-cal-pipeline.md).
 
 THE join order is fixed by the blueprint and not negotiable:
   (1) context_time = truncate(_time, 5m) UTC

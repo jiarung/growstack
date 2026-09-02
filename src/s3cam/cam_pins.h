@@ -5,7 +5,7 @@
 // PRIMARY: the ESP32S3_EYE / Freenove ESP32-S3-WROOM-CAM map, which the Goouuu
 // board (and most S3-CAM clones) copies. If esp_camera_init fails with 0x105 /
 // 0x103 or the probe finds no sensor, try the alternates below IN ORDER and
-// record the winner in tasks/mlx90640/phase-1b.md.
+// record the winner in docs/mlx90640/phase-1b.md.
 #define CAM_PIN_PWDN   -1
 #define CAM_PIN_RESET  -1
 #define CAM_PIN_XCLK   15

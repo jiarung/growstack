@@ -1,4 +1,4 @@
-// s3cam — Goouuu ESP32-S3-CAM + OV5640 bring-up (tasks/mlx90640/phase-1b.md).
+// s3cam — Goouuu ESP32-S3-CAM + OV5640 bring-up (docs/mlx90640/phase-1b.md).
 // The RGB side of the plant thermal-imaging head: live MJPEG for aiming, pull-
 // model still capture, proto-observation JSON. Thermal/servo/broker come in
 // later phases; this build's whole job is the capture flow and the inventory

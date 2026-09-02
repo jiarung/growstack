@@ -6,7 +6,7 @@ _程式面(kconsume.py + fixture + k-migration dashboard)完成後,遷移本身�
 
 ## 前置(全部滿足才開始計時)
 
-- [ ] Phase A integrated test 全過(tasks/photone-phase-a-integration-test.md)
+- [ ] Phase A integrated test 全過(docs/photone-phase-a-integration-test.md)
 - [ ] compute-k-models.sh 掛上 host cron(**鎖內建,cron 行不包 flock**),連續數輪綠
 - [ ] k-models dashboard 顯示各桶;首批 bootstrap 採納值人工過目(Phase C live 驗收)
 - [ ] k-migration dashboard 兩條線開始並行(未校正桶 corrected==raw 是預期)
