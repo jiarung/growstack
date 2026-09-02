@@ -250,6 +250,56 @@ share one value domain on purpose — that is what lets the two join per plant.
    this shape; the other two are gaps 1 and 5.
 7. **Two older diagrams are incomplete** — `../README.md` and `README.md` both draw the stack
    without Node-RED, so neither shows C1 or C2. Prefer this file.
+8. **The lamp never switches off in direct sun, and that alone empties three calibration
+   buckets.** One mechanical fault with two unrelated-looking consequences.
+
+   On 2026-08-17 at 15:04:39, at the brightest moment this epoch: `lux_ref` read
+   **54612.5** while `lux` read **7000.0**. The *shielded* sensor sees 7.8x more light than
+   the plant-position one — backwards, since `lux` is supposed to see daylight **plus** the
+   lamp. `lux` is attenuated; see [`PPFD-CALIBRATION.md`](PPFD-CALIBRATION.md).
+
+   - **Consequence A (live waste).** `control/light.py` decides on `lux`, with
+     `LUX_OFF_ABOVE = 15000`. Attenuated, `lux` peaked at 7000 — under half the threshold.
+     Every `lux_ref >= 20000` sample since the 08-11 sensor swap: **71 of 71 would not have
+     switched the lamp off**, across 08-17/18/27/30/31. The lamp burns power and DLI budget
+     during the only minutes of abundant free light this site gets.
+   - **Consequence B (calibration).** `daylight/direct` needs the lamp OFF *and*
+     `lux_ref >= DIRECT_MIN` at once. Direct sun arrives mid-afternoon, inside the
+     08:00-18:30 lamp window, and by (A) the lamp does not go off — so every direct moment
+     is classified `mixed`. **`light_context` produced zero `daylight/direct` cells in 30
+     days**, so the `direct` bucket of all three targets can never fill, and the blueprint's
+     own collection plan ("晴天中午直射窗刻意收") cannot execute.
+
+   Fixing the optics resolves both: `lux` returns to `>= lux_ref`, the controller switches
+   off in direct sun, and those cells start classifying as `daylight/direct` on their own.
+   **Until then an empty `direct` bucket is the correct state, not a task** — and going out
+   to measure during direct sun produces a `mixed` row, not the one you wanted.
+9. **The estimator has no signal-magnitude floor, and one near-dark sample biases a k by
+   23%.** `pos()` (kmodels.py) asks only for finite and `> 0`, and the session weights are
+   recency-only (`HALF_LIFE_D`), never SNR. So the 2026-08-24 20:00 pair — Photone 28 lux
+   over a sensor reading 25.76, both near their noise floors — carries the same vote as an
+   8080-lux daylight pair. Dropping it moves `bh1750_lux_ref` daylight/diffuse from
+   **2.842 to 3.502** and cuts the log-sd from 0.454 to 0.342.
+
+   Not fixed, deliberately. The bootstrap CI already widens and holds the bucket at
+   `provisional`, which is honest; what it cannot do is remove the *bias* in the point
+   estimate. But that k is applied only in `daylight` cells — 1.3% of the integrated lux —
+   and its consumer has not been flipped to corrected, so the reachable harm today is
+   nil. The blueprint specifies no floor and does not list one under "明確不做(v1)" either,
+   so this is unspecified rather than declined. Any floor between 100 and 500 gives the
+   same answer (there is an order of magnitude between 25.76 and the next lowest sample);
+   3000, `calibrate-ppfd.sh`'s default, would empty every daylight bucket at this site —
+   the pre-lamp window measures 230-877 lux ([`PPFD-CAL-ROUTINE-PLAN.md`](PPFD-CAL-ROUTINE-PLAN.md)).
+10. **Two documents disagree about where a `daylight` reading is taken.** The blueprint's
+   collection SOP says "每週 1-2 筆 daylight(SOP:貼 ref 位置角度)" — at the ref spot. The
+   operator states it is taken at the canopy, with the lamp allowed to be on. The two
+   sensors are ~10 cm apart, so both may describe the same act at different resolution.
+
+   `record-photone.sh` and `kmodels.py` were rewritten to lead with the invariant that
+   actually decides correctness — a daylight numerator contains no lamp, so it pairs with
+   `lux_ref` and never with `lux_at` — which holds under either reading. The geography
+   itself is still unreconciled and needs a human ruling, because it is precisely the kind
+   of ambiguity that produced the k=0.006 pairing in the first place.
 
 ## Verifying this file
 
