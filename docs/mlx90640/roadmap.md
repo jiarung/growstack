@@ -69,6 +69,20 @@ bring-up 期間照收並記 `bad_checksum`,每張 frame 自帶 `checksum_ok=fals
 不確定性一路可見到 `/thermal` 和看圖工具。**算式一確定就改回 STRICT**
 (fixture 仍全跑 STRICT,契約沒被放寬)。
 
+收工方式已備好,等硬體在手時跑:
+
+```sh
+for i in 1 2 3 4 5; do curl -s 'http://<ip>/thermal/raw?hex=1' >> raw.txt; done
+tools/s3cam/thermal_checksum.py raw.txt
+```
+
+`?hex=1` 吐整張 frame,solver 在筆電上窮舉「演算法 × 涵蓋範圍 × 存放形式」
+(13 種 CRC-16、CRC-8、byte/word sum、XOR、取補、internet fold)。
+**多幀取交集是重點**:單幀吻合是巧合(16-bit 空間 × 數千假設),
+`test/thermal/test_checksum_solver.py` 就是在釘這件事 —— 植入的演算法要唯一
+還原,catalogue 外的假 checksum 要「什麼都不報」。找到算式才改 STRICT;
+若交集為空,代表算式不在 catalogue 內,下一步是查模組原廠碼而不是放寬契約。
+
 **工具**:`tools/s3cam/thermal_view.py` —— 抓 `/thermal` 畫成終端機熱圖
 (半格字元,零依賴)或 PNG(最近鄰放大,不插值造假細節)。色階映射該幀自身
 min..max 並永遠印出範圍,室溫幾度的差異才看得見。`--flipv/--fliph` 留給

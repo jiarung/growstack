@@ -91,7 +91,8 @@ static esp_err_t indexHandler(httpd_req_t* req) {
              "GET /last.jpg    the frame the last /observation held\n"
              "GET /range?n=20  raw rangefinder burst (no camera) — is it ranging?\n"
              "GET /thermal     newest 32x24 frame + stream stats\n"
-             "GET /thermal/raw what the module ACTUALLY sends (layout ground truth)\n",
+             "GET /thermal/raw what the module ACTUALLY sends (layout ground truth)\n"
+    "                 ?hex=1 dumps one whole frame for offline analysis\n",
              cameraSensorName(), rangefinderPresent() ? "VL53L0X" : "absent",
              ESP.getPsramSize(), ESP.getFreePsram(), ESP.getFreeHeap());
     httpd_resp_set_type(req, "text/plain");
@@ -316,6 +317,32 @@ static esp_err_t thermalRawHandler(httpd_req_t* req) {
         httpd_resp_send_chunk(req, line, m);
     }
 
+    // ---- ?hex=1: the whole frame, for offline analysis ----------------------
+    // Three sum conventions is all a 176-byte line buffer can reasonably try on
+    // the board. The checksum algorithm is a SEARCH problem — CRC variants,
+    // different covered ranges, word-wise sums — and that search belongs on a
+    // laptop with the bytes in hand, not in an HTTP handler. This emits them.
+    bool wantHex = false;
+    {
+        char q[32], v[8];
+        if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK &&
+            httpd_query_key_value(q, "hex", v, sizeof(v)) == ESP_OK) {
+            wantHex = (v[0] == '1' || v[0] == 't' || v[0] == 'y');
+        }
+    }
+    if (wantHex) {
+        m = snprintf(line, sizeof(line), "\nframe hex (%u bytes, one frame):\n",
+                     (unsigned)flen);
+        httpd_resp_send_chunk(req, line, m);
+        for (size_t k = f0; k < fend; k++) {
+            m = snprintf(line, sizeof(line), "%02X%s", d[k],
+                         ((k - f0) % 32 == 31) ? "\n" : "");
+            if (httpd_resp_send_chunk(req, line, m) != ESP_OK) return ESP_FAIL;
+        }
+        httpd_resp_send_chunk(req, "\n", 1);
+        return httpd_resp_send_chunk(req, nullptr, 0);
+    }
+
     m = snprintf(line, sizeof(line), "\nframe head:\n ");
     httpd_resp_send_chunk(req, line, m);
     for (size_t k = f0; k < f0 + 16 && k < fend; k++) {
@@ -329,7 +356,8 @@ static esp_err_t thermalRawHandler(httpd_req_t* req) {
         m = snprintf(line, sizeof(line), " %02X", d[k]);
         httpd_resp_send_chunk(req, line, m);
     }
-    httpd_resp_send_chunk(req, "\n", 1);
+    const char* more = "\n  (add ?hex=1 for the whole frame)\n";
+    httpd_resp_send_chunk(req, more, strlen(more));
     return httpd_resp_send_chunk(req, nullptr, 0);
 }
 

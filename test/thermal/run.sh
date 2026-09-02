@@ -90,4 +90,13 @@ if check_full "truncated (timeout700)" "$DIR/expected/truncated_timeout.json" \
     && echo "pass truncated (timeout700 discardPartial contract)" \
     || { echo "FAIL truncated (timeout700, sanitized)"; fail=1; }
 fi
+
+# the offline checksum solver: it must find a planted algorithm and, just as
+# importantly, invent nothing when the real one is outside its catalogue
+if solver_out=$(python3 "$DIR/test_checksum_solver.py"); then
+  echo "pass checksum solver ($(echo "$solver_out" | grep -c '^pass') cases)"
+else
+  echo "$solver_out" | grep -v '^pass'
+  fail=1
+fi
 exit $fail
