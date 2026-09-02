@@ -158,7 +158,18 @@ def row_contributions(row, registry, station_device):
     # streams are lamp-lit BY DEFINITION. The recorder sentinels them, but the
     # estimator must not depend on that — enforce the routing here too, the
     # same defense-in-depth as the saturation re-check.
-    ref_only = source == "daylight" and _f(row, "lamp_state") == 1.0
+    #
+    # FAIL CLOSED on an ABSENT lamp_state: only a demonstrably-OFF lamp admits a
+    # daylight row to the canopy targets. The daylight numerator is measured with
+    # the lamp blocked, so pairing it against the lamp-lit lux_at/channels needs
+    # the lamp to have actually been off — "nobody recorded it" is not that.
+    # Reading absent as off is how six pre-v2 rows (the field did not exist yet;
+    # the lamp WAS on) became the entire daylight evidence for bh1750_lux_main:
+    # 28 lux of blocked skylight over 4634 lux of lamp-lit sensor, k=0.006.
+    # Guessing this way costs almost nothing — a ref_only row is not discarded,
+    # it still feeds bh1750_lux_ref, where blocked-sky over shielded-sensor is
+    # exactly the right pairing. Guessing the other way fabricates a k.
+    ref_only = source == "daylight" and _f(row, "lamp_state") != 0.0
 
     lux, lux_at, ref_at, ppfd = (_f(row, "lux"), _f(row, "lux_at"),
                                  _f(row, "lux_ref_at"), _f(row, "ppfd"))
@@ -498,7 +509,7 @@ def selftest():
     # row -> contributions: the sentinel and routing contract
     base = {"ts": D, "device": "livingroom", "source": "daylight", "paired": 1.0,
             "lux": 6000.0, "lux_at": 5500.0, "lux_ref_at": 5000.0, "ppfd": 100.0,
-            "gain_x": 4.0, "tint_ms": 280.78}
+            "gain_x": 4.0, "tint_ms": 280.78, "lamp_state": 0.0}
     base.update({c: 1000.0 for c in CH})
     reg2 = {"epochs": [
         {"target": "as7341_ppfd", "epoch_id": "as7341_ppfd-e1",
@@ -518,6 +529,14 @@ def selftest():
     ro_bad = dict(base, lamp_state=1.0)     # lux_at + channels all positive
     got = [c[0] for c in row_contributions(ro_bad, reg2, "livingroom")]
     assert got == ["bh1750_lux_ref"], "ref-only enforcement must not rely on sentinels"
+    # ...and an ABSENT lamp_state routes like lamp-ON, never like lamp-OFF: the
+    # canopy pairing needs the lamp demonstrably off, and "unrecorded" is not a
+    # demonstration. Regression for the pre-v2 rows that fed a k of 0.006 into
+    # bh1750_lux_main. Note the row still reaches the ref target — fail-closed
+    # withholds a sample here, it does not throw the measurement away.
+    ro_absent = {k: v for k, v in base.items() if k != "lamp_state"}
+    got = [c[0] for c in row_contributions(ro_absent, reg2, "livingroom")]
+    assert got == ["bh1750_lux_ref"], "absent lamp_state must not feed canopy targets"
     # non-finite ratio inputs fail the >0 contract
     for k, v in (("lux", float("nan")), ("lux_at", float("inf")), ("ppfd", float("nan"))):
         bad = dict(base, **{k: v})
