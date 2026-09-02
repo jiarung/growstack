@@ -348,6 +348,30 @@ def station_location(device, at):
     if env_loc: return env_loc, ".env bootstrap (station-map has no entry — add one)"
     return None, None
 
+# ---------- declared-epoch lookup: does as7341_ppfd have one covering `at`? ----------
+# Matters because a DECLARED epoch makes config identity mandatory: kmodels.py
+# skips any row whose gain_x/tint_ms cannot prove which instrument produced it,
+# and that skip is SILENT — no flag, no counter, the row just never counts. The
+# only symptom is n_sessions refusing to move. Under e0-legacy the same row is
+# admissible, so this message has to know which regime it is in.
+def as7341_epoch_at(at):
+    reg_path = os.path.join(os.environ["DIR"], "epochs.json")
+    try:
+        eps = json.load(open(reg_path)).get("epochs", [])
+    except (OSError, json.JSONDecodeError):
+        return None
+    best = None
+    for e in eps:
+        if e.get("target") != "as7341_ppfd":
+            continue
+        try:
+            st = datetime.strptime(e["start"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except (KeyError, ValueError):
+            continue
+        if st <= at and (best is None or st > best[0]):
+            best = (st, e.get("epoch_id"))
+    return best[1] if best else None
+
 light_location, loc_src = station_location(device, at)
 if light_location is None:
     die(f"no light_location for device {device!r}: station_map empty and no "
@@ -494,6 +518,12 @@ if not ref_ok and source == "daylight":
 if config_override: warns.append("gain/tint from CLI override — row excluded from as7341_ppfd estimation")
 if source_override: warns.append("source from --source override (lamp state UNKNOWN)")
 if loc_src and "bootstrap" in loc_src: warns.append(f"light_location via {loc_src}")
+_as7341_eid = as7341_epoch_at(at)
+if gain_x is None and _as7341_eid:
+    warns.append(f"NO telemetry config identity, and as7341_ppfd epoch {_as7341_eid} is "
+                 "declared — kmodels.py will SILENTLY DROP this row from as7341 "
+                 "estimation (gain_x/tint_ms must both be present and match the epoch "
+                 "config). The measurement still stores; it just will not count.")
 
 # Sentinels are per stream: a refused stream stores -1 (the estimator's >0 rule
 # drops it per target) while every surviving stream keeps its evidence — a
@@ -524,7 +554,9 @@ print(f"  lamp={lamp_txt}"
       + f"  location={light_location}")
 print(f"  window ±{win:g}m: {n} spectrum sample(s), {len(lux_samples)} lux sample(s)"
       + (f", lux {min(lux_samples):.0f}–{max(lux_samples):.0f} (CV {lux_cv*100:.0f}%)" if lux_samples else "")
-      + (f", telemetry gain={gain_x:g}/tint={tint:g}ms" if gain_x is not None else ", no telemetry config (e0-legacy)"))
+      + (f", telemetry gain={gain_x:g}/tint={tint:g}ms" if gain_x is not None
+         else (", no telemetry config (e0-legacy — still admissible)" if _as7341_eid is None
+               else f", NO telemetry config (epoch {_as7341_eid} declared — NOT admissible)")))
 for w in warns: print(f"  ⚠ {w}")
 paired_txt = "yes" if paired else "NO (all context stored as -1 sentinels)"
 if paired and not (spec_ok and lux_ok and ref_ok):
