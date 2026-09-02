@@ -9,7 +9,7 @@ It is a framework, not a finished document. Add to it when something bites you.
 
 ---
 
-## The four ways this system lies to you
+## The five ways this system lies to you
 
 Ranked by how many times each has actually happened.
 
@@ -128,6 +128,45 @@ for states that are genuinely impossible.
 
 ---
 
+### 5. A config that renders, but never loads (1×)
+
+Found 2026-09-02: the two k-model alert rules — the ones the entire Phase C
+adoption brake relies on for a human to ever be told — had **never been loaded**.
+They went into the template on 08-29 (`4d27655`); Grafana was still serving the
+six rules rendered on **08-22**. Eleven days of a brake that engages silently.
+
+Two independent halves, and both must happen:
+
+1. **`rules.yaml` is gitignored**, rendered from `rules.yaml.tmpl` by `start.sh`.
+   Editing the template changes nothing until that runs. Same root as §1 — the
+   live state is not in version control, so the drift produces **no diff**:
+   `git status` is clean while the running system is stale.
+2. **Grafana reads `provisioning/alerting/` only at startup.** Dashboards have a
+   directory watcher; alerting does not. And `start.sh`'s own
+   `docker compose up -d` will **not** recreate Grafana when `docker-compose.yml`
+   is unchanged — so running `start.sh` alone renders the file and leaves it
+   unloaded. The recreate is a separate step, and it is the half that is easy to
+   miss because the render step looks like it succeeded.
+
+Check the file against the template, then Grafana against the file. The second
+check is the one that catches half 2:
+
+```bash
+grep -c '^ *- uid:' grafana/provisioning/alerting/rules.yaml{.tmpl,}   # must match
+curl -su "admin:$GF_SECURITY_ADMIN_PASSWORD" \
+  localhost:3001/api/v1/provisioning/alert-rules | jq length            # must match too
+```
+
+**Loading is still not firing.** Both k-model rules carry `noDataState: OK`,
+which is correct here — "no events" and "no held bucket" are the healthy states,
+unlike a deadman where NoData means the query broke. But it keeps §5's cousin
+alive: a query that breaks by returning *empty* rather than erroring reports
+healthy, and `execErrState: Error` only covers hard errors. The way to gain
+confidence without waiting for a real event is to run the rule's own Flux with
+only its state predicate relaxed, and check the output *shape* — labels present,
+`_time` fresh. FLOWS.md gap 5 is what that shape protects against.
+
+
 ## Deployment: what a change actually requires
 
 Editing the file is rarely enough.
@@ -138,6 +177,7 @@ Editing the file is rarely enough.
 | `telegraf/telegraf.conf` | `docker compose up -d --force-recreate telegraf` | single-file bind mount, attached by **inode** |
 | `node-red/tag-map.json` | same force-recreate | same inode trap |
 | `node-red/flows.json` | `add-plant.sh` does it: rebuild image + `docker volume rm broker_nodered-data` + up | flows live in the volume, not the mount |
+| `grafana/provisioning/alerting/rules.yaml.tmpl` | `bash start.sh` **then** `docker compose up -d --force-recreate grafana` | rendered to a gitignored file; alerting provisioning is read at startup only (§5) |
 | `control/light.py` | `docker compose build light && docker compose up -d --force-recreate light` | baked into the image (`build: ./control`) |
 | any `*.sh` / `*.py` in `broker/` | nothing | run from the host |
 | `src/` (firmware) | flash from the dev host | not this machine |
@@ -170,6 +210,19 @@ for l in /tmp/k-models.log /tmp/ppfd-cal-daily.log /tmp/publish-weight-ref.log \
          /tmp/cal-review-reminder.log broker/backup/backup.log; do
   printf '%-34s %s\n' "$l" "$(date -r "$l" '+%m-%d %H:%M')"; tail -2 "$l"; done
 ```
+
+**Are the alert rules that are in git actually loaded?** Three counts that must
+all agree — template, rendered file, and what Grafana is really running. The
+third is the only one that reflects reality (§5):
+
+```bash
+grep -c '^ *- uid:' grafana/provisioning/alerting/rules.yaml{.tmpl,}
+curl -su "admin:$GF_SECURITY_ADMIN_PASSWORD" \
+  localhost:3001/api/v1/provisioning/alert-rules | jq length
+```
+
+A mismatch produces no diff and no alert — by construction, the thing that would
+have told you is the thing that is missing.
 
 **Is every sensor still answering?** The health topic re-probes live, it is not
 a boot snapshot:
