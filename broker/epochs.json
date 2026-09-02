@@ -1,7 +1,45 @@
 {
-  "epochs": [],
+  "epochs": [
+    {
+      "epoch_id": "bh1750_lux_main-e1",
+      "target": "bh1750_lux_main",
+      "start": "2026-08-11T00:00:00Z",
+      "reason": "both BH1750s replaced (died 2026-08-10 20:58); pre-swap Photone batch 07-20/07-21 retracted in PPFD-CALIBRATION.md",
+      "device": "livingroom",
+      "config": {
+        "address": "0x23",
+        "position": "plant canopy, lamp-lit",
+        "optics": "quartz window, 2mm"
+      },
+      "photone": {
+        "phone": "iPhone 15 Pro",
+        "app_ver": "3.2.1"
+      },
+      "prev": "e0-legacy"
+    },
+    {
+      "epoch_id": "bh1750_lux_ref-e1",
+      "target": "bh1750_lux_ref",
+      "start": "2026-08-11T00:00:00Z",
+      "reason": "both BH1750s replaced (died 2026-08-10 20:58); pre-swap Photone batch 07-20/07-21 retracted in PPFD-CALIBRATION.md",
+      "device": "livingroom",
+      "config": {
+        "address": "0x5C",
+        "position": "~10cm from main, shielded from grow lamp",
+        "optics": "DIY plastic diffuser (splash-proof; no further spec)"
+      },
+      "photone": {
+        "phone": "iPhone 15 Pro",
+        "app_ver": "3.2.1"
+      },
+      "prev": "e0-legacy"
+    }
+  ],
   "station_map": [
-    {"device": "livingroom", "light_location": "livingroom",
-     "valid_from": "1970-01-01T00:00:00Z"}
+    {
+      "device": "livingroom",
+      "light_location": "livingroom",
+      "valid_from": "1970-01-01T00:00:00Z"
+    }
   ]
 }
