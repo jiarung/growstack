@@ -21,8 +21,12 @@
 namespace thermal {
 
 bool begin();          // opens Serial1, resets the parser; true if the port opened
-void poll();           // drain whatever arrived; call every loop, never blocks
-bool take(gymcu::ThermalFrame& out);   // newest complete frame, once
+// Drain whatever arrived; call EVERY loop pass and keep the pass short. The
+// driver's RX ring is finite: bytes that arrive while the loop is elsewhere
+// are lost inside the UART driver, and lost bytes look exactly like a shorter
+// frame — a failure that reads as data rather than as an error.
+void poll();
+bool take(gymcu::ThermalFrame& out);   // NEWEST complete frame, once
 
 // True once a frame has ever been decoded — "the module is talking".
 bool everSawFrame();
@@ -32,15 +36,20 @@ uint32_t sinceLastFrameMs();
 // separates "nothing is connected" from "something is talking gibberish".
 uint32_t bytesSeen();
 
-const gymcu::Parser::Stats& stats();
+// A COPY, not a live reference: poll() runs on the main task and callers run
+// on the httpd task, so handing out a pointer into mutating state would be a
+// data race dressed as an accessor.
+gymcu::Parser::Stats statsSnapshot();
 
 // ---- raw capture: ground truth for the VERIFY-ON-HARDWARE constants --------
 // The parser can only report that a frame failed; it cannot say what the
 // module actually sent. This tees the incoming bytes into a plain buffer so
 // the real layout can be read off the wire — sync spacing gives the true frame
 // length, and the bytes after the payload give the real checksum field.
+// Cross-task safe: arm, wait for !rawBusy(), then copy out.
 void rawArm();                       // start (or restart) filling the buffer
-const uint8_t* rawData();
+bool rawBusy();                      // still filling
+size_t rawCopy(uint8_t* dst, size_t cap);   // snapshot into the caller's buffer
 size_t rawLen();
 size_t rawCapacity();
 

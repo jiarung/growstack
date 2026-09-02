@@ -5,10 +5,13 @@
 // the single httpd task, so a /capture issued DURING a stream waits (it does
 // not run concurrently and does not fail fast) — close the stream first.
 //
-// HANDLER STACK: the httpd task gets 4 KB. A multi-KB local buffer in a
-// handler overflows it and panics the core ("Stack canary watchpoint
-// triggered (httpd)") — build long responses with httpd_resp_send_chunk() and
-// a small line buffer instead of assembling them in one array.
+// HANDLER STACK: a multi-KB local in a handler overflows the httpd task's
+// stack and panics the core — this has happened twice, once with a 2 KB
+// response buffer and once with a ~3 KB ThermalFrame struct. Build long
+// responses with httpd_resp_send_chunk() and a small line buffer, and put any
+// large struct a handler needs at file scope (the task runs one handler at a
+// time, so a single shared buffer is safe). The stack is raised a little in
+// endpointsStart(), but that is margin, not permission.
 //
 //   GET /            tiny index: links + sensor/PSRAM status
 //   GET /stream      MJPEG live view (sensor drops to VGA while streaming)

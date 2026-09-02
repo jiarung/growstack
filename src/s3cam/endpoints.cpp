@@ -6,6 +6,7 @@
 
 #include "camera.h"
 #include "rangefinder.h"
+#include "thermal/thermal_uart.h"
 
 static httpd_handle_t server = nullptr;
 
@@ -79,7 +80,7 @@ static char heldId[40] = "";
 
 // ---- handlers ---------------------------------------------------------------
 static esp_err_t indexHandler(httpd_req_t* req) {
-    char body[400];
+    char body[640];   // grows with the endpoint list — the compiler checks it
     snprintf(body, sizeof(body),
              "s3cam bring-up (phase 1B)\n"
              "sensor: %s\nrangefinder: %s\n"
@@ -88,7 +89,9 @@ static esp_err_t indexHandler(httpd_req_t* req) {
              "GET /capture     full-res still (X-Capture-Id + X-Range-Mm headers)\n"
              "GET /observation still + observation JSON (pairs with /last.jpg)\n"
              "GET /last.jpg    the frame the last /observation held\n"
-             "GET /range?n=20  raw rangefinder burst (no camera) — is it ranging?\n",
+             "GET /range?n=20  raw rangefinder burst (no camera) — is it ranging?\n"
+             "GET /thermal     newest 32x24 frame + stream stats\n"
+             "GET /thermal/raw what the module ACTUALLY sends (layout ground truth)\n",
              cameraSensorName(), rangefinderPresent() ? "VL53L0X" : "absent",
              ESP.getPsramSize(), ESP.getFreePsram(), ESP.getFreeHeap());
     httpd_resp_set_type(req, "text/plain");
@@ -158,6 +161,175 @@ static esp_err_t rangeHandler(httpd_req_t* req) {
         httpd_resp_send_chunk(req, line, m);
     }
     return httpd_resp_send_chunk(req, nullptr, 0);   // terminate the chunked body
+}
+
+// GET /thermal — the newest 32x24 frame as JSON, plus the parser's own view of
+// the stream. The stats are half the point during bring-up: bytes with no
+// frames means the wire is talking but the FRAME LAYOUT constants are wrong
+// (they are marked VERIFY-ON-HARDWARE), while zero bytes means TX/RX are
+// swapped or the module is unpowered — two very different next moves.
+static esp_err_t thermalHandler(httpd_req_t* req) {
+    // A ThermalFrame is ~3 KB (24x32 floats). As a LOCAL it overflows the
+    // httpd task's 4 KB stack — which it did, on the first request after this
+    // endpoint shipped. The httpd task runs one handler at a time, so a single
+    // file-scope buffer is both sufficient and the only place 3 KB belongs.
+    // (Same lesson as the /range 2 KB body; the earlier comment guarded the
+    // JSON buffer and missed the frame struct sitting right beside it.)
+    static gymcu::ThermalFrame f;
+    bool have = thermal::take(f);
+    const gymcu::Parser::Stats s = thermal::statsSnapshot();
+
+    char line[224];
+    httpd_resp_set_type(req, "application/json");
+    int m = snprintf(line, sizeof(line),
+        "{\n  \"stream\": {\"bytes_seen\": %lu, \"frames_ok\": %lu, "
+        "\"bad_checksum\": %lu, \"bad_header\": %lu, \"resyncs\": %lu, "
+        "\"bytes_dropped\": %lu, \"timeouts\": %lu, \"ms_since_frame\": %ld},\n",
+        (unsigned long)thermal::bytesSeen(), (unsigned long)s.frames_ok,
+        (unsigned long)s.bad_checksum, (unsigned long)s.bad_header,
+        (unsigned long)s.resyncs, (unsigned long)s.bytes_dropped,
+        (unsigned long)s.timeouts,
+        thermal::everSawFrame() ? (long)thermal::sinceLastFrameMs() : -1L);
+    httpd_resp_send_chunk(req, line, m);
+
+    if (!have) {
+        const char* none = "  \"frame\": null\n}\n";
+        httpd_resp_send_chunk(req, none, strlen(none));
+        return httpd_resp_send_chunk(req, nullptr, 0);
+    }
+    // row-major, one JSON row per chunk: 768 floats do not belong on a 4 KB
+    // stack (the lesson from the /range panic, applied before it bites)
+    m = snprintf(line, sizeof(line),
+                 "  \"frame\": {\"seq\": %lu, \"ta_c\": %.2f, \"rows\": %u, "
+                 "\"cols\": %u, \"px\": [",
+                 (unsigned long)f.seq, f.ambient_c,
+                 (unsigned)gymcu::ROWS, (unsigned)gymcu::COLS);
+    httpd_resp_send_chunk(req, line, m);
+    const float* px = &f.pixels[0][0];
+    for (size_t p = 0; p < gymcu::PIXELS; p++) {
+        m = snprintf(line, sizeof(line), "%s%.2f", p ? "," : "", px[p]);
+        if (httpd_resp_send_chunk(req, line, m) != ESP_OK) return ESP_FAIL;
+    }
+    const char* tail = "]}\n}\n";
+    httpd_resp_send_chunk(req, tail, strlen(tail));
+    return httpd_resp_send_chunk(req, nullptr, 0);
+}
+
+// GET /thermal/raw — arm the tee, wait for it to fill, then report what the
+// module ACTUALLY sends. This exists because a parser can only say "checksum
+// failed"; it cannot say what the real layout is.
+static esp_err_t thermalRawHandler(httpd_req_t* req) {
+    // the snapshot lives at file scope: 3.6 KB has no business on the httpd
+    // task's stack (see endpoints.h)
+    static uint8_t d[3600];
+
+    thermal::rawArm();
+    uint32_t t0 = millis();
+    while (thermal::rawBusy() && millis() - t0 < 6000) delay(20);
+    const size_t n = thermal::rawCopy(d, sizeof(d));
+
+    char line[176];
+    httpd_resp_set_type(req, "text/plain");
+    int m = snprintf(line, sizeof(line),
+                     "captured %u bytes%s\n\nframe marks (5A 5A 02 06):\n",
+                     (unsigned)n, thermal::rawBusy() ? " (TIMED OUT, partial)" : "");
+    httpd_resp_send_chunk(req, line, m);
+
+    // Mark = the FOUR-byte header, not the two sync bytes: 0x5A5A is a
+    // reachable pixel value (231.30 degC) and can also straddle the byte
+    // boundary between two ordinary values, so a 2-byte match is not evidence
+    // of a frame start. Marks cannot overlap, which also keeps the gaps honest.
+    size_t marks[8];
+    int nm = 0;
+    for (size_t i = 0; i + 3 < n && nm < 8; ) {
+        if (d[i] == 0x5A && d[i + 1] == 0x5A && d[i + 2] == 0x02 && d[i + 3] == 0x06) {
+            marks[nm++] = i;
+            i += 4;
+        } else {
+            i++;
+        }
+    }
+    for (int k = 0; k < nm; k++) {
+        if (k == 0) m = snprintf(line, sizeof(line), "  @%5u\n", (unsigned)marks[0]);
+        else        m = snprintf(line, sizeof(line), "  @%5u   gap %u\n",
+                                 (unsigned)marks[k], (unsigned)(marks[k] - marks[k - 1]));
+        httpd_resp_send_chunk(req, line, m);
+    }
+    if (nm < 2) {
+        const char* few = "\n(need two marks to measure a frame; capture again)\n";
+        httpd_resp_send_chunk(req, few, strlen(few));
+        return httpd_resp_send_chunk(req, nullptr, 0);
+    }
+
+    // Only a gap that repeats is a frame length; a single gap could be one
+    // dropped frame or a false mark.
+    size_t flen = marks[1] - marks[0];
+    bool consistent = true;
+    for (int k = 2; k < nm; k++) if (marks[k] - marks[k - 1] != flen) consistent = false;
+    m = snprintf(line, sizeof(line), "\n%d marks, gap %s at %u bytes\n",
+                 nm, consistent ? "CONSISTENT" : "VARIES (first pair)", (unsigned)flen);
+    httpd_resp_send_chunk(req, line, m);
+
+    const size_t f0 = marks[0];
+    const size_t fend = f0 + flen;          // guaranteed <= n: marks[1] < n
+    // ---- checksum candidates over the real frame -----------------------------
+    {
+        uint32_t s16 = 0, s8 = 0;
+        for (size_t k = f0; k + 2 < fend; k++) s16 += d[k];
+        for (size_t k = f0; k + 1 < fend; k++) s8 += d[k];
+        uint16_t le = (uint16_t)(d[fend - 2] | (d[fend - 1] << 8));
+        uint16_t be = (uint16_t)((d[fend - 2] << 8) | d[fend - 1]);
+        m = snprintf(line, sizeof(line),
+                     "  sum16=%04X tailLE=%04X tailBE=%04X%s\n"
+                     "  sum8=%02X   tail8=%02X%s\n",
+                     (unsigned)(s16 & 0xFFFF), le, be,
+                     (s16 & 0xFFFF) == le ? "  <-- LE16" :
+                     (s16 & 0xFFFF) == be ? "  <-- BE16" : "",
+                     (unsigned)(s8 & 0xFF), d[fend - 1],
+                     (s8 & 0xFF) == d[fend - 1] ? "  <-- BYTE" : "");
+        httpd_resp_send_chunk(req, line, m);
+    }
+
+    // ---- where does the pixel data start? -----------------------------------
+    // EVERY offset, odd included: the int16 alignment is exactly what is in
+    // question, so stepping by two would answer a question nobody asked.
+    // Count is a hint, not a pixel count — Ta, metadata and trailers can sit
+    // in the same numeric range as a temperature.
+    const char* hdr = "\ndata-start probe (LE int16/100 in -40..300 C):\n";
+    httpd_resp_send_chunk(req, hdr, strlen(hdr));
+    for (size_t off = 0; off <= 16; off++) {
+        int plaus = 0, total = 0;
+        float mn = 1e9f, mx = -1e9f;
+        for (size_t k = f0 + off; k + 1 < fend; k += 2) {
+            float c = (float)(int16_t)(d[k] | (d[k + 1] << 8)) / 100.0f;
+            total++;
+            if (c > -40.0f && c < 300.0f) {
+                plaus++;
+                if (c < mn) mn = c;
+                if (c > mx) mx = c;
+            }
+        }
+        m = snprintf(line, sizeof(line), "  +%2u: %4d/%4d  %.2f..%.2f C\n",
+                     (unsigned)off, plaus, total,
+                     plaus ? (double)mn : 0.0, plaus ? (double)mx : 0.0);
+        httpd_resp_send_chunk(req, line, m);
+    }
+
+    m = snprintf(line, sizeof(line), "\nframe head:\n ");
+    httpd_resp_send_chunk(req, line, m);
+    for (size_t k = f0; k < f0 + 16 && k < fend; k++) {
+        m = snprintf(line, sizeof(line), " %02X", d[k]);
+        httpd_resp_send_chunk(req, line, m);
+    }
+    m = snprintf(line, sizeof(line), "\nframe tail:\n ");
+    httpd_resp_send_chunk(req, line, m);
+    size_t tailFrom = flen > 16 ? fend - 16 : f0;   // no unsigned underflow
+    for (size_t k = tailFrom; k < fend; k++) {
+        m = snprintf(line, sizeof(line), " %02X", d[k]);
+        httpd_resp_send_chunk(req, line, m);
+    }
+    httpd_resp_send_chunk(req, "\n", 1);
+    return httpd_resp_send_chunk(req, nullptr, 0);
 }
 
 static esp_err_t captureHandler(httpd_req_t* req) {
@@ -314,6 +486,11 @@ bool endpointsStart() {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
     cfg.lru_purge_enable = true;   // a stuck stream socket gets evicted, not fatal
+    // 4 KB (the default) has panicked twice as endpoints grew; 6 KB is margin
+    // for the JSON/format work handlers legitimately do. The no-big-locals
+    // discipline in endpoints.h still stands — this only stops a near-miss
+    // from taking the whole board down with it.
+    cfg.stack_size = 6144;
     if (httpd_start(&server, &cfg) != ESP_OK) return false;
     static const httpd_uri_t routes[] = {
         {"/",            HTTP_GET, indexHandler,       nullptr, false, false, nullptr},
@@ -322,6 +499,8 @@ bool endpointsStart() {
         {"/observation", HTTP_GET, observationHandler, nullptr, false, false, nullptr},
         {"/last.jpg",    HTTP_GET, lastJpgHandler,     nullptr, false, false, nullptr},
         {"/range",       HTTP_GET, rangeHandler,       nullptr, false, false, nullptr},
+        {"/thermal",     HTTP_GET, thermalHandler,     nullptr, false, false, nullptr},
+        {"/thermal/raw", HTTP_GET, thermalRawHandler,  nullptr, false, false, nullptr},
     };
     for (auto& u : routes) {
         if (httpd_register_uri_handler(server, &u) != ESP_OK) {

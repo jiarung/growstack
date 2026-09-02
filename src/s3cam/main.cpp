@@ -10,6 +10,7 @@
 #include "camera.h"
 #include "endpoints.h"
 #include "rangefinder.h"
+#include "thermal/thermal_uart.h"
 
 // Away-from-home bring-up: put the hotspot's creds in secrets.h as
 //   #define S3CAM_WIFI_SSID "..."
@@ -57,6 +58,9 @@ void setup() {
     // whether it answered belongs in the same boot log as the sensor probe.
     // Its absence is never fatal — distance simply reports null.
     rangefinderBegin();
+    // the thermal module streams on its own as soon as it is powered; opening
+    // the port early means the parser sees the stream from the first frame
+    thermal::begin();
 
     camOk = cameraInit();
     if (camOk && endpointsStart()) {
@@ -71,12 +75,21 @@ void setup() {
 }
 
 void loop() {
+    thermal::poll();   // drain Serial1 every pass; never blocks
+
     static uint32_t last = 0;
     if (millis() - last > 30000) {
         last = millis();
         // temperatureRead(): the S3's internal die sensor — coarse but perfect
         // for testing the "hot board = stalling transfers" hypothesis with a
         // number instead of a fingertip
+        const gymcu::Parser::Stats ts = thermal::statsSnapshot();
+        Serial.printf("[thermal] bytes=%lu frames=%lu bad_cs=%lu bad_hdr=%lu "
+                      "resync=%lu dropped=%lu timeouts=%lu\n",
+                      (unsigned long)thermal::bytesSeen(), (unsigned long)ts.frames_ok,
+                      (unsigned long)ts.bad_checksum, (unsigned long)ts.bad_header,
+                      (unsigned long)ts.resyncs, (unsigned long)ts.bytes_dropped,
+                      (unsigned long)ts.timeouts);
         Serial.printf("[s3cam] up %lus  heap=%u psram_free=%u die=%.1fC wifi=%s rssi=%d\n",
                       (unsigned long)(millis() / 1000), ESP.getFreeHeap(),
                       ESP.getFreePsram(), temperatureRead(),
@@ -84,5 +97,7 @@ void loop() {
                                                     : "DOWN",
                       WiFi.RSSI());
     }
-    delay(50);
+    // 5 ms, not 50: thermal::poll() must revisit the UART ring often enough
+    // that a burst cannot overflow it between passes (see thermal_uart.h).
+    delay(5);
 }

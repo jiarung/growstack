@@ -29,26 +29,30 @@
 // 19/20 native USB, 43/44 UART0, 26-32 flash — all unusable).
 #define RANGE_PIN_SDA  41
 #define RANGE_PIN_SCL  42
+// GY-MCU90640 thermal camera, UART. CROSSED: module TX -> our RX, module RX ->
+// our TX. (The module speaks UART only; its bare MLX90640's SDA/SCL stay
+// unconnected — its onboard MCU owns that bus and does the calibration math.)
+#define THERMAL_PIN_RX 39
+#define THERMAL_PIN_TX 40
 
 // Switching to an ALTERNATE map below would put camera data lines on 41/42;
-// the rangefinder must move first. Caught here, at compile time.
-#if (RANGE_PIN_SDA == CAM_PIN_XCLK) || (RANGE_PIN_SDA == CAM_PIN_SIOD) || \
-    (RANGE_PIN_SDA == CAM_PIN_SIOC) || (RANGE_PIN_SDA == CAM_PIN_D7)   || \
-    (RANGE_PIN_SDA == CAM_PIN_D6)   || (RANGE_PIN_SDA == CAM_PIN_D5)   || \
-    (RANGE_PIN_SDA == CAM_PIN_D4)   || (RANGE_PIN_SDA == CAM_PIN_D3)   || \
-    (RANGE_PIN_SDA == CAM_PIN_D2)   || (RANGE_PIN_SDA == CAM_PIN_D1)   || \
-    (RANGE_PIN_SDA == CAM_PIN_D0)   || (RANGE_PIN_SDA == CAM_PIN_VSYNC)|| \
-    (RANGE_PIN_SDA == CAM_PIN_HREF) || (RANGE_PIN_SDA == CAM_PIN_PCLK)
-#error "RANGE_PIN_SDA collides with a camera pin — pick another (see the free list)"
+// the peripherals must move first. Caught here, at compile time.
+// Every non-camera pin is checked against every camera pin at compile time.
+#define CAM_USES(p) ((p) == CAM_PIN_PWDN || (p) == CAM_PIN_RESET || \
+    (p) == CAM_PIN_XCLK || (p) == CAM_PIN_SIOD || \
+    (p) == CAM_PIN_SIOC || (p) == CAM_PIN_D7 || (p) == CAM_PIN_D6 || \
+    (p) == CAM_PIN_D5 || (p) == CAM_PIN_D4 || (p) == CAM_PIN_D3 || \
+    (p) == CAM_PIN_D2 || (p) == CAM_PIN_D1 || (p) == CAM_PIN_D0 || \
+    (p) == CAM_PIN_VSYNC || (p) == CAM_PIN_HREF || (p) == CAM_PIN_PCLK)
+#if CAM_USES(RANGE_PIN_SDA) || CAM_USES(RANGE_PIN_SCL)
+#error "rangefinder pin collides with a camera pin — pick another (see the free list)"
 #endif
-#if (RANGE_PIN_SCL == CAM_PIN_XCLK) || (RANGE_PIN_SCL == CAM_PIN_SIOD) || \
-    (RANGE_PIN_SCL == CAM_PIN_SIOC) || (RANGE_PIN_SCL == CAM_PIN_D7)   || \
-    (RANGE_PIN_SCL == CAM_PIN_D6)   || (RANGE_PIN_SCL == CAM_PIN_D5)   || \
-    (RANGE_PIN_SCL == CAM_PIN_D4)   || (RANGE_PIN_SCL == CAM_PIN_D3)   || \
-    (RANGE_PIN_SCL == CAM_PIN_D2)   || (RANGE_PIN_SCL == CAM_PIN_D1)   || \
-    (RANGE_PIN_SCL == CAM_PIN_D0)   || (RANGE_PIN_SCL == CAM_PIN_VSYNC)|| \
-    (RANGE_PIN_SCL == CAM_PIN_HREF) || (RANGE_PIN_SCL == CAM_PIN_PCLK)
-#error "RANGE_PIN_SCL collides with a camera pin — pick another (see the free list)"
+#if CAM_USES(THERMAL_PIN_RX) || CAM_USES(THERMAL_PIN_TX)
+#error "thermal UART pin collides with a camera pin — pick another"
+#endif
+#if (RANGE_PIN_SDA == THERMAL_PIN_RX) || (RANGE_PIN_SDA == THERMAL_PIN_TX) || \
+    (RANGE_PIN_SCL == THERMAL_PIN_RX) || (RANGE_PIN_SCL == THERMAL_PIN_TX)
+#error "rangefinder and thermal UART share a pin"
 #endif
 
 // ALTERNATE 1 — XIAO ESP32S3 Sense style, seen on some small S3 cam boards:

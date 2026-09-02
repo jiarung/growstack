@@ -1,6 +1,7 @@
 #include "thermal_uart.h"
 
 #include <Arduino.h>
+#include <string.h>
 
 #include "../cam_pins.h"
 
@@ -11,6 +12,14 @@ namespace {
 // powered; nothing needs to be sent to it for the MVP's 4 Hz.
 constexpr uint32_t BAUD = 115200;
 constexpr uint8_t REFRESH_HZ = 4;      // module default; 8 Hz needs 460800 baud
+
+// The driver's RX ring must outlast the gap between poll() calls, or bytes are
+// lost INSIDE the UART driver and never reach the parser — silently, and in a
+// regular pattern that looks exactly like a shorter frame. At 115200/8N1 the
+// wire delivers ~11.5 kB/s, so the stock 256-byte ring holds only ~22 ms.
+// 4 KB buys ~350 ms of slack: enough that a slow loop pass degrades throughput
+// instead of corrupting the stream.
+constexpr size_t RX_BUFFER = 4096;
 
 // A frame period is 1/REFRESH_HZ; a body that stalls for several of them is a
 // broken stream, not a slow module. Three periods is loose enough to survive
@@ -34,9 +43,18 @@ uint8_t rawBuf[RAW_CAP];
 size_t rawFill = 0;
 bool rawArmed = false;
 
+// poll() runs on the main task; the HTTP handlers run on the httpd task. Every
+// shared field above is written by one and read by the other, so each side
+// takes this. It is held only for pointer/counter shuffling and memcpy of at
+// most one UART read — never across a network send.
+portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+
 }  // namespace
 
 bool begin() {
+    // setRxBufferSize BEFORE begin(): afterwards the driver has already
+    // allocated the ring and the call is ignored.
+    Serial1.setRxBufferSize(RX_BUFFER);
     Serial1.begin(BAUD, SERIAL_8N1, THERMAL_PIN_RX, THERMAL_PIN_TX);
     parser.reset();
     lastByteMs = millis();
@@ -44,10 +62,13 @@ bool begin() {
     totalBytes = 0;
     sawFrame = false;
     slotFull = false;
+    rawFill = 0;
+    rawArmed = false;
     started = true;
-    Serial.printf("[thermal] Serial1 %lu baud on RX %u / TX %u, idle timeout %lums\n",
+    Serial.printf("[thermal] Serial1 %lu baud on RX %u / TX %u, rx buffer %u B, "
+                  "idle timeout %lums\n",
                   (unsigned long)BAUD, THERMAL_PIN_RX, THERMAL_PIN_TX,
-                  (unsigned long)IDLE_TIMEOUT_MS);
+                  (unsigned)RX_BUFFER, (unsigned long)IDLE_TIMEOUT_MS);
     return true;
 }
 
@@ -61,12 +82,16 @@ void poll() {
         if (!got) break;
         totalBytes += got;
         lastByteMs = now;
-        if (rawArmed && rawFill < RAW_CAP) {          // tee, before parsing
-            size_t room = RAW_CAP - rawFill;
-            size_t take = got < room ? got : room;
-            memcpy(rawBuf + rawFill, buf, take);
-            rawFill += take;
-            if (rawFill == RAW_CAP) rawArmed = false;
+        if (rawArmed) {                               // tee, before parsing
+            portENTER_CRITICAL(&mux);
+            if (rawArmed && rawFill < RAW_CAP) {
+                size_t room = RAW_CAP - rawFill;
+                size_t take = got < room ? got : room;
+                memcpy(rawBuf + rawFill, buf, take);
+                rawFill += take;
+                if (rawFill == RAW_CAP) rawArmed = false;   // frozen for reading
+            }
+            portEXIT_CRITICAL(&mux);
         }
         parser.feed(buf, got);          // bulk feed — the parser is chunk-agnostic
     }
@@ -74,24 +99,36 @@ void poll() {
     // nothing buffered there is no corpse to discard, and calling it anyway
     // would inflate the timeout counter once per loop while the module is
     // simply unplugged.
-    if (parser.stats().frames_ok || totalBytes) {
-        if (now - lastByteMs > IDLE_TIMEOUT_MS) {
-            parser.discardPartial();    // no-op unless a partial is buffered
-            lastByteMs = now;           // one timeout per gap, not per loop
-        }
+    if (totalBytes && now - lastByteMs > IDLE_TIMEOUT_MS) {
+        parser.discardPartial();        // no-op unless a partial is buffered
+        lastByteMs = now;               // one timeout per gap, not per loop
     }
-    if (!slotFull && parser.take(slot)) {
+    // LATEST-wins, not first-unread: drain every frame the parser has and keep
+    // the newest. Holding the first one until somebody reads it would serve a
+    // stale frame — and a stale ms_since_frame with it — for as long as nobody
+    // asked, which is the opposite of what this slot promises.
+    gymcu::ThermalFrame f;
+    bool got = false;
+    while (parser.take(f)) got = true;
+    if (got) {
+        portENTER_CRITICAL(&mux);
+        slot = f;
         slotFull = true;
         sawFrame = true;
         lastFrameMs = now;
+        portEXIT_CRITICAL(&mux);
     }
 }
 
 bool take(gymcu::ThermalFrame& out) {
-    if (!slotFull) return false;
-    out = slot;
-    slotFull = false;
-    return true;
+    portENTER_CRITICAL(&mux);
+    bool have = slotFull;
+    if (have) {
+        out = slot;
+        slotFull = false;
+    }
+    portEXIT_CRITICAL(&mux);
+    return have;
 }
 
 bool everSawFrame() { return sawFrame; }
@@ -102,11 +139,42 @@ uint32_t sinceLastFrameMs() {
 
 uint32_t bytesSeen() { return totalBytes; }
 
-const gymcu::Parser::Stats& stats() { return parser.stats(); }
+gymcu::Parser::Stats statsSnapshot() {
+    portENTER_CRITICAL(&mux);
+    gymcu::Parser::Stats s = parser.stats();   // copy, not a live reference
+    portEXIT_CRITICAL(&mux);
+    return s;
+}
 
-void rawArm() { rawFill = 0; rawArmed = true; }
-const uint8_t* rawData() { return rawBuf; }
-size_t rawLen() { return rawFill; }
+void rawArm() {
+    portENTER_CRITICAL(&mux);
+    rawFill = 0;
+    rawArmed = true;
+    portEXIT_CRITICAL(&mux);
+}
+
+bool rawBusy() {
+    portENTER_CRITICAL(&mux);
+    bool b = rawArmed;
+    portEXIT_CRITICAL(&mux);
+    return b;
+}
+
+size_t rawCopy(uint8_t* dst, size_t cap) {
+    portENTER_CRITICAL(&mux);
+    size_t n = rawFill < cap ? rawFill : cap;
+    memcpy(dst, rawBuf, n);
+    portEXIT_CRITICAL(&mux);
+    return n;
+}
+
+size_t rawLen() {
+    portENTER_CRITICAL(&mux);
+    size_t n = rawFill;
+    portEXIT_CRITICAL(&mux);
+    return n;
+}
+
 size_t rawCapacity() { return RAW_CAP; }
 
 }  // namespace thermal
