@@ -81,8 +81,8 @@ def assert_sync_pairs_exactly(stream, allowed_offsets):
 def frame_json(seq, pxfn, ta_raw):
     px = [pxfn(p) / 100 for p in range(PIXELS)]
     inner = ", ".join(f"{v:.2f}" for v in px)
-    return (f'    {{"seq": {seq}, "ta_c": {ta_raw / 100:.2f}, "min": {min(px):.2f}, '
-            f'"max": {max(px):.2f}, "px": [{inner}]}}')
+    return (f'    {{"seq": {seq}, "ta_c": {ta_raw / 100:.2f}, "checksum_ok": true, '
+            f'"min": {min(px):.2f}, "max": {max(px):.2f}, "px": [{inner}]}}')
 
 
 def expected(frames, frames_ok, bad_checksum=0, bad_header=0, resyncs=0,

@@ -200,9 +200,10 @@ static esp_err_t thermalHandler(httpd_req_t* req) {
     // row-major, one JSON row per chunk: 768 floats do not belong on a 4 KB
     // stack (the lesson from the /range panic, applied before it bites)
     m = snprintf(line, sizeof(line),
-                 "  \"frame\": {\"seq\": %lu, \"ta_c\": %.2f, \"rows\": %u, "
-                 "\"cols\": %u, \"px\": [",
+                 "  \"frame\": {\"seq\": %lu, \"ta_c\": %.2f, "
+                 "\"checksum_ok\": %s, \"rows\": %u, \"cols\": %u, \"px\": [",
                  (unsigned long)f.seq, f.ambient_c,
+                 f.checksum_ok ? "true" : "false",
                  (unsigned)gymcu::ROWS, (unsigned)gymcu::COLS);
     httpd_resp_send_chunk(req, line, m);
     const float* px = &f.pixels[0][0];

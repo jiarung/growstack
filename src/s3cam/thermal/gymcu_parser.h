@@ -45,12 +45,23 @@ struct ThermalFrame {
     float pixels[ROWS][COLS]; // deg C; [row][col], row-major off the wire
     float ambient_c;          // Ta, deg C
     uint32_t seq;             // parser-assigned: nth good frame since reset
+    bool checksum_ok;         // false only under ChecksumPolicy::REPORT
 };
+
+// What a failed checksum means for a frame. STRICT is the contract: a frame
+// that fails verification never reaches a consumer. REPORT exists for bring-up
+// against a module whose checksum CONVENTION is not yet known — the payload
+// can be demonstrably valid (768 plausible temperatures) while the trailing
+// two bytes match none of the obvious sum rules. Under REPORT the frame is
+// still counted in bad_checksum and carries checksum_ok=false, so nothing is
+// silently trusted; it is simply not thrown away before a human can look.
+enum class ChecksumPolicy { STRICT, REPORT };
 
 class Parser {
 public:
     Parser() { reset(); }
     void reset();
+    void setChecksumPolicy(ChecksumPolicy p) { policy_ = p; }
 
     // Feed any number of bytes (any chunking). Frames become available via
     // take(); only the LATEST completed frame is held (thermal is a live
@@ -81,6 +92,7 @@ private:
     void accept();               // buf_ holds FRAME_LEN bytes: verify + decode
     void resync();               // drop buf_[0], rescan buffer for sync
 
+    ChecksumPolicy policy_ = ChecksumPolicy::STRICT;
     uint8_t buf_[FRAME_LEN];
     size_t pos_;
     ThermalFrame slot_;

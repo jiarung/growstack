@@ -54,10 +54,14 @@ void Parser::feed(const uint8_t* data, size_t len) {
 void Parser::accept() {
     uint32_t sum = 0;
     for (size_t i = 0; i < FRAME_LEN - 2; i++) sum += buf_[i];
-    if ((uint16_t)sum != rd16(buf_ + FRAME_LEN - 2)) {
+    const bool csOk = (uint16_t)sum == rd16(buf_ + FRAME_LEN - 2);
+    if (!csOk) {
         stats_.bad_checksum++;
-        resync();
-        return;
+        if (policy_ == ChecksumPolicy::STRICT) {
+            resync();
+            return;
+        }
+        // REPORT: fall through and decode, but the frame says so itself
     }
     // the 2-D pixel array is contiguous row-major — fill it flat, no per-pixel
     // division/modulo on the ingest path
@@ -65,6 +69,7 @@ void Parser::accept() {
     const uint8_t* p = buf_ + HDR;
     for (size_t k = 0; k < PIXELS; k++, p += 2) out[k] = (int16_t)rd16(p) / 100.0f;
     slot_.ambient_c = (int16_t)rd16(buf_ + OFF_TA) / 100.0f;
+    slot_.checksum_ok = csOk;
     slot_.seq = ++seq_;
     if (have_) stats_.overwritten++;
     have_ = true;

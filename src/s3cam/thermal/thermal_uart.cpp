@@ -57,6 +57,13 @@ bool begin() {
     Serial1.setRxBufferSize(RX_BUFFER);
     Serial1.begin(BAUD, SERIAL_8N1, THERMAL_PIN_RX, THERMAL_PIN_TX);
     parser.reset();
+    // BRING-UP: this module's payload verifies by inspection (768 plausible
+    // temperatures, a sane Ta) but its trailing two bytes match none of the
+    // obvious sum conventions, so STRICT would discard every good frame over
+    // an unknown convention. REPORT keeps the frames AND the bad_checksum
+    // count, and each frame carries checksum_ok=false — revert to STRICT the
+    // moment the real algorithm is known.
+    parser.setChecksumPolicy(gymcu::ChecksumPolicy::REPORT);
     lastByteMs = millis();
     lastFrameMs = 0;
     totalBytes = 0;

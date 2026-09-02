@@ -47,11 +47,32 @@ _細節 spec 在 [handoff.md](./handoff.md)(handoff 文件,當參考不當藍圖
 - frame layout 常數(TYPE/SUBTYPE)標 VERIFY-ON-HARDWARE:模組到手後 Phase 2 對實流
 - timeout 歸 Phase 2 的 UART 讀取層(parser 是純 byte 機器)
 
-## Phase 2 — 硬體 bring-up 🔧
+## Phase 2 — 硬體 bring-up 🔧(進行中)
 
 產出:board 上電,GY-MCU90640 真資料流過 Phase 1 解析器
 - 供電:LRS-150-24 → 雙 buck,共地;**servo rail 餘裕要驗**(2×MG996R stall=5A 頂天)
 - 驗收:連續 10 分鐘 4Hz 無壞 frame;室溫物體讀值 sanity(手掌 vs 桌面)
+
+**已驗(2026-09-02)**:frame layout 對上實流 —— `/thermal/raw` 量到 sync 間距
+一律 1544,offset +4 起 769/770 個值落在合理室溫,尾端 `FC 0A | 9E A5` 解出
+Ta=28.12°C @1540、checksum @1542。Phase 1 的 VERIFY-ON-HARDWARE 常數
+(FRAME_LEN/HDR/OFF_TA/TYPE/SUBTYPE)**全部正確,不需修改**。
+
+途中兩個假象值得記:早期量到的「frame 長 1286」是我方 UART RX ring 只有 256B
+配 50ms loop 造成的規律丟位元組 —— 資料在 driver 裡就掉了,看起來像更短的幀;
+httpd task 兩次 stack overflow 都是 handler 把 KB 級物件放區域變數(2KB body、
+3KB ThermalFrame)。**先懷疑自己的讀取層,再懷疑對方的協定。**
+
+**未解**:checksum 慣例不明 —— sum16-LE / sum16-BE / sum8 都對不上尾兩位元組。
+payload 本身已由內容證實有效,所以 parser 加了 `ChecksumPolicy::REPORT`:
+bring-up 期間照收並記 `bad_checksum`,每張 frame 自帶 `checksum_ok=false` 讓
+不確定性一路可見到 `/thermal` 和看圖工具。**算式一確定就改回 STRICT**
+(fixture 仍全跑 STRICT,契約沒被放寬)。
+
+**工具**:`tools/s3cam/thermal_view.py` —— 抓 `/thermal` 畫成終端機熱圖
+(半格字元,零依賴)或 PNG(最近鄰放大,不插值造假細節)。色階映射該幀自身
+min..max 並永遠印出範圍,室溫幾度的差異才看得見。`--flipv/--fliph` 留給
+掃描方向:模組送出的 row order 沒有文件,拿手掌對準已知角落實測才填韌體。
 
 ## Phase 3 — pan/tilt + scan workflow 🔧
 

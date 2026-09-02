@@ -26,8 +26,10 @@ static void printFrame(const gymcu::ThermalFrame& f, bool first) {
         if (px[p] < mn) mn = px[p];
         if (px[p] > mx) mx = px[p];
     }
-    printf("%s    {\"seq\": %u, \"ta_c\": %.2f, \"min\": %.2f, \"max\": %.2f, \"px\": [",
-           first ? "" : ",\n", f.seq, f.ambient_c, mn, mx);
+    printf("%s    {\"seq\": %u, \"ta_c\": %.2f, \"checksum_ok\": %s, "
+           "\"min\": %.2f, \"max\": %.2f, \"px\": [",
+           first ? "" : ",\n", f.seq, f.ambient_c,
+           f.checksum_ok ? "true" : "false", mn, mx);
     for (size_t p = 0; p < gymcu::PIXELS; p++)
         printf("%s%.2f", p ? ", " : "", px[p]);
     printf("]}");
