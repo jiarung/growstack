@@ -110,9 +110,12 @@ docker compose exec -T influxdb influx delete --bucket sensors \
   type on first write, and int/float drift causes partial write failures.
   A sensor that fails to read omits its field rather than sending null.
 
-`lux` is the BH1750 at the plant (sees the grow lamp); `lux_ref` is a second,
-shielded BH1750 beside it (ambient only). `lux - lux_ref` is the lamp's own
-contribution.
+`lux` is the BH1750 at the plant (sees the grow lamp); `lux_ref` is a second
+BH1750 ~10 cm away in its own enclosure and behind its own optics, shielded from
+the lamp but not from the sky (ambient only). `lux - lux_ref` is the lamp's own
+contribution. They are two instruments, not one reading twice: each carries its
+own calibration bucket, so never assume a value measured against one applies to
+the other — see `docs/FIRMWARE.md` for the physical layout.
 
 `temp_sht`/`hum_sht` come from an SHT40 (0x44), a second temp/RH source kept in
 its own fields for the same reason the two BH1750s are: one field per physical

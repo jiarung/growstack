@@ -27,7 +27,12 @@ Everything except the HX711 shares one I²C bus (`Wire`, `SDA = GPIO17`,
 `SCL = GPIO18`); the addresses do not collide.
 
 **Why two BH1750s.** `lux` sits where the plant is and therefore sees the grow
-lamp; `lux_ref` sits beside it but shielded, so it sees ambient only.
+lamp. `lux_ref` sits ~10 cm away — **a separate enclosure, not the same box**,
+behind its own optics (`lux` a 2 mm quartz window, `lux_ref` a DIY splash-proof
+plastic diffuser) — and is shielded **from the lamp only, never from the sky**,
+so it sees ambient light alone. That last distinction is what makes `lux_ref` a
+usable daylight reference rather than merely a dark channel, and the separate
+optics are why the two do not share a calibration constant.
 `lux - lux_ref` is the lamp's own contribution — the only way this rig can
 separate artificial from natural light, since the lamp covers the whole daylight
 window.

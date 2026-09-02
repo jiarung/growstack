@@ -21,9 +21,21 @@
 #       which never sees the grow lamp. The row is tagged daylight with
 #       lamp_state=1 kept truthful; its lamp-lit fields (lux_at, channels)
 #       become -1 sentinels, so it carries lux_ref evidence only.
-# Any other mismatch aborts. Placement SOP is implied by source: daylight =
-# Photone at the lux_ref sensor (colocated); lamp/mixed = at the marked canopy
-# spot.
+# Any other mismatch aborts.
+#
+# Placement SOP by source. lamp/mixed = at the marked canopy spot, unshielded.
+# daylight = the daylight field at the plant with the LAMP'S CONTRIBUTION
+# EXCLUDED — either because the lamp is off, or (lamp on) via the ref-anchor
+# above, measured at the lux_ref spot which never sees it. Both are normal:
+# `source=daylight` together with `lamp_state=1` is NOT a contradiction, and
+# this line used to read as if every daylight row were the second case.
+#
+# What is load-bearing is not the geography but what the number CONTAINS. A
+# daylight numerator has no lamp in it, so it pairs with lux_ref (also
+# lamp-free) and NEVER with lux_at (lamp-lit). Pairing it with lux_at is how
+# bh1750_lux_main's daylight bucket earned a k of 0.006: 28 lux of blocked
+# skylight over 4634 lux of lamp-lit sensor. kmodels.py therefore fails closed
+# when lamp_state is absent — "nobody recorded it" is not "the lamp was off".
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
