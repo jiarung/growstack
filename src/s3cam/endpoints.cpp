@@ -8,6 +8,7 @@
 
 #include "camera.h"
 #include "health.h"
+#include "power.h"
 #include "rangefinder.h"
 #include "thermal/thermal_uart.h"
 
@@ -82,25 +83,38 @@ static size_t heldLen = 0;
 static char heldId[40] = "";
 
 // ---- handlers ---------------------------------------------------------------
+// The endpoint list is constant text, so it lives in flash and is sent as its
+// own chunk. It used to be snprintf'd into a stack buffer sized "big enough for
+// the list" — which meant every new endpoint silently crept toward truncation,
+// and the obvious fix (a bigger buffer) walks straight back into the httpd
+// stack overflows this file has already hit twice. Only the live numbers are
+// formatted now, into a line buffer whose size no longer depends on the menu.
+static const char MENU[] =
+    "GET /stream      MJPEG live view\n"
+    "GET /capture     full-res still (X-Capture-Id + X-Range-Mm headers)\n"
+    "GET /observation still + observation JSON (pairs with /last.jpg)\n"
+    "GET /last.jpg    the frame the last /observation held\n"
+    "GET /range?n=20  raw rangefinder burst (no camera) — is it ranging?\n"
+    "GET /health      die temp + PEAK since boot, thermal Ta, rssi, memory\n"
+    "GET /power       cooling knobs; any change resets the peak\n"
+    "                 ?cpu=80|160|240  ?xclk=6..20 (MHz)\n"
+    "                 ?tx=19|15|11|8   ?cam=idle|active\n"
+    "GET /thermal     newest 32x24 frame + stream stats\n"
+    "GET /thermal/raw what the module ACTUALLY sends (layout ground truth)\n"
+    "                 ?hex=1 dumps one whole frame for offline analysis\n";
+
 static esp_err_t indexHandler(httpd_req_t* req) {
-    char body[640];   // grows with the endpoint list — the compiler checks it
-    snprintf(body, sizeof(body),
-             "s3cam bring-up (phase 1B)\n"
-             "sensor: %s\nrangefinder: %s\n"
-             "psram: %u bytes (free %u)\nheap free: %u\n\n"
-             "GET /stream      MJPEG live view\n"
-             "GET /capture     full-res still (X-Capture-Id + X-Range-Mm headers)\n"
-             "GET /observation still + observation JSON (pairs with /last.jpg)\n"
-             "GET /last.jpg    the frame the last /observation held\n"
-             "GET /range?n=20  raw rangefinder burst (no camera) — is it ranging?\n"
-             "GET /health      die temp + PEAK since boot, thermal Ta, rssi, memory\n"
-             "GET /thermal     newest 32x24 frame + stream stats\n"
-             "GET /thermal/raw what the module ACTUALLY sends (layout ground truth)\n"
-    "                 ?hex=1 dumps one whole frame for offline analysis\n",
-             cameraSensorName(), rangefinderPresent() ? "VL53L0X" : "absent",
-             ESP.getPsramSize(), ESP.getFreePsram(), ESP.getFreeHeap());
+    char line[192];
+    int m = snprintf(line, sizeof(line),
+                     "s3cam bring-up (phase 1B)\n"
+                     "sensor: %s\nrangefinder: %s\n"
+                     "psram: %u bytes (free %u)\nheap free: %u\n\n",
+                     cameraSensorName(), rangefinderPresent() ? "VL53L0X" : "absent",
+                     ESP.getPsramSize(), ESP.getFreePsram(), ESP.getFreeHeap());
     httpd_resp_set_type(req, "text/plain");
-    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send_chunk(req, line, m);
+    httpd_resp_send_chunk(req, MENU, sizeof(MENU) - 1);   // -1: drop the NUL
+    return httpd_resp_send_chunk(req, nullptr, 0);
 }
 
 // JSON has no NaN literal: an unavailable reading must be `null`, not a token
@@ -142,6 +156,66 @@ static esp_err_t healthHandler(httpd_req_t* req) {
         ESP.getFreeHeap(), ESP.getFreePsram(),
         WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0,
         cameraSensorName(), taS, (unsigned long)s.frames_ok);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, body, m);
+}
+
+// GET /power[?cpu=160&xclk=10&tx=11&cam=idle] — the cooling knobs.
+//
+// Runtime rather than compile-time because the question is empirical: which
+// knob actually cools this board is not knowable from a datasheet, and baking
+// in a guess would mean never finding out. One flash, then A/B against
+// /health's die_max_c and the thermal camera.
+//
+// Changing ANY knob resets the peak. A peak measures the configuration that
+// produced it; carrying it across a change would make every new setting look
+// like it achieved nothing, which is the exact failure this endpoint exists to
+// avoid. The reset is automatic, not a flag, because forgetting it silently
+// invalidates the experiment.
+static esp_err_t powerHandler(httpd_req_t* req) {
+    char q[96], v[12];
+    const bool haveQ = httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK;
+    int applied = 0;
+    // "" = not asked for; distinguishes "worked" from "never attempted", which
+    // a plain bool cannot.
+    const char *rCpu = "", *rXclk = "", *rTx = "", *rCam = "";
+
+    if (haveQ && httpd_query_key_value(q, "cpu", v, sizeof(v)) == ESP_OK) {
+        bool ok = power::setCpuMhz(atoi(v));
+        rCpu = ok ? "ok" : "rejected";
+        applied += ok;
+    }
+    if (haveQ && httpd_query_key_value(q, "xclk", v, sizeof(v)) == ESP_OK) {
+        bool ok = cameraSetXclkMhz(atoi(v));
+        rXclk = ok ? "ok" : "rejected";
+        applied += ok;
+    }
+    if (haveQ && httpd_query_key_value(q, "tx", v, sizeof(v)) == ESP_OK) {
+        bool ok = power::setWifiTxDbm(atoi(v));
+        rTx = ok ? "ok" : "rejected";
+        applied += ok;
+    }
+    if (haveQ && httpd_query_key_value(q, "cam", v, sizeof(v)) == ESP_OK) {
+        const bool idle = !strcmp(v, "idle");
+        bool ok = (idle || !strcmp(v, "active")) && cameraSetIdle(idle);
+        rCam = ok ? "ok" : "rejected";
+        applied += ok;
+    }
+    if (applied) health::resetPeak();
+
+    char dieS[16], dieMaxS[16];
+    fmtF(dieS, sizeof(dieS), health::dieC(), 1);
+    fmtF(dieMaxS, sizeof(dieMaxS), health::dieMaxC(), 1);
+
+    char body[448];
+    int m = snprintf(body, sizeof(body),
+        "{\n  \"cpu_mhz\": %d,\n  \"xclk_hz\": %d,\n  \"wifi_tx_dbm\": %d,\n"
+        "  \"cam_idle\": %s,\n  \"applied\": %d,\n  \"peak_reset\": %s,\n"
+        "  \"set\": {\"cpu\": \"%s\", \"xclk\": \"%s\", \"tx\": \"%s\", \"cam\": \"%s\"},\n"
+        "  \"die_c\": %s,\n  \"die_max_c\": %s\n}\n",
+        power::cpuMhz(), cameraXclkHz(), power::wifiTxDbm(),
+        cameraIsIdle() ? "true" : "false", applied,
+        applied ? "true" : "false", rCpu, rXclk, rTx, rCam, dieS, dieMaxS);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, m);
 }
@@ -576,6 +650,7 @@ bool endpointsStart() {
         {"/last.jpg",    HTTP_GET, lastJpgHandler,     nullptr, false, false, nullptr},
         {"/range",       HTTP_GET, rangeHandler,       nullptr, false, false, nullptr},
         {"/health",      HTTP_GET, healthHandler,      nullptr, false, false, nullptr},
+        {"/power",       HTTP_GET, powerHandler,       nullptr, false, false, nullptr},
         {"/thermal",     HTTP_GET, thermalHandler,     nullptr, false, false, nullptr},
         {"/thermal/raw", HTTP_GET, thermalRawHandler,  nullptr, false, false, nullptr},
     };

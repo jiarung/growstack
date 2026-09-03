@@ -14,6 +14,7 @@ static constexpr framesize_t STREAM_SIZE = FRAMESIZE_VGA;    // aiming/focus onl
 static constexpr int JPEG_QUALITY = 14;   // 0-63, lower = better; 14 is safe at 5MP
 
 static uint16_t sensorPid = 0;
+static bool camIdle = false;
 
 bool cameraInit() {
     if (!psramFound()) {
@@ -72,7 +73,27 @@ const char* cameraSensorName() {
     }
 }
 
+// Waking is not instant, and the sensor's AE/AWB restart from defaults — the
+// first frames after a wake are badly exposed. Idling is manual (see camera.h),
+// but WAKING must not be: leaving it manual would mean /capture and /stream
+// silently time out into a 500 whenever the operator forgot, which reads as a
+// broken sensor rather than as a mode. So wake automatically, and pay the
+// settle honestly instead of returning a fast, badly exposed frame.
+static constexpr uint32_t WAKE_SETTLE_MS = 1200;
+
+static void wakeIfIdle() {
+    if (!camIdle) return;
+    if (!cameraSetIdle(false)) {
+        Serial.println("[cam] wake FAILED — sensor may not answer this capture");
+        return;
+    }
+    Serial.printf("[cam] woken from idle; settling %lums for AE/AWB\n",
+                  (unsigned long)WAKE_SETTLE_MS);
+    delay(WAKE_SETTLE_MS);
+}
+
 camera_fb_t* cameraCapture() {
+    wakeIfIdle();   // before start_us: the settle must not eat the freshness budget
     // Freshness contract: the returned frame was exposed AFTER this call
     // started. Dropping "one stale buffer" does NOT guarantee that (a second
     // queued frame can predate the request) — so drain by the driver's own
@@ -100,7 +121,43 @@ void cameraRelease(camera_fb_t* fb) {
 }
 
 bool cameraSetStreaming(bool on) {
+    if (on) wakeIfIdle();   // a stream into a standby sensor is a blank page
     sensor_t* s = esp_camera_sensor_get();
     if (!s) return false;
     return s->set_framesize(s, on ? STREAM_SIZE : STILL_SIZE) == 0;
 }
+
+// ---- cooling knobs ---------------------------------------------------------
+
+bool cameraSetXclkMhz(int mhz) {
+    // Below ~6 MHz the OV5640's internal PLL cannot reach a usable pixel clock;
+    // above the init value there is no thermal reason to go. Refuse rather than
+    // let a typo brick the stream until the next reboot.
+    if (mhz < 6 || mhz > 20) return false;
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s || !s->set_xclk) return false;
+    // The header does not document set_xclk's unit; the drivers take MHz and
+    // store Hz in xclk_freq_hz. Verify rather than trust: if the readback is
+    // not the Hz we asked for, the call did something else and we say so.
+    if (s->set_xclk(s, LEDC_TIMER_0, mhz) != 0) return false;
+    return s->xclk_freq_hz == mhz * 1000000;
+}
+
+int cameraXclkHz() {
+    sensor_t* s = esp_camera_sensor_get();
+    return s ? s->xclk_freq_hz : 0;
+}
+
+bool cameraSetIdle(bool idle) {
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s || !s->set_reg) return false;
+    // 0x3008 is an OV5640 register. Writing it on another sensor would poke
+    // something unrelated, so the guard is not politeness — it is correctness.
+    if (sensorPid != OV5640_PID) return false;
+    // bit 6 = software power down; the low bits keep the part out of reset.
+    if (s->set_reg(s, 0x3008, 0xFF, idle ? 0x42 : 0x02) < 0) return false;
+    camIdle = idle;
+    return true;
+}
+
+bool cameraIsIdle() { return camIdle; }

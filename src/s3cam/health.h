@@ -22,4 +22,10 @@ float dieC();            // most recent sample, NAN before the first
 float dieMaxC();         // peak since boot, NAN before the first
 uint32_t dieMaxAtS();    // uptime in seconds when that peak was set
 
+// Start a new measurement window. A peak describes the configuration that
+// produced it, so changing a cooling knob invalidates the old one: without
+// this, the pre-change peak would stand forever and every new setting would
+// look like it achieved nothing.
+void resetPeak();
+
 }  // namespace health

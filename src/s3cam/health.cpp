@@ -34,6 +34,11 @@ void poll() {
     }
 }
 
+void resetPeak() {
+    dieMax = NAN;
+    dieMaxAt = 0;
+}
+
 float dieC() { return die; }
 float dieMaxC() { return dieMax; }
 uint32_t dieMaxAtS() { return dieMaxAt; }
