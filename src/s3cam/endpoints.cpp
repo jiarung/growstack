@@ -633,15 +633,13 @@ static esp_err_t streamHandler(httpd_req_t* req) {
 }
 
 bool endpointsStart() {
-    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.server_port = 80;
-    cfg.lru_purge_enable = true;   // a stuck stream socket gets evicted, not fatal
-    // 4 KB (the default) has panicked twice as endpoints grew; 6 KB is margin
-    // for the JSON/format work handlers legitimately do. The no-big-locals
-    // discipline in endpoints.h still stands — this only stops a near-miss
-    // from taking the whole board down with it.
-    cfg.stack_size = 6144;
-    if (httpd_start(&server, &cfg) != ESP_OK) return false;
+    // The table comes FIRST because the config is derived from it.
+    // HTTPD_DEFAULT_CONFIG caps max_uri_handlers at 8, and this table sat at
+    // exactly 8 until /health and /power made it 10. Registration then failed,
+    // the guard below correctly refused a half-wired server, and the board
+    // answered nothing at all on port 80 — Connection refused, not 404, which
+    // reads like a dead board rather than a missing route. Sizing the cap from
+    // the table makes that structurally impossible instead of merely fixed.
     static const httpd_uri_t routes[] = {
         {"/",            HTTP_GET, indexHandler,       nullptr, false, false, nullptr},
         {"/stream",      HTTP_GET, streamHandler,      nullptr, false, false, nullptr},
@@ -654,6 +652,18 @@ bool endpointsStart() {
         {"/thermal",     HTTP_GET, thermalHandler,     nullptr, false, false, nullptr},
         {"/thermal/raw", HTTP_GET, thermalRawHandler,  nullptr, false, false, nullptr},
     };
+
+    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    cfg.server_port = 80;
+    cfg.lru_purge_enable = true;   // a stuck stream socket gets evicted, not fatal
+    cfg.max_uri_handlers = sizeof(routes) / sizeof(routes[0]);
+    // 4 KB (the default) has panicked twice as endpoints grew; 6 KB is margin
+    // for the JSON/format work handlers legitimately do. The no-big-locals
+    // discipline in endpoints.h still stands — this only stops a near-miss
+    // from taking the whole board down with it.
+    cfg.stack_size = 6144;
+    if (httpd_start(&server, &cfg) != ESP_OK) return false;
+
     for (auto& u : routes) {
         if (httpd_register_uri_handler(server, &u) != ESP_OK) {
             Serial.printf("[http] failed to register %s — refusing a half-wired server\n",
