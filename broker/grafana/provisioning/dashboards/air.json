@@ -144,6 +144,35 @@
        {
         "id": "custom.fillOpacity",
         "value": 0
+       },
+       {
+        "id": "displayName",
+        "value": "板橋 區域 (Open-Meteo)"
+       }
+      ]
+     }
+    ,
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "A"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "陽台 BME680 · ${__field.labels.device}"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "C"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "盒內 SHT40 · ${__field.labels.device}"
        }
       ]
      }
@@ -181,7 +210,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"temp_sht\"\n       and r.device != \"sim\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"device\"])\n  |> yield(name: \"防水盒內 (SHT40)\")"
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"temp_sht\"\n       and r.device != \"sim\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"device\"])"
     }
    ],
    "description": "BME680 量的是這座陽台本身的空氣，Open-Meteo 是板橋網格的區域值。**這不是室內外對比** —— 整套設備就在戶外，只是位於有雨遮的窄巷中，所以兩條線都是室外，差的是微氣候。溫差主要來自窄巷的日曬蓄熱與通風不良，不是牆或隔熱。\n\n兩條線的取樣率差三個數量級：陽台每 15 秒，區域每小時。所以 spanNulls 只開在區域那條（虛線）。**陽台那條刻意不開** —— 開了之後感測器掉線會被畫成一條平滑直線而不是缺口，而 BME680 在 2026-08-15 就消失過 20 小時。缺口要看得見。\n\n**第三條線 = SHT40，量的是防水盒內部**（2026-09-02 上線）。它和 BME680 不是同一個量測對象，所以兩條線分開是預期的，不是故障：30 分鐘均值 BME680 30.61°C / SHT40 30.25°C，**BME680 高 0.36°C**，方向與已知成因一致 —— BME680 的溫濕度來自同一顆跑 320°C 氣體加熱器的晶粒。真正該看的是**盒內減陽台**這個差值隨日照怎麼變：它就是這個外殼自己的蓄熱。"
@@ -232,6 +261,35 @@
        {
         "id": "custom.fillOpacity",
         "value": 0
+       },
+       {
+        "id": "displayName",
+        "value": "板橋 區域 (Open-Meteo)"
+       }
+      ]
+     }
+    ,
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "A"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "陽台 BME680 · ${__field.labels.device}"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "C"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "盒內 SHT40 · ${__field.labels.device}"
        }
       ]
      }
@@ -269,7 +327,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"hum_sht\"\n       and r.device != \"sim\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"device\"])\n  |> yield(name: \"防水盒內 (SHT40)\")"
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"hum_sht\"\n       and r.device != \"sim\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"device\"])"
     }
    ],
    "description": "BME680 量的是這座陽台本身的空氣，Open-Meteo 是板橋網格的區域值。**這不是室內外對比** —— 整套設備就在戶外有雨遮的窄巷中。兩條線接近是預期的；持續偏離代表這個角落的通風或蓄熱與區域不同，值得注意的是它對板子和接點的凝結風險。\n\n兩條線的取樣率差三個數量級：陽台每 15 秒，區域每小時。所以 spanNulls 只開在區域那條（虛線）。**陽台那條刻意不開** —— 開了之後感測器掉線會被畫成一條平滑直線而不是缺口，而 BME680 在 2026-08-15 就消失過 20 小時。缺口要看得見。\n\n**第三條線 = SHT40，量的是防水盒內部**（2026-09-02 上線）。這條線直接量到了本面板原本只能從環境濕度**推論**的那件事：板子和接點的凝結風險。30 分鐘均值 BME680 71.6% / SHT40 75.8%，**BME680 低 4.2 個百分點**，方向與已知成因一致（同晶粒的氣體加熱器把 RH 壓低，這也是加這顆的原因）。兩條線分開是預期的，不是故障。凝結看的是**盒內**那條對當下溫度的露點餘裕，不是區域值。"
