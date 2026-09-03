@@ -103,6 +103,25 @@ tools/s3cam/thermal_view.py http://<ip>/thermal --watch
 **另一條要一起排除的解釋**:旅館熱點 RSSI 差也會讓串流卡頓、畫面壞掉,症狀跟
 過熱很像。`/health` 因此一起吐 `rssi`,別把兩件事混為一談。
 
+## AF firmware blob:已經在本機找到(2026-09-03,存參考,等鏡頭)
+
+上面 step 9 說「AF 需要下載 firmware blob 到 sensor,esp32-camera 庫支援度看變體」。
+那顆 blob 就在自己硬碟上,是查溫度暫存器時順手撞到的:
+
+    ~/rt-thread/bsp/k210/driver/camera/ov5640af.h     4332 bytes,載入位址 0x8000
+    ~/rt-thread/bsp/k210/driver/camera/drv_ov5640.c   OV5640_Focus_Init() 完整流程
+
+流程本身很短:`0x3000=0x20`(reset MCU)→ 從 `0x8000` 起逐位元組寫完 4332 bytes
+→ 清 `0x3022..0x3028`、`0x3029=0x7F` → `0x3000=0x00`(放開 MCU)→ 輪詢 `0x3029`
+直到讀回 `0x70`。
+
+**順帶結掉一個舊問題:`0x3029` 是硬體暫存器,不是 driver 抽象** —— 它是 AF
+firmware 的狀態暫存器,`0x70` = 韌體就緒。之前問「0x3029 是指 driver 還是硬體層」
+的答案在這裡。
+
+還是等 AF 版鏡頭到手才做:**現有這顆是定焦標準版,沒有 VCM,blob 上傳成功也不會動**。
+先記下來免得再找一次。
+
 ## 明確不做(本 phase)
 
 thermal/servo/任何 broker 整合(env 欄位 null 佔位即可)、正式儲存路徑(Phase 0)、
