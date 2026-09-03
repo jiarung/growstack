@@ -444,7 +444,20 @@
       "showPoints": "auto"
      }
     },
-    "overrides": []
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "A"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "${__field.labels.sensor} · ${__field.labels.device}"
+       }
+      ]
+     }
+    ]
    },
    "options": {
     "legend": {
@@ -462,7 +475,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and (r._field == \"lux\" or r._field == \"lux_ref\"))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: true)\n  |> keep(columns: [\"_time\", \"_value\", \"device\", \"_field\"])"
+     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and (r._field == \"lux\" or r._field == \"lux_ref\"))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: true)\n  |> map(fn: (r) => ({ _time: r._time, _value: r._value, device: r.device, sensor: r._field }))\n  |> group(columns: [\"device\", \"sensor\"])"
     }
    ]
   },
@@ -511,6 +524,30 @@
        {
         "id": "custom.fillOpacity",
         "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "A"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "lux/54（控制器依據）"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "B"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "光譜 PPFD (CAL=0.0017469)"
        }
       ]
      }
@@ -615,7 +652,20 @@
       "spanNulls": false
      }
     },
-    "overrides": []
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "A"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "spectrum PPFD · ${__field.labels.device}"
+       }
+      ]
+     }
+    ]
    },
    "options": {
     "legend": {
@@ -724,6 +774,30 @@
        {
         "id": "custom.pointSize",
         "value": 12
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "A"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "spectrum PPFD"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "B"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Photone · ${__field.labels.source}"
        }
       ]
      }
