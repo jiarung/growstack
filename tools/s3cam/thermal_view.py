@@ -85,7 +85,11 @@ def show(doc, png=None, flipv=False, fliph=False):
     lo, hi = min(px), max(px)
     print(render(px, rows, cols, lo, hi))
     warn = "" if f.get("checksum_ok", True) else "   [checksum UNVERIFIED]"
-    print(f"seq {f['seq']}  {lo:.2f}..{hi:.2f} C   Ta {f.get('ta_c')} C{warn}")
+    # WHERE the hot spot is, not just how hot. Aimed at a board, that is the
+    # whole diagnosis: which component is cooking is a coordinate, not a number.
+    k = px.index(hi)
+    print(f"seq {f['seq']}  {lo:.2f}..{hi:.2f} C   "
+          f"hot @ r{k // cols} c{k % cols}   Ta {f.get('ta_c')} C{warn}")
     if png:
         try:
             from PIL import Image

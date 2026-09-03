@@ -35,6 +35,8 @@ bool sawFrame = false;
 bool started = false;
 gymcu::ThermalFrame slot;
 bool slotFull = false;
+float lastAmbient = 0.0f;     // status mirror of slot.ambient_c — see header
+bool haveAmbient = false;
 
 // Raw tee: big enough to hold two frame periods, so a sync-to-sync distance is
 // always visible no matter where arming lands in the stream.
@@ -69,6 +71,7 @@ bool begin() {
     totalBytes = 0;
     sawFrame = false;
     slotFull = false;
+    haveAmbient = false;
     rawFill = 0;
     rawArmed = false;
     started = true;
@@ -121,6 +124,8 @@ void poll() {
         portENTER_CRITICAL(&mux);
         slot = f;
         slotFull = true;
+        lastAmbient = f.ambient_c;   // survives take(); status, not payload
+        haveAmbient = true;
         sawFrame = true;
         lastFrameMs = now;
         portEXIT_CRITICAL(&mux);
@@ -145,6 +150,14 @@ uint32_t sinceLastFrameMs() {
 }
 
 uint32_t bytesSeen() { return totalBytes; }
+
+bool lastAmbientC(float& out) {
+    portENTER_CRITICAL(&mux);
+    bool have = haveAmbient;
+    if (have) out = lastAmbient;
+    portEXIT_CRITICAL(&mux);
+    return have;
+}
 
 gymcu::Parser::Stats statsSnapshot() {
     portENTER_CRITICAL(&mux);

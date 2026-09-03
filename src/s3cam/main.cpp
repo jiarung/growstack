@@ -9,6 +9,7 @@
 #include "../secrets.h"
 #include "camera.h"
 #include "endpoints.h"
+#include "health.h"
 #include "rangefinder.h"
 #include "thermal/thermal_uart.h"
 
@@ -76,13 +77,15 @@ void setup() {
 
 void loop() {
     thermal::poll();   // drain Serial1 every pass; never blocks
+    health::poll();    // self-pacing at 1 Hz; tracks the die-temperature peak
 
     static uint32_t last = 0;
     if (millis() - last > 30000) {
         last = millis();
-        // temperatureRead(): the S3's internal die sensor — coarse but perfect
-        // for testing the "hot board = stalling transfers" hypothesis with a
-        // number instead of a fingertip
+        // The die sensor is the S3's own, NOT the camera's — the OV5640 has no
+        // readable temperature. It tests the "hot board = stalling transfers"
+        // hypothesis with a number instead of a fingertip, and the PEAK is what
+        // survives the hours when no console is attached (also on /health).
         const gymcu::Parser::Stats ts = thermal::statsSnapshot();
         Serial.printf("[thermal] bytes=%lu frames=%lu bad_cs=%lu bad_hdr=%lu "
                       "resync=%lu dropped=%lu timeouts=%lu\n",
@@ -90,9 +93,11 @@ void loop() {
                       (unsigned long)ts.bad_checksum, (unsigned long)ts.bad_header,
                       (unsigned long)ts.resyncs, (unsigned long)ts.bytes_dropped,
                       (unsigned long)ts.timeouts);
-        Serial.printf("[s3cam] up %lus  heap=%u psram_free=%u die=%.1fC wifi=%s rssi=%d\n",
+        Serial.printf("[s3cam] up %lus  heap=%u psram_free=%u die=%.1fC "
+                      "(peak %.1fC @%lus) wifi=%s rssi=%d\n",
                       (unsigned long)(millis() / 1000), ESP.getFreeHeap(),
-                      ESP.getFreePsram(), temperatureRead(),
+                      ESP.getFreePsram(), health::dieC(), health::dieMaxC(),
+                      (unsigned long)health::dieMaxAtS(),
                       WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str()
                                                     : "DOWN",
                       WiFi.RSSI());

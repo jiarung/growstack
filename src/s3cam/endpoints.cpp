@@ -1,10 +1,13 @@
 #include "endpoints.h"
 
 #include <Arduino.h>
+#include <WiFi.h>
 #include <esp_http_server.h>
+#include <math.h>
 #include <time.h>
 
 #include "camera.h"
+#include "health.h"
 #include "rangefinder.h"
 #include "thermal/thermal_uart.h"
 
@@ -90,6 +93,7 @@ static esp_err_t indexHandler(httpd_req_t* req) {
              "GET /observation still + observation JSON (pairs with /last.jpg)\n"
              "GET /last.jpg    the frame the last /observation held\n"
              "GET /range?n=20  raw rangefinder burst (no camera) — is it ranging?\n"
+             "GET /health      die temp + PEAK since boot, thermal Ta, rssi, memory\n"
              "GET /thermal     newest 32x24 frame + stream stats\n"
              "GET /thermal/raw what the module ACTUALLY sends (layout ground truth)\n"
     "                 ?hex=1 dumps one whole frame for offline analysis\n",
@@ -97,6 +101,49 @@ static esp_err_t indexHandler(httpd_req_t* req) {
              ESP.getPsramSize(), ESP.getFreePsram(), ESP.getFreeHeap());
     httpd_resp_set_type(req, "text/plain");
     return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+// JSON has no NaN literal: an unavailable reading must be `null`, not a token
+// that breaks the parser on the other end.
+static void fmtF(char* dst, size_t n, float v, int dp) {
+    if (isfinite(v)) snprintf(dst, n, "%.*f", dp, (double)v);
+    else             snprintf(dst, n, "null");
+}
+
+// GET /health — the board's vital signs, for the overheating question.
+//
+// Read what this does and does NOT say. `die_c` is the ESP32-S3's internal
+// sensor: the SoC, not the OV5640, which exposes no temperature at all through
+// the camera API. `thermal_ta_c` is the GY-MCU90640's own ambient — a second
+// point on the same head, useful precisely because it is somewhere else.
+// Neither is the lens. For the lens, aim the thermal camera AT the board.
+//
+// die_max_c is the reason this endpoint exists: degradation that happens while
+// nobody is watching the serial console leaves no other trace.
+static esp_err_t healthHandler(httpd_req_t* req) {
+    float ta = 0.0f;
+    const bool haveTa = thermal::lastAmbientC(ta);
+    const gymcu::Parser::Stats s = thermal::statsSnapshot();
+
+    char dieS[16], dieMaxS[16], taS[16];
+    fmtF(dieS, sizeof(dieS), health::dieC(), 1);
+    fmtF(dieMaxS, sizeof(dieMaxS), health::dieMaxC(), 1);
+    fmtF(taS, sizeof(taS), haveTa ? ta : NAN, 2);
+
+    char body[416];
+    int m = snprintf(body, sizeof(body),
+        "{\n  \"uptime_s\": %lu,\n"
+        "  \"die_c\": %s,\n  \"die_max_c\": %s,\n  \"die_max_at_s\": %lu,\n"
+        "  \"heap_free\": %u,\n  \"psram_free\": %u,\n"
+        "  \"rssi\": %d,\n  \"sensor\": \"%s\",\n"
+        "  \"thermal_ta_c\": %s,\n  \"thermal_frames_ok\": %lu\n}\n",
+        (unsigned long)(millis() / 1000), dieS, dieMaxS,
+        (unsigned long)health::dieMaxAtS(),
+        ESP.getFreeHeap(), ESP.getFreePsram(),
+        WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0,
+        cameraSensorName(), taS, (unsigned long)s.frames_ok);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, body, m);
 }
 
 // GET /range?n=20 — raw rangefinder burst, no camera involved. The instrument
@@ -528,6 +575,7 @@ bool endpointsStart() {
         {"/observation", HTTP_GET, observationHandler, nullptr, false, false, nullptr},
         {"/last.jpg",    HTTP_GET, lastJpgHandler,     nullptr, false, false, nullptr},
         {"/range",       HTTP_GET, rangeHandler,       nullptr, false, false, nullptr},
+        {"/health",      HTTP_GET, healthHandler,      nullptr, false, false, nullptr},
         {"/thermal",     HTTP_GET, thermalHandler,     nullptr, false, false, nullptr},
         {"/thermal/raw", HTTP_GET, thermalRawHandler,  nullptr, false, false, nullptr},
     };

@@ -70,6 +70,39 @@ curl 下來的檔名 = capture id → 讀取形式即檔名即 id,之後換 push
 - 過程備忘:燒錄用 OTG 口(usbmodem)、log 在 TTL 口(CDC_ON_BOOT=0);
   GPIO2+GPIO48 開機壓 LED;AE -2 + gainceiling 8X;綠偏=AWB 暗場暫態非缺陷
 
+## 過熱追查(2026-09-03,進行中)
+
+**能量到的溫度只有兩個,鏡頭不在其中。** esp32-camera 的 `sensor.h` 沒有任何
+temperature op —— OV5640 的溫度從驅動層就取不到,不是我們沒接線。所以:
+
+| 來源 | 是什麼 | 怎麼看 |
+|---|---|---|
+| `die_c` | ESP32-S3 晶片自己的內部感測器 | `GET /health` |
+| `thermal_ta_c` | GY-MCU90640 模組自己的環境溫度 | `GET /health`、`/thermal` |
+| 板子表面 | **拿熱像儀對著板子拍** | `thermal_view.py --watch` |
+
+`/health` 是為了「沒人接 console 的那幾小時」而存在:`die_max_c` +
+`die_max_at_s` 記錄開機以來的峰值與發生時刻,事後一個 GET 就問得到。
+`thermal_ta_c` 走獨立的狀態鏡像而非 `take()` —— frame slot 是 consume-once,
+讓狀態端點去讀它會把 frame 從 `/thermal` 手上偷走。
+
+**推理起點:die 已經被證實沒事。** 上面 19 分鐘 /stream 實測收斂在 ~54°C 不失控。
+若真有過熱,它就在 die sensor 看不到的地方 —— OV5640 本體、鏡頭座,或 5V→3.3V
+的 AMS1117(這類板子最常見的熱點,壓降 1.7V 全變熱)。
+
+**所以最值得做的一步不需要寫任何程式**:把熱像儀對著板子。
+
+```sh
+tools/s3cam/thermal_view.py http://<ip>/thermal --watch
+```
+
+熱點是哪個「零件」是一個座標問題不是溫度問題,所以工具現在會印
+`hot @ r<row> c<col>`。開 /stream 讓它烤,看熱點落在 OV5640、S3 還是穩壓器 ——
+這一步直接決定要加散熱片、降 duty cycle,還是換供電方式。
+
+**另一條要一起排除的解釋**:旅館熱點 RSSI 差也會讓串流卡頓、畫面壞掉,症狀跟
+過熱很像。`/health` 因此一起吐 `rssi`,別把兩件事混為一談。
+
 ## 明確不做(本 phase)
 
 thermal/servo/任何 broker 整合(env 欄位 null 佔位即可)、正式儲存路徑(Phase 0)、

@@ -41,6 +41,13 @@ uint32_t bytesSeen();
 // data race dressed as an accessor.
 gymcu::Parser::Stats statsSnapshot();
 
+// The module's own ambient (Ta) from the most recent frame; false until one has
+// decoded. Tracked SEPARATELY from the frame slot on purpose: take() is
+// consume-once, so answering a status query through it would let a status
+// endpoint silently steal a frame from a data endpoint. Ta is status; the
+// pixel frame is payload; they get different plumbing.
+bool lastAmbientC(float& out);
+
 // ---- raw capture: ground truth for the VERIFY-ON-HARDWARE constants --------
 // The parser can only report that a frame failed; it cannot say what the
 // module actually sent. This tees the incoming bytes into a plain buffer so
