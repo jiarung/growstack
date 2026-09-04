@@ -38,4 +38,7 @@ __pycache__/
 *.pyc
 broker/epochs.json.lock
 .codex/
+
+# Claude Code session state — settings plus whole worktree copies (11 MB)
+.claude/
 broker/fixtures/out/
