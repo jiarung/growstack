@@ -13,8 +13,25 @@ static constexpr framesize_t STILL_SIZE  = FRAMESIZE_QSXGA;
 static constexpr framesize_t STREAM_SIZE = FRAMESIZE_VGA;    // aiming/focus only
 static constexpr int JPEG_QUALITY = 14;   // 0-63, lower = better; 14 is safe at 5MP
 
+// The RESTING framesize — what the sensor sits at when nobody wants a picture.
+//
+// This is the board's biggest heat lever, and it used to be QSXGA by accident:
+// the driver free-runs the sensor from init to forever, and PIXFORMAT_JPEG on
+// an OV5640 means the SENSOR does the compression. So "idle" was full 5MP
+// readout plus 5MP JPEG encode, continuously, for frames nobody reads — which
+// is why the board measured HOTTER at rest (70C) than while streaming (54C,
+// where cameraSetStreaming had dropped it to VGA). Resting at VGA is ~1/17 the
+// pixels. /capture raises to QSXGA for the shot and drops back on release.
+static framesize_t restSize = FRAMESIZE_VGA;
+
+// A framesize change is not instant: AE/AWB re-converge over the next few
+// frames, and at QSXGA those frames are slow. A starting value, to be tuned
+// against actual capture quality rather than left at whatever felt safe.
+static constexpr uint32_t FRAMESIZE_SETTLE_MS = 500;
+
 static uint16_t sensorPid = 0;
 static bool camIdle = false;
+static bool raisedForCapture = false;
 
 bool cameraInit() {
     if (!psramFound()) {
@@ -33,6 +50,11 @@ bool cameraInit() {
     c.pin_vsync = CAM_PIN_VSYNC; c.pin_href = CAM_PIN_HREF; c.pin_pclk = CAM_PIN_PCLK;
     c.xclk_freq_hz = 20000000;
     c.pixel_format = PIXFORMAT_JPEG;
+    // ALLOCATION size, not the resting size: the driver sizes its PSRAM
+    // framebuffers from this, so it must be the LARGEST we will ever ask for.
+    // Initialising at VGA to rest cool would allocate VGA buffers and leave
+    // nothing for a QSXGA still. We claim the big buffers here and drop to
+    // restSize immediately after init instead.
     c.frame_size   = STILL_SIZE;
     c.jpeg_quality = JPEG_QUALITY;
     c.fb_count     = 2;
@@ -54,10 +76,13 @@ bool cameraInit() {
         s->set_hmirror(s, 0);
         s->set_ae_level(s, -2);        // AE target: darker end of the range
         s->set_gainceiling(s, GAINCEILING_8X);   // cap AGC noise-pumping in dim corners
+        // Buffers are allocated; now drop to the resting size so the sensor is
+        // not free-running at 5MP for the entire time nobody is asking.
+        if (restSize != STILL_SIZE) s->set_framesize(s, restSize);
     }
-    Serial.printf("[cam] up: sensor=%s  still=QSXGA q=%d  fb=PSRAM x2 "
+    Serial.printf("[cam] up: sensor=%s  still=QSXGA q=%d  fb=PSRAM x2  rest=%s "
                   "(actual WxH rides in every capture's JSON)\n",
-                  cameraSensorName(), JPEG_QUALITY);
+                  cameraSensorName(), JPEG_QUALITY, cameraRestSizeName());
     return true;
 }
 
@@ -92,8 +117,41 @@ static void wakeIfIdle() {
     delay(WAKE_SETTLE_MS);
 }
 
+// Raise to full resolution for one shot. Returns whether a restore is owed —
+// the caller must not guess, because dropping back when we never raised would
+// reconfigure the sensor for nothing.
+static bool raiseToStill() {
+    if (restSize == STILL_SIZE) return false;
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s || s->set_framesize(s, STILL_SIZE) != 0) {
+        Serial.println("[cam] could not raise to QSXGA — capturing at rest size");
+        return false;
+    }
+    delay(FRAMESIZE_SETTLE_MS);
+    return true;
+}
+
+static void dropToRest() {
+    sensor_t* s = esp_camera_sensor_get();
+    if (s) s->set_framesize(s, restSize);
+}
+
+static camera_fb_t* captureFresh();
+
 camera_fb_t* cameraCapture() {
-    wakeIfIdle();   // before start_us: the settle must not eat the freshness budget
+    wakeIfIdle();
+    raisedForCapture = raiseToStill();
+    camera_fb_t* fb = captureFresh();
+    if (!fb && raisedForCapture) {
+        // Nothing is held, so it is safe to drop right now. On the success path
+        // the restore waits for cameraRelease — see the note there.
+        dropToRest();
+        raisedForCapture = false;
+    }
+    return fb;
+}
+
+static camera_fb_t* captureFresh() {
     // Freshness contract: the returned frame was exposed AFTER this call
     // started. Dropping "one stale buffer" does NOT guarantee that (a second
     // queued frame can predate the request) — so drain by the driver's own
@@ -118,13 +176,47 @@ camera_fb_t* cameraCapture() {
 
 void cameraRelease(camera_fb_t* fb) {
     if (fb) esp_camera_fb_return(fb);
+    // ONLY after the buffer is back with the driver. set_framesize stops and
+    // restarts the capture engine, which can free and reallocate the PSRAM
+    // framebuffers — doing it while the caller still holds an fb would turn
+    // their pointer into a dangling one mid-response. Every cameraCapture()
+    // success path in endpoints.cpp reaches exactly one cameraRelease(), so
+    // this is the one correct place for the restore.
+    if (raisedForCapture) {
+        dropToRest();
+        raisedForCapture = false;
+    }
 }
 
 bool cameraSetStreaming(bool on) {
     if (on) wakeIfIdle();   // a stream into a standby sensor is a blank page
     sensor_t* s = esp_camera_sensor_get();
     if (!s) return false;
-    return s->set_framesize(s, on ? STREAM_SIZE : STILL_SIZE) == 0;
+    // ending a stream returns to REST, not to full resolution — going back to
+    // QSXGA here is exactly the accident that made idle the hottest state
+    return s->set_framesize(s, on ? STREAM_SIZE : restSize) == 0;
+}
+
+bool cameraSetRestSize(const char* name) {
+    framesize_t want;
+    if      (!strcmp(name, "vga"))   want = FRAMESIZE_VGA;
+    else if (!strcmp(name, "svga"))  want = FRAMESIZE_SVGA;
+    else if (!strcmp(name, "qsxga")) want = STILL_SIZE;
+    else return false;
+    restSize = want;
+    // apply now unless a capture is mid-flight holding the sensor at QSXGA;
+    // its cameraRelease will pick up the new resting size
+    if (!raisedForCapture) dropToRest();
+    return true;
+}
+
+const char* cameraRestSizeName() {
+    switch (restSize) {
+        case FRAMESIZE_VGA:  return "vga";
+        case FRAMESIZE_SVGA: return "svga";
+        case STILL_SIZE:     return "qsxga";
+        default:             return "other";
+    }
 }
 
 // ---- cooling knobs ---------------------------------------------------------
@@ -154,10 +246,31 @@ bool cameraSetIdle(bool idle) {
     // 0x3008 is an OV5640 register. Writing it on another sensor would poke
     // something unrelated, so the guard is not politeness — it is correctness.
     if (sensorPid != OV5640_PID) return false;
-    // bit 6 = software power down; the low bits keep the part out of reset.
-    if (s->set_reg(s, 0x3008, 0xFF, idle ? 0x42 : 0x02) < 0) return false;
+    // bit 6 = software power down. Touch ONLY that bit: a full-byte write would
+    // also set bit 7 (software reset) and the low bits to whatever we assumed,
+    // clobbering however esp32-camera left this register. The vendor table
+    // (rt-thread k210 BSP, ov5640cfg.h) confirms the semantics —
+    // "0x42 // software power down, bit[6]" / "0x02 // wake up from standby" —
+    // but it writes the whole byte because it owns the whole configuration.
+    // We do not, so we mask.
+    if (s->set_reg(s, 0x3008, 0x40, idle ? 0x40 : 0x00) < 0) return false;
     camIdle = idle;
     return true;
 }
 
 bool cameraIsIdle() { return camIdle; }
+
+int cameraRegRead(int reg) {
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s || !s->get_reg) return -1;
+    // mask 0xFF: we want the byte as it stands, not a field of it
+    int v = s->get_reg(s, reg, 0xFF);
+    return (v < 0 || v > 0xFF) ? -1 : v;
+}
+
+bool cameraRegWrite(int reg, int mask, int value) {
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s || !s->set_reg) return false;
+    if (sensorPid != OV5640_PID) return false;   // addresses are part-specific
+    return s->set_reg(s, reg, mask, value) >= 0;
+}

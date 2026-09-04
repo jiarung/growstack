@@ -99,6 +99,11 @@ static const char MENU[] =
     "GET /power       cooling knobs; any change resets the peak\n"
     "                 ?cpu=80|160|240  ?xclk=6..20 (MHz)\n"
     "                 ?tx=19|15|11|8   ?cam=idle|active\n"
+    "                 ?rest=vga|svga|qsxga  resting framesize (biggest lever)\n"
+    "GET /cam/reg     dump OV5640 0x3000-0x3040 (hex + binary + notes)\n"
+    "                 ?a=0x300e            one register\n"
+    "                 ?a=..&v=..[&m=0xff]  masked write (volatile)\n"
+    "                 ?from=..&to=..       any range, max 256\n"
     "GET /thermal     newest 32x24 frame + stream stats\n"
     "GET /thermal/raw what the module ACTUALLY sends (layout ground truth)\n"
     "                 ?hex=1 dumps one whole frame for offline analysis\n";
@@ -160,6 +165,138 @@ static esp_err_t healthHandler(httpd_req_t* req) {
     return httpd_resp_send(req, body, m);
 }
 
+// These registers are bit fields — "power down" is bit 6, not a value — so the
+// dump prints binary beside the hex. Reading 0x42 and having to decode it in
+// your head is exactly how a set bit gets missed.
+#define BYTE_FMT "%c%c%c%c%c%c%c%c"
+#define BYTE_ARG(b) \
+    ((b) & 0x80 ? '1' : '0'), ((b) & 0x40 ? '1' : '0'), \
+    ((b) & 0x20 ? '1' : '0'), ((b) & 0x10 ? '1' : '0'), \
+    ((b) & 0x08 ? '1' : '0'), ((b) & 0x04 ? '1' : '0'), \
+    ((b) & 0x02 ? '1' : '0'), ((b) & 0x01 ? '1' : '0')
+
+// What we have actually established about these addresses, so a dump reads as
+// evidence instead of as hex. Sources: the vendor register table in the
+// rt-thread k210 BSP (ov5640cfg.h) and this project's own bring-up.
+static const char* regNote(int r) {
+    switch (r) {
+        // The vendor table calls 0x3000 "enable blocks", but its own AF routine
+        // writes 0x20 to hold, then 0x00 to release, around the firmware
+        // upload — so it is a RESET register and bit5 is the internal MCU.
+        // 0x20 on our board means esp32-camera parks that MCU, which is why no
+        // AF firmware runs and one less block draws power.
+        case 0x3000: return "SYSTEM RESET00 (bit5 = internal MCU in reset)";
+        case 0x3001: return "SYSTEM RESET01";
+        case 0x3002: return "SYSTEM RESET02 (JFIFO / SFIFO / JPG)";
+        case 0x3004: return "CLOCK ENABLE00";
+        case 0x3005: return "CLOCK ENABLE01";
+        case 0x3006: return "CLOCK ENABLE02 (JPEG2x, JPEG)";
+        case 0x3008: return "bit7 = sw reset, bit6 = SW POWER DOWN";
+        case 0x300e: return "MIPI power down / DVP enable  <-- we use DVP";
+        case 0x3029: return "AF firmware status (0x70 = ready)";
+        case 0x302d: return "system control";
+        case 0x302e: return "system control";
+        case 0x3034: return "PLL: bit mode";
+        case 0x3035: return "PLL: system divider";
+        case 0x3036: return "PLL: multiplier";
+        case 0x3037: return "PLL: pre-divider";
+        default:     return nullptr;
+    }
+}
+
+static bool inRange(int v, int lo, int hi) { return v >= lo && v <= hi; }
+
+// A failed register read is -1, and "%02X" would render that as FFFFFFFF —
+// a plausible-looking byte that is actually an error. Show it as "--".
+static void fmtReg(char* dst, size_t n, int v) {
+    if (v < 0) snprintf(dst, n, "--");
+    else       snprintf(dst, n, "0x%02X", v);
+}
+
+static bool qHas(const char* q, const char* key) {
+    char v[16];
+    return httpd_query_key_value(q, key, v, sizeof(v)) == ESP_OK;
+}
+
+static int qInt(const char* q, const char* key, int dflt) {
+    char v[16];
+    if (httpd_query_key_value(q, key, v, sizeof(v)) != ESP_OK) return dflt;
+    return (int)strtol(v, nullptr, 0);   // base 0: takes 0x300e or 12302
+}
+
+// GET /cam/reg — read the sensor's own account of itself; optionally write one.
+//
+//   /cam/reg                          dump 0x3000..0x3040 (system control)
+//   /cam/reg?from=0x3800&to=0x3810    any range, capped at 256 registers
+//   /cam/reg?a=0x300e                 one register
+//   /cam/reg?a=0x300e&v=0x58[&m=0xff] masked write, reported before -> after
+//
+// This exists because the overheating investigation reached claims that cannot
+// be settled from the laptop — whether the MIPI PHY is still powered on a DVP
+// board, which clock domains are gated, whether the sensor's internal DVDD
+// regulator is fighting the board's LDO. Each is a register. Reading beats
+// guessing an address, and guessing is genuinely dangerous here: PWDN and RESET
+// are both unwired (cam_pins.h), so a part talked into silence needs a power
+// cycle. Register writes are volatile, which is exactly why that recovery
+// always works — and why experimenting through this endpoint is safe.
+static esp_err_t camRegHandler(httpd_req_t* req) {
+    char q[96];
+    const bool haveQ = httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK;
+    char line[144];
+    int m;
+    httpd_resp_set_type(req, "text/plain");
+
+    if (haveQ && qHas(q, "a") && qHas(q, "v")) {
+        const int a = qInt(q, "a", 0), mask = qInt(q, "m", 0xFF);
+        const int v = qInt(q, "v", 0);
+        if (!inRange(a, 0, 0xFFFF) || !inRange(mask, 0, 0xFF) || !inRange(v, 0, 0xFF)) {
+            m = snprintf(line, sizeof(line),
+                         "reg 0x0000..0xFFFF, mask/value 0x00..0xFF "
+                         "(got a=%d m=%d v=%d)\n", a, mask, v);
+            httpd_resp_send_chunk(req, line, m);
+            return httpd_resp_send_chunk(req, nullptr, 0);
+        }
+        const int before = cameraRegRead(a);
+        const bool ok = cameraRegWrite(a, mask, v);
+        const int after = cameraRegRead(a);
+        char beforeS[8], afterS[8];
+        fmtReg(beforeS, sizeof(beforeS), before);   // "--" when the read failed,
+        fmtReg(afterS, sizeof(afterS), after);      // never 0xFFFFFFFF
+        Serial.printf("[cam] reg write 0x%04X mask 0x%02X val 0x%02X: %s -> %s (%s)\n",
+                      a, mask, v, beforeS, afterS, ok ? "ok" : "FAILED");
+        m = snprintf(line, sizeof(line),
+                     "write 0x%04X mask 0x%02X value 0x%02X: %s\n"
+                     "  before %s   after %s\n%s%s\n",
+                     a, mask, v, ok ? "ok" : "FAILED", beforeS, afterS,
+                     regNote(a) ? "  " : "", regNote(a) ? regNote(a) : "");
+        httpd_resp_send_chunk(req, line, m);
+        return httpd_resp_send_chunk(req, nullptr, 0);
+    }
+
+    int from = haveQ && qHas(q, "a") ? qInt(q, "a", 0x3000) : qInt(q, "from", 0x3000);
+    int to   = haveQ && qHas(q, "a") ? from : qInt(q, "to", 0x3040);
+    if (!inRange(from, 0, 0xFFFF)) from = 0x3000;
+    if (!inRange(to, 0, 0xFFFF)) to = from;
+    if (to < from) to = from;
+    if (to - from > 255) to = from + 255;   // one request, bounded SCCB traffic
+
+    m = snprintf(line, sizeof(line), "sensor %s   reg 0x%04X..0x%04X\n\n",
+                 cameraSensorName(), from, to);
+    httpd_resp_send_chunk(req, line, m);
+    for (int r = from; r <= to; r++) {
+        const int v = cameraRegRead(r);
+        const char* note = regNote(r);
+        if (v < 0) {
+            m = snprintf(line, sizeof(line), "  0x%04X  --  read failed\n", r);
+        } else {
+            m = snprintf(line, sizeof(line), "  0x%04X  0x%02X  " BYTE_FMT "%s%s\n",
+                         r, v, BYTE_ARG(v), note ? "  " : "", note ? note : "");
+        }
+        if (httpd_resp_send_chunk(req, line, m) != ESP_OK) return ESP_FAIL;
+    }
+    return httpd_resp_send_chunk(req, nullptr, 0);
+}
+
 // GET /power[?cpu=160&xclk=10&tx=11&cam=idle] — the cooling knobs.
 //
 // Runtime rather than compile-time because the question is empirical: which
@@ -178,7 +315,7 @@ static esp_err_t powerHandler(httpd_req_t* req) {
     int applied = 0;
     // "" = not asked for; distinguishes "worked" from "never attempted", which
     // a plain bool cannot.
-    const char *rCpu = "", *rXclk = "", *rTx = "", *rCam = "";
+    const char *rCpu = "", *rXclk = "", *rTx = "", *rCam = "", *rRest = "";
 
     if (haveQ && httpd_query_key_value(q, "cpu", v, sizeof(v)) == ESP_OK) {
         bool ok = power::setCpuMhz(atoi(v));
@@ -195,6 +332,11 @@ static esp_err_t powerHandler(httpd_req_t* req) {
         rTx = ok ? "ok" : "rejected";
         applied += ok;
     }
+    if (haveQ && httpd_query_key_value(q, "rest", v, sizeof(v)) == ESP_OK) {
+        bool ok = cameraSetRestSize(v);
+        rRest = ok ? "ok" : "rejected";
+        applied += ok;
+    }
     if (haveQ && httpd_query_key_value(q, "cam", v, sizeof(v)) == ESP_OK) {
         const bool idle = !strcmp(v, "idle");
         bool ok = (idle || !strcmp(v, "active")) && cameraSetIdle(idle);
@@ -207,15 +349,17 @@ static esp_err_t powerHandler(httpd_req_t* req) {
     fmtF(dieS, sizeof(dieS), health::dieC(), 1);
     fmtF(dieMaxS, sizeof(dieMaxS), health::dieMaxC(), 1);
 
-    char body[448];
+    char body[512];
     int m = snprintf(body, sizeof(body),
         "{\n  \"cpu_mhz\": %d,\n  \"xclk_hz\": %d,\n  \"wifi_tx_dbm\": %d,\n"
-        "  \"cam_idle\": %s,\n  \"applied\": %d,\n  \"peak_reset\": %s,\n"
-        "  \"set\": {\"cpu\": \"%s\", \"xclk\": \"%s\", \"tx\": \"%s\", \"cam\": \"%s\"},\n"
+        "  \"rest_size\": \"%s\",\n  \"cam_idle\": %s,\n"
+        "  \"applied\": %d,\n  \"peak_reset\": %s,\n"
+        "  \"set\": {\"cpu\": \"%s\", \"xclk\": \"%s\", \"tx\": \"%s\", "
+        "\"rest\": \"%s\", \"cam\": \"%s\"},\n"
         "  \"die_c\": %s,\n  \"die_max_c\": %s\n}\n",
         power::cpuMhz(), cameraXclkHz(), power::wifiTxDbm(),
-        cameraIsIdle() ? "true" : "false", applied,
-        applied ? "true" : "false", rCpu, rXclk, rTx, rCam, dieS, dieMaxS);
+        cameraRestSizeName(), cameraIsIdle() ? "true" : "false", applied,
+        applied ? "true" : "false", rCpu, rXclk, rTx, rRest, rCam, dieS, dieMaxS);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, m);
 }
@@ -649,6 +793,7 @@ bool endpointsStart() {
         {"/range",       HTTP_GET, rangeHandler,       nullptr, false, false, nullptr},
         {"/health",      HTTP_GET, healthHandler,      nullptr, false, false, nullptr},
         {"/power",       HTTP_GET, powerHandler,       nullptr, false, false, nullptr},
+        {"/cam/reg",     HTTP_GET, camRegHandler,      nullptr, false, false, nullptr},
         {"/thermal",     HTTP_GET, thermalHandler,     nullptr, false, false, nullptr},
         {"/thermal/raw", HTTP_GET, thermalRawHandler,  nullptr, false, false, nullptr},
     };
