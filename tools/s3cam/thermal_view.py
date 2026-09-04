@@ -6,6 +6,17 @@
     ./thermal_view.py frame.json                   # a saved /thermal response
     ./thermal_view.py http://<ip>/thermal --watch  # refresh until Ctrl-C
     ./thermal_view.py ... --flipv --fliph          # fix the image orientation
+    ./thermal_view.py ... --roi 8,12,16,20         # measure ONE component
+    ./thermal_view.py ... --watch --log soak.csv   # log that region over time
+
+--roi r0,c0,r1,c1 (inclusive) is how this becomes an instrument rather than a
+picture. Aimed at the board, the frame contains the SoC, the regulator and the
+camera module at once; a whole-frame max tells you the hottest of those, which
+is not the question when you want to know what ONE of them is doing before and
+after a change. Point it, read `hot @ r,c` to find the part, then box it.
+
+--log appends a CSV row per refresh (time, Ta, frame min/max, ROI min/mean/max)
+so a before/after soak is a diff of two files, not two remembered numbers.
 
 32x24 is small enough that a terminal IS a reasonable display: two rows of
 pixels per line of text (upper/lower half-blocks) gives a square-ish 32x12
@@ -70,7 +81,26 @@ def orient(px, rows, cols, flipv, fliph):
     return [v for row in grid for v in row]
 
 
-def show(doc, png=None, flipv=False, fliph=False):
+def parse_roi(s, rows, cols):
+    """'r0,c0,r1,c1' -> inclusive box, validated against the frame it will index."""
+    try:
+        r0, c0, r1, c1 = (int(x) for x in s.split(","))
+    except ValueError:
+        raise SystemExit(f"--roi wants r0,c0,r1,c1 (got {s!r})")
+    r0, r1 = min(r0, r1), max(r0, r1)
+    c0, c1 = min(c0, c1), max(c0, c1)
+    if not (0 <= r0 <= r1 < rows and 0 <= c0 <= c1 < cols):
+        raise SystemExit(f"--roi {s} is outside the {rows}x{cols} frame")
+    return r0, c0, r1, c1
+
+
+def roi_stats(px, cols, box):
+    r0, c0, r1, c1 = box
+    vals = [px[r * cols + c] for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)]
+    return min(vals), sum(vals) / len(vals), max(vals), len(vals)
+
+
+def show(doc, png=None, flipv=False, fliph=False, roi=None, log=None):
     f = doc.get("frame")
     if not f:
         s = doc.get("stream", {})
@@ -90,6 +120,27 @@ def show(doc, png=None, flipv=False, fliph=False):
     k = px.index(hi)
     print(f"seq {f['seq']}  {lo:.2f}..{hi:.2f} C   "
           f"hot @ r{k // cols} c{k % cols}   Ta {f.get('ta_c')} C{warn}")
+
+    box = parse_roi(roi, rows, cols) if roi else None
+    if box:
+        rmin, rmean, rmax, n = roi_stats(px, cols, box)
+        r0, c0, r1, c1 = box
+        print(f"roi r{r0}-{r1} c{c0}-{c1} ({n}px)   "
+              f"min {rmin:.2f}  mean {rmean:.2f}  max {rmax:.2f} C")
+    if log:
+        # header only when the file is new, so --log can append across runs and
+        # a before/after soak stays one continuous, self-describing series
+        import csv, datetime, os
+        new = not os.path.exists(log) or os.path.getsize(log) == 0
+        with open(log, "a", newline="") as fh:
+            w = csv.writer(fh)
+            if new:
+                w.writerow(["time", "seq", "ta_c", "frame_min", "frame_max",
+                            "roi_min", "roi_mean", "roi_max"])
+            row = [datetime.datetime.now().isoformat(timespec="seconds"),
+                   f["seq"], f.get("ta_c"), f"{lo:.2f}", f"{hi:.2f}"]
+            row += [f"{rmin:.2f}", f"{rmean:.2f}", f"{rmax:.2f}"] if box else ["", "", ""]
+            w.writerow(row)
     if png:
         try:
             from PIL import Image
@@ -115,17 +166,20 @@ def main(argv):
     if not argv:
         print(__doc__, file=sys.stderr)
         return 1
+    def opt(name):
+        return argv[argv.index(name) + 1] if name in argv else None
+
     src = argv[0]
-    png = argv[argv.index("--png") + 1] if "--png" in argv else None
+    png, roi, log = opt("--png"), opt("--roi"), opt("--log")
     flipv, fliph = "--flipv" in argv, "--fliph" in argv
     if "--watch" not in argv:
-        return show(fetch(src), png, flipv, fliph)
+        return show(fetch(src), png, flipv, fliph, roi, log)
     import time
     try:
         while True:
             print("\x1b[H\x1b[J", end="")   # home + clear, so it redraws in place
             try:
-                show(fetch(src), png, flipv, fliph)
+                show(fetch(src), png, flipv, fliph, roi, log)
             except OSError as e:
                 # a dropped frame or a Wi-Fi hiccup must not end a watch that
                 # is meant to run while somebody moves things in front of the
