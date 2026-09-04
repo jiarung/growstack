@@ -285,8 +285,12 @@ Four provisioned rules in the folder **Device health**:
 The first three ask whether data *arrives*. The fourth asks whether it is *true* —
 a different question, and the one that had never been asked. Twice in a fortnight
 this system published perfectly-formed, completely wrong numbers: 4,840 points on
-2026-08-10 topping out at 9.2 lux with the lamp on, and a ~100× collapse of the
-AS7341's visible channels on 2026-08-11 that went unnoticed for 31 h.
+[2026-08-10](../docs/incidents/2026-08.md#0810) topping out at 9.2 lux with the lamp
+on, and a ~150× collapse of the AS7341's visible channels on
+[2026-08-11](../docs/incidents/2026-08.md#0811) that went unnoticed for 31 h — which
+sat at half its baseline for two weeks and was assumed to be permanent optical decay,
+until [2026-09-04](../docs/incidents/2026-09.md#0904) proved it was the sensor's
+mounting angle all along.
 
 What makes the check possible is that **the lamp is a controlled reference
 source**. This room takes 1–2% of its daily light from the sun, so during lamp
@@ -333,7 +337,8 @@ Exclusions in the sensor rule, each with a reason:
 > fixed (`noDataState: NoData` now, so the rule can report its own failure), but
 > the lesson generalises: verifying that a rule *loads* is not verifying that it
 > *fires*. Test by pointing it at a series you know is stale and watching for the
-> Telegram message. `FLOWS.md` gap 5 has the full post-mortem.
+> Telegram message. The full post-mortem is at
+> [`docs/incidents/2026-07.md`](../docs/incidents/2026-07.md#0730).
 
 **The window is a single shared parameter**: `LIGHT_WINDOW_START_MIN` /
 `LIGHT_WINDOW_END_MIN` in `.env` (minutes since midnight; 480=08:00,

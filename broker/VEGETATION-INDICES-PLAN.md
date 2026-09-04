@@ -28,7 +28,8 @@ health *changes*.
 > choice: the AS7341 has **no band between 680 nm and its broad NIR channel**, so
 > NDRE and CIre are not merely inconvenient on it but impossible; and the 47
 > plant-tagged reflectance readings from 2026-07-03 are unusable regardless —
-> they predate the AS7263 wiring (no `n730`) *and* a lens clean around 07-22 that
+> they predate the AS7263 wiring (no `n730`) *and* a lens clean around 07-22 (⚠ magnitude disputed — `PPFD-CALIBRATION.md` records ~4×;
+> see [`docs/incidents/2026-07.md`](../docs/incidents/2026-07.md#0722)) that
 > moved the optical path by ~2.2×, so they are not comparable with anything taken
 > later.
 

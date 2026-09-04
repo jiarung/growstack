@@ -47,6 +47,11 @@ shouts when something goes quiet.
   only place the whole picture is drawn, so it cannot drift out of sync with three
   copies of the same diagram.
 
+- [`docs/incidents/`](docs/incidents/README.md) — **every failure this rig has had, dated,
+  with its evidence.** One file per month behind a single index. The other documents keep
+  the narrative ("why the lamp must not fail off"); the dates and numbers live here, because
+  they used to live in three places at once and one of them had already drifted.
+
 **By subsystem:**
 
 | Doc | Covers |
@@ -62,10 +67,18 @@ shouts when something goes quiet.
 
 | Doc | Question it answers | State |
 |---|---|---|
-| [`broker/PPFD-CALIBRATION.md`](broker/PPFD-CALIBRATION.md) | is the PPFD scale real µmol·m⁻²·s⁻¹? | daylight calibrated; the lamp case unresolved |
-| [`broker/PHOTONE-CAL-PLAN.md`](broker/PHOTONE-CAL-PLAN.md) | verify that scale against a ground-truth meter | depends on the above |
+| [`docs/photone-cal-pipeline.md`](docs/photone-cal-pipeline.md) | **the contract** — bucket universe, estimator spec, epoch registry, adoption brake | authoritative; cited by `kmodels.py`, `kadopt.py`, `kconsume.py`, `mark-epoch.sh`, `analyze-photone.sh` |
+| [`broker/PPFD-CALIBRATION.md`](broker/PPFD-CALIBRATION.md) | is the PPFD scale real µmol·m⁻²·s⁻¹? how is `CAL` measured? | daylight calibrated; the lamp case unresolved; the current `CAL` is declared stale |
+| [`broker/PPFD-CAL-ROUTINE-PLAN.md`](broker/PPFD-CAL-ROUTINE-PLAN.md) | the routine that actually runs daily, and when a `CAL` may be adopted | live — `ppfd-cal-daily.sh` + `cal-review-reminder.sh` |
+| [`broker/PPFD-CAL-DAILY-PLAN.md`](broker/PPFD-CAL-DAILY-PLAN.md) | — | **superseded 2026-08-17** by the row above; kept only for its reasoning |
+| [`broker/PHOTONE-CAL-PLAN.md`](broker/PHOTONE-CAL-PLAN.md) | design of `record-photone.sh`, the ground-truth recorder | built |
 | [`broker/VEGETATION-INDICES-PLAN.md`](broker/VEGETATION-INDICES-PLAN.md) | turn reflectance into a plant-health metric | blocked on sensor aim |
 | [`broker/SENSOR-DRIFT-DESIGN.md`](broker/SENSOR-DRIFT-DESIGN.md) | make every sensor liveness- and drift-checkable | design only, not built |
+
+Six documents on one subject, so: the **blueprint** is the contract and wins any
+disagreement; `PPFD-CALIBRATION.md` owns how `CAL` is measured; `PPFD-CAL-ROUTINE-PLAN.md`
+owns what runs today. Individual failures belong in
+[`docs/incidents/`](docs/incidents/README.md), not in any of them.
 
 ## Status
 

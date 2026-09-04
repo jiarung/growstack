@@ -21,9 +21,9 @@ looks like "no data yet".
 
 | when | job | why |
 |---|---|---|
-| 2026-07-29 | `backup/influx-backup.sh` | documented cron line was never installed; one 20 KB backup existed, from when the DB was nearly empty |
-| 2026-08-22 | `publish-weight-ref.sh` | the entry existed but contained a literal `/home/<user>/` placeholder and a `/data/` log path that does not exist — it had never run once |
-| 2026-08-31 | `compute-k-models.sh` | never scheduled at all. The whole k-model pipeline (`k_model` / `k_adopted` / `light_context`) had produced **zero rows**, and both k-* dashboards were empty |
+| [2026-07-29](../docs/incidents/2026-07.md#0729-backup) | `backup/influx-backup.sh` | documented cron line was never installed; one 20 KB backup existed, from when the DB was nearly empty |
+| [2026-08-22](../docs/incidents/2026-08.md#0822) | `publish-weight-ref.sh` | the entry existed but contained a literal `/home/<user>/` placeholder and a `/data/` log path that does not exist — it had never run once |
+| [2026-08-31](../docs/incidents/2026-08.md#0831-cron) | `compute-k-models.sh` | never scheduled at all. The whole k-model pipeline (`k_model` / `k_adopted` / `light_context`) had produced **zero rows**, and both k-* dashboards were empty |
 
 **Cron is not in version control.** The canonical list is here; each script also
 states its own line in its header. Diff them against reality:
@@ -164,7 +164,9 @@ alive: a query that breaks by returning *empty* rather than erroring reports
 healthy, and `execErrState: Error` only covers hard errors. The way to gain
 confidence without waiting for a real event is to run the rule's own Flux with
 only its state predicate relaxed, and check the output *shape* — labels present,
-`_time` fresh. FLOWS.md gap 5 is what that shape protects against.
+`_time` fresh. The 2026-07-30 deadman incident
+([`docs/incidents/2026-07.md`](../docs/incidents/2026-07.md#0730)) is what that shape
+protects against.
 
 
 ## Deployment: what a change actually requires
@@ -298,6 +300,9 @@ triggered that failure. Shade the sensor before exercising the reflect path.
 
 ## Related
 
+- [`../docs/incidents/`](../docs/incidents/README.md) — the dated log of individual failures.
+  **This file owns the failure *classes*; that directory owns the *events*.** When something
+  breaks, the entry goes there and only the pattern comes back here.
 - `FLOWS.md` — every data path and whether it is actually running; gap 3 is the bind-mount trap
 - `QUERYING.md` — four query traps, each of which has already produced a wrong conclusion
 - `README.md` — setup, the plant registry, the light controller
