@@ -73,7 +73,7 @@ anything that only reads the Telegraf config.
 | 1 | `monitor-air/+/telemetry` | `air` | `device` | ✅ `livingroom`, `staging-01` |
 | 2 | `monitor-air/+/light/state` | `light` | `location` ⚠️ not `device` | ✅ |
 | 3 | `monitor-air/+/spectrum` | `spectrum` | `device`, `plant`, `mode` | ✅ |
-| 4 | Open-Meteo HTTP (25.01, 121.46 — 板橋) | `weather` | `source`, `location`, `url` | ✅ polled every 5 min for retries, stored at the API's 15-min resolution (see gap 7) |
+| 4 | Open-Meteo HTTP (25.01, 121.46 — 板橋) | `weather` | `source`, `location`, `url` | ✅ polled every 5 min for retries, stored at the API's 15-min resolution ([incident](../docs/incidents/2026-08.md#0803)) |
 | 5 | `monitor-air/+/plant_weight` | `plant_weight` | `device`, `plant_id` | ✅ deployed 2026-07-29, verified end-to-end |
 | 6 | `record-photone.sh` → `influx write` | `photone` | `device`, `source`, `gain` | ✅ manual (35 points to date) |
 
@@ -147,8 +147,8 @@ share one value domain on purpose — that is what lets the two join per plant.
 
 | Flow | What | Live? |
 |---|---|---|
-| Grafana deadman — sensors | per `(device, field)` series silent >15 min, **then** `for: 2m` → Telegram. Watches **production series only** — `sim`, `staging-01` (bench board) and `weight_raw` (event-driven) are excluded | ✅ **fixed + proven 2026-07-30** — it had never fired (see gap 5) |
-| Grafana deadman — weather feed | Open-Meteo silent >60 min, **then** `for: 10m` → Telegram. One instance for the whole feed, not one per field | ✅ added 2026-08-03 (gap 6) |
+| Grafana deadman — sensors | per `(device, field)` series silent >15 min, **then** `for: 2m` → Telegram. Watches **production series only** — `sim`, `staging-01` (bench board) and `weight_raw` (event-driven) are excluded | ✅ **fixed + proven 2026-07-30** — it had never fired ([incident](../docs/incidents/2026-07.md#0730)) |
+| Grafana deadman — weather feed | Open-Meteo silent >60 min, **then** `for: 10m` → Telegram. One instance for the whole feed, not one per field | ✅ added 2026-08-03 ([incident](../docs/incidents/2026-08.md#0803)) |
 | Grafana — alert delivery | Grafana's own notification-failure counter rose in the last hour, **then** `for: 5m` → Telegram. Retrospective by nature: one channel cannot announce its own outage while it is down | ✅ added 2026-08-09 |
 | Grafana — spectrum plausibility | AS7341 `clear` ÷ BH1750 `lux` during lamp hours leaves `2.5–12`, **then** `for: 30m` → Telegram. The first rule that asks whether data is **true** rather than whether it **arrived**; the lamp is a fixed reference source, so the ratio isolates the optical path. Blind to common-mode fouling — panel 17 covers that by eye | ✅ added 2026-08-14 |
 | `backup/influx-backup.sh` | InfluxDB → `/data/influx-backups`, keeps newest 14 | ✅ cron `30 19 * * *` UTC = **03:30 Taipei** |
@@ -157,19 +157,16 @@ share one value domain on purpose — that is what lets the two join per plant.
 
 ## Known gaps
 
-1. ~~Backups are not running.~~ **Scheduled 2026-07-29.** The documented cron line was never
-   actually installed; `/data/influx-backups` held one 20 KB backup from 2026-06-15, taken
-   when the database was nearly empty (1 shard, 653 B). Now installed and verified under a
-   minimal `env -i` environment, the way cron will run it — today's backup is 13 MB across
-   7 shards. Scheduled `30 19 * * *`: **cron follows the host timezone (UTC), not the
-   containers' `TZ=Asia/Taipei`**, so 19:30 UTC is what actually lands at 03:30 Taipei.
-2. ~~The weigh station is not deployed.~~ **Deployed 2026-07-29.** Telegraf recreated
-   (4 consumers loaded), Node-RED image rebuilt + volume reset so `station-flow` seeded,
-   Grafana picked the panel up on its own. Verified by publishing two copies of one event:
-   both acked, exactly one `plant_weight` written, UID resolved to `cactus-01`, the point
-   landed in InfluxDB (test points deleted afterwards). **Confirmed on real hardware** the
-   same day: `staging-01` published a genuine weigh at 16:38:36 UTC and it stored as
-   `plant_weight device=staging-01 plant_id=cactus-01 uid=00A8635C weight_g=334.6`.
+**Still broken.** Anything already fixed lives in
+[`docs/incidents/`](../docs/incidents/README.md) with its evidence — this list used to
+carry both, and half of it was history you had to read past to find out what is wrong
+*now*. Gaps 1, 2, 4 and 6 moved there (backups unscheduled, weigh station undeployed,
+the deadman that never fired, Open-Meteo 503s).
+
+**The numbers are deliberately not renumbered.** Other documents cite "gap 3", and
+renumbering would silently repoint every one of them — which has already happened once
+here: three files still cited the deadman as "gap 5" while it was numbered 4.
+
 3. **Single-file bind mounts are stale, and a restart will not fix them.**
    (Recurring — the check and the fix are also in
    [`MAINTENANCE.md`](MAINTENANCE.md#deployment-what-a-change-actually-requires);
@@ -207,47 +204,11 @@ share one value domain on purpose — that is what lets the two join per plant.
      = "$(docker exec monitor-air-nodered stat -c %i /data/tag-map.json)" ] \
      && echo "node-red attached" || echo "node-red DETACHED"
    ```
-4. **The deadman alert had never fired, and `staging-01` has been dead 13 days.** Fixed
-   2026-07-30. It evaluated to NoData with no labels while `noDataState: OK` reported that as
-   green, so the one alert whose job is noticing silence was itself silent. Three separate
-   faults in the Flux output shape (missing `_time`, `_time` older than `relativeTimeRange`,
-   and `_field` colliding with Grafana's reserved field-name column) plus the `OK` setting.
-   Now verified the whole way: 9 labelled instances, `livingroom`'s 4 fields Normal,
-   `staging-01`'s 5 Alerting, routed to the `telegram` contact point, bot token valid and
-   chat reachable.
-
-   **What it exposed turned out to be scope, not outages** — both resolved by narrowing the
-   rule to production series (2026-07-30):
-   - `staging-01` is the **bench board**; it only runs while someone is developing on it. Its
-     env fields (`temp`/`hum`/`pressure`/`gas`/`lux_ref`) exist for exactly one 12-minute
-     bring-up on 2026-07-17 — 43 points each, never before or since — so they are retired,
-     not broken. Excluded by device, like `sim` already was.
-   - `weight_raw` is **event-driven by design** since station Phase 2: a weigh happens on an
-     NFC tap, so a gap means nobody weighed anything. Excluded by field, so it stays excluded
-     if a production station ever publishes it.
-
-   The rule now watches 4 series (`livingroom` temp/hum/pressure/gas, plus `lux`/`lux_ref`
-   inside the light window) and alerts on none of them, which is the correct resting state. A
-   deadman that always fires is one nobody reads.
 5. **`docker compose build` fails on this host** — `~/.docker/buildx` is root-owned (from a
    2023 `sudo docker` run), so buildx cannot write its instance dir. Prefix builds with
    `DOCKER_BUILDKIT=0` (legacy builder) or `chown` the directory. This is silent-ish: compose
    prints the error but `up -d` then happily starts the **stale image**, which is how a volume
    reset can re-seed the old flow. `add-plant.sh` will hit this too.
-6. **Open-Meteo returns intermittent 503s, and an hourly poll has no retry.** Fixed
-   2026-08-03. Measured over 07-30..08-03: 16-21 of the 24 daily polls failed, and because
-   `inputs.http` does not retry inside an interval, each failure cost a whole hour — the panel
-   ran on 3-10 points/day instead of 24, then stopped entirely for 11 h. The same URL answers
-   200 on demand, so this is upstream flakiness at the polled instant, not an outage.
-
-   Fixed by polling every 5 min instead of hourly. This is a **retry budget, not a sampling
-   rate**: the point timestamp comes from the payload's `current.time`, which only advances
-   every 900 s, so extra polls inside one slot rewrite the same point — retries at zero
-   storage cost.
-
-   A second deadman rule (`deadman-weather-stale`, >1 h) now watches the feed, because
-   nothing did — which is why an 11-hour outage was found by eye. That was the third gap of
-   this shape; the other two are gaps 1 and 5.
 7. **Two older diagrams are incomplete** — `../README.md` and `README.md` both draw the stack
    without Node-RED, so neither shows C1 or C2. Prefer this file.
 8. **The lamp never switches off in direct sun, and that alone empties three calibration
