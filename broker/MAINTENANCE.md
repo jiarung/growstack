@@ -9,7 +9,7 @@ It is a framework, not a finished document. Add to it when something bites you.
 
 ---
 
-## The five ways this system lies to you
+## The six ways this system lies to you
 
 Ranked by how many times each has actually happened.
 
@@ -167,6 +167,36 @@ only its state predicate relaxed, and check the output *shape* — labels presen
 `_time` fresh. The 2026-07-30 deadman incident
 ([`docs/incidents/2026-07.md`](../docs/incidents/2026-07.md#0730)) is what that shape
 protects against.
+
+
+### 6. A fault that tracks your variable renders as a property of it (2×)
+
+The general shape, because it has now happened twice with the same sensor and the
+second time cost two days of confident wrong analysis:
+
+**When a fault correlates with the very quantity you are varying, it does not look
+like a fault. It looks like a finding.**
+
+- **2026-09-04.** The AS7341 was obstructed at an *angle*, so it attenuated
+  sunlight and lamplight by different amounts. Split the spectrum-vs-lux DLI ratio
+  by light source and you get daylight 1.55, lamp 0.57 — a clean 2.7x gradient with
+  the right sign and a ready-made physical story (photopic weighting versus photon
+  weighting). It was mechanical. Cleared, the gradient collapses to 1.14x, and
+  re-measured properly against the spectrum it is 1.22x from first principles.
+- **2026-08-05.** Both sensors fouled together, so the ratio between them barely
+  moved (6.33 → 7.51) while the light halved. Same shape, mirrored: the fault
+  cancelled in the statistic chosen to detect it.
+
+The defence is not scepticism, it is ordering: **settle the geometry and the
+optical path before concluding anything about spectrum, and never rank two
+candidate causes before checking that the lesser one is not corrupting the
+measurement of the greater.** On 2026-09-04 both causes were correctly identified
+and then ranked backwards, because the secondary one was contaminating the evidence
+for the primary.
+
+Events: [`docs/incidents/`](../docs/incidents/README.md) —
+[2026-09-04](../docs/incidents/2026-09.md#0904-dli),
+[2026-08-05](../docs/incidents/2026-08.md#0805).
 
 
 ## Deployment: what a change actually requires

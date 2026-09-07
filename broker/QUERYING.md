@@ -31,7 +31,7 @@ _time           _value
 
 Also takes a file (`./influx-q.sh -f q.flux`) or stdin (`echo '<flux>' | ./influx-q.sh`).
 It converts timestamps to local time, drops the bookkeeping columns, and flattens
-the multi-block CSV — see [the traps](#four-traps) for why each of those matters.
+the multi-block CSV — see [the traps](#six-traps) for why each of those matters.
 
 The raw form, if you want the unprocessed output:
 
@@ -94,7 +94,7 @@ option location = timezone.location(name: "Asia/Taipei")
   |> aggregateWindow(every: 1d, fn: count, createEmpty: true)
 ```
 
-## Four traps
+## Six traps
 
 Each of these has already produced a wrong conclusion in this project.
 
@@ -122,6 +122,35 @@ header and then treats every later line as data will silently drop everything af
 the first block — this is how a "there are zero reflectance measurements"
 conclusion happened when there were 202. Reset the header whenever a line starts
 with `#`.
+
+**5. Raw AS7341 counts are not a spectrum.** The eight channels differ by ~25x in
+irradiance responsivity (`R` = 55, 110, 210, 390, 590, 840, 1350, 1070 for
+f415..f680), so counts alone badly overweight yellow and red. Divide by `R` before
+reading any shape out of them — the PPFD panels and `kmodels.py` already do.
+
+The size of the error is not subtle. The same lamp, same samples:
+
+| | 415–480 blue | 515–555 green | 590–680 red |
+|---|---:|---:|---:|
+| raw counts | 11.0% | 18.1% | **70.9%** |
+| ÷ R | **49.4%** | 18.2% | 32.3% |
+
+Raw says a red lamp. Normalised says a blue+red horticultural lamp with a green
+notch — a different object, and only the second one explains why `lux/54`
+underestimates it. This trap produced a wrong conclusion twice inside one session
+on 2026-09-07, the second time *after* writing down that the channels differ 25x.
+
+**6. `light_context.source == "daylight"` is not sunlight.** At this site it occurs
+only between 05:00 and 07:00 Taipei, with a median of **54 lux** — dawn twilight
+near the sensor's noise floor. The lamp window opens at 08:00 and the controller
+does not switch off in bright sun
+([`FLOWS.md` gap 8](FLOWS.md#known-gaps)), so every genuinely sunlit moment is
+classified `mixed`, and the daylight bucket keeps only the dark edge of the day.
+
+Median lux by cell, seven days: `daylight 54 · lamp 4145 · mixed 4394 · none 0`.
+Anything averaged over daylight cells is therefore an average over twilight, and it
+will look like a statement about sunlight. Check the hour distribution and the lux
+level before drawing a conclusion from that bucket.
 
 ## Related
 
