@@ -11,6 +11,7 @@
 #include "endpoints.h"
 #include "health.h"
 #include "rangefinder.h"
+#include "servo.h"
 #include "thermal/thermal_uart.h"
 
 // Away-from-home bring-up: put the hotspot's creds in secrets.h as
@@ -59,13 +60,18 @@ void setup() {
     // whether it answered belongs in the same boot log as the sensor probe.
     // Its absence is never fatal — distance simply reports null.
     rangefinderBegin();
+    // Same bus, different address (0x40). Leaves the outputs UNTOUCHED — see
+    // servo.h invariant 2: on an ESP32-only reboot the PCA9685 is still driving
+    // the axes, and releasing them here is what would drop a mounted head.
+    servo::begin();
     // the thermal module streams on its own as soon as it is powered; opening
     // the port early means the parser sees the stream from the first frame
     thermal::begin();
 
     camOk = cameraInit();
     if (camOk && endpointsStart()) {
-        Serial.printf("[s3cam] ready: http://%s/  (/stream /capture /observation /last.jpg)\n",
+        Serial.printf("[s3cam] ready: http://%s/  (/stream /capture /observation /last.jpg "
+                      "/i2c/scan /servo)\n",
                       WiFi.localIP().toString().c_str());
     } else if (!camOk) {
         Serial.println("[s3cam] camera init FAILED — endpoints not started; "

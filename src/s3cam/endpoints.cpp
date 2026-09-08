@@ -2,14 +2,17 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <Wire.h>
 #include <esp_http_server.h>
 #include <math.h>
 #include <time.h>
 
+#include "cam_pins.h"
 #include "camera.h"
 #include "health.h"
 #include "power.h"
 #include "rangefinder.h"
+#include "servo.h"
 #include "thermal/thermal_uart.h"
 
 static httpd_handle_t server = nullptr;
@@ -106,7 +109,10 @@ static const char MENU[] =
     "                 ?from=..&to=..       any range, max 256\n"
     "GET /thermal     newest 32x24 frame + stream stats\n"
     "GET /thermal/raw what the module ACTUALLY sends (layout ground truth)\n"
-    "                 ?hex=1 dumps one whole frame for offline analysis\n";
+    "                 ?hex=1 dumps one whole frame for offline analysis\n"
+    "GET /i2c/scan    who answers on the shared bus — run BEFORE plugging servos\n"
+    "GET /servo       pan/tilt, one axis; no query = report only, nothing moves\n"
+    "                 ?ch=5&us=1500  ch5=PAN ch6=TILT, 600..2400, 0 releases\n";
 
 static esp_err_t indexHandler(httpd_req_t* req) {
     char line[192];
@@ -776,6 +782,103 @@ static esp_err_t streamHandler(httpd_req_t* req) {
     return r;
 }
 
+// GET /i2c/scan — who is actually on GPIO41/42. The first thing to run after
+// wiring the PCA9685: an address that does not answer here is a wiring fault,
+// and no amount of servo code will paper over it. Kept deliberately dumb (a
+// write of zero bytes, the standard probe) so it reports the BUS, not our
+// drivers' opinion of the bus — a driver that failed to init still leaves its
+// chip visible here, which is exactly how you tell "absent" from "not
+// initialised".
+static esp_err_t i2cScanHandler(httpd_req_t* req) {
+    char line[128];
+    httpd_resp_set_type(req, "text/plain");
+    int m = snprintf(line, sizeof(line),
+                     "I2C scan on SDA %u / SCL %u\n\n", RANGE_PIN_SDA, RANGE_PIN_SCL);
+    httpd_resp_send_chunk(req, line, m);
+
+    int found = 0;
+    for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() != 0) continue;
+        found++;
+        const char* who = "";
+        if (addr == 0x29) who = "  VL53L0X rangefinder";
+        else if (addr == 0x40) who = "  PCA9685 servo driver";
+        else if (addr == 0x70) who = "  (PCA9685 all-call — same chip as 0x40)";
+        m = snprintf(line, sizeof(line), "  0x%02X%s\n", addr, who);
+        if (httpd_resp_send_chunk(req, line, m) != ESP_OK) return ESP_FAIL;
+    }
+    if (!found) {
+        const char* none =
+            "\nNOTHING answered. That is the bus itself, not a chip:\n"
+            "  - SDA/SCL swapped, or not on 41/42\n"
+            "  - no common ground between the board and the peripheral\n"
+            "  - peripheral VCC missing (PCA9685 VCC is 3V3, NOT the servo V+)\n";
+        httpd_resp_send_chunk(req, none, strlen(none));
+    } else {
+        m = snprintf(line, sizeof(line),
+                     "\n%d device(s). Expected for the pan/tilt head: 0x29 + 0x40.\n",
+                     found);
+        httpd_resp_send_chunk(req, line, m);
+    }
+    return httpd_resp_send_chunk(req, nullptr, 0);
+}
+
+// GET /servo[?ch=0&us=1500] — manual single-axis command, the tool for
+// mounting the bracket and for finding where it mechanically stops.
+//
+// No query = report only. This endpoint never moves anything you did not ask
+// it to move, because the caller is standing next to a metal-geared servo.
+//
+//   ?ch=0&us=1500   PAN to centre        ?ch=1&us=0   release TILT (goes limp)
+//
+// Widths outside 600..2400 are refused rather than clamped (servo.h explains
+// why), and a command to the other axis blocks until the previous move has
+// settled — the one-axis-at-a-time current budget, enforced not documented.
+static esp_err_t servoHandler(httpd_req_t* req) {
+    char q[64], v[12];
+    const bool haveQ = httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK;
+    const char* result = "";           // "" = no move attempted this call
+    int ch = -1, us = -1;
+
+    if (haveQ && httpd_query_key_value(q, "ch", v, sizeof(v)) == ESP_OK) ch = atoi(v);
+    if (haveQ && httpd_query_key_value(q, "us", v, sizeof(v)) == ESP_OK) us = atoi(v);
+
+    if (ch >= 0 && us >= 0) {
+        result = servo::setUs((uint8_t)ch, (uint16_t)us) ? "ok" : "rejected";
+    } else if (ch >= 0 || us >= 0) {
+        // half a command is a typo, and acting on it would move an axis to a
+        // width the caller never named
+        result = "rejected (need BOTH ch and us)";
+    }
+
+    // null, not 0: after a reboot the axis may be holding a position this boot
+    // never commanded, and 0 would read as "released" — a claim we cannot make.
+    char panS[12], tiltS[12];
+    const uint16_t pu = servo::lastUs(servo::CH_PAN), tu = servo::lastUs(servo::CH_TILT);
+    if (pu == servo::US_UNKNOWN) snprintf(panS, sizeof(panS), "null");
+    else snprintf(panS, sizeof(panS), "%u", pu);
+    if (tu == servo::US_UNKNOWN) snprintf(tiltS, sizeof(tiltS), "null");
+    else snprintf(tiltS, sizeof(tiltS), "%u", tu);
+
+    char body[512];
+    int m = snprintf(body, sizeof(body),
+        "{\n  \"present\": %s,\n"
+        "  \"pan_ch\": %u,  \"pan_us\": %s,\n"
+        "  \"tilt_ch\": %u, \"tilt_us\": %s,\n"
+        "  \"limits_us\": [%u, %u],  \"centre_us\": %u,\n"
+        "  \"settle_ms\": %lu,\n"
+        "  \"set\": \"%s\"\n"
+        "}\n",
+        servo::present() ? "true" : "false",
+        servo::CH_PAN,  panS,
+        servo::CH_TILT, tiltS,
+        servo::US_MIN, servo::US_MAX, servo::US_CENTER,
+        (unsigned long)servo::settleMs(), result);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, body, m);
+}
+
 bool endpointsStart() {
     // The table comes FIRST because the config is derived from it.
     // HTTPD_DEFAULT_CONFIG caps max_uri_handlers at 8, and this table sat at
@@ -796,6 +899,8 @@ bool endpointsStart() {
         {"/cam/reg",     HTTP_GET, camRegHandler,      nullptr, false, false, nullptr},
         {"/thermal",     HTTP_GET, thermalHandler,     nullptr, false, false, nullptr},
         {"/thermal/raw", HTTP_GET, thermalRawHandler,  nullptr, false, false, nullptr},
+        {"/i2c/scan",    HTTP_GET, i2cScanHandler,     nullptr, false, false, nullptr},
+        {"/servo",       HTTP_GET, servoHandler,       nullptr, false, false, nullptr},
     };
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();

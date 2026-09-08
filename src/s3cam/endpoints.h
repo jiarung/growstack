@@ -20,5 +20,7 @@
 //                    pose/thermal/environment null) — id pairs it with /last.jpg
 //   GET /last.jpg    the still held by the LAST /observation (same frame as its
 //                    JSON — the pairing is same-exposure, not two captures)
+//   GET /i2c/scan    who answers on GPIO41/42 — run this BEFORE plugging servos
+//   GET /servo       ?ch=&us= one axis, manual; no query = report only
 
 bool endpointsStart();
