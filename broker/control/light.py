@@ -50,15 +50,24 @@ HARD_OFF = dtime(_end_min // 60, _end_min % 60)      # at/after this → force O
 # moved DLI ~2.2x and killed the old `< 1.5` rule without a single error).
 # A target is in real units, so a recalibration means re-deriving it once.
 #
-# Useful range, at the measured ~0.33 mol/h the lamp delivers:
-#   <= 3.47  never tops up (the 08:00-18:30 window already reaches it)
-#    ~4.0    tops up most evenings, stops early when the sun did contribute
-#   >= 4.12  always runs to EXTEND_END (then just move LIGHT_WINDOW_END_MIN instead)
-# Derive it from the measured baseline, NOT from horticultural tables: lux/54 is a
-# daylight conversion applied to an LED, so the absolute scale is not trustworthy.
+# SCALE: since 2026-09-08 the integral is multiplied by the adopted k (see
+# todays_dli), so DLI is on the Photone-referenced scale, ~3.93x the bare lux/54
+# it used to be. Every number below was re-derived by that same factor; a target
+# copied from before that date is 4x too small and the lamp will never stop early.
+#
+# Useful range, at the measured ~1.30 mol/h the lamp delivers:
+#   <= 13.6  never tops up (the 08:00-18:30 window already reaches it)
+#    ~15.7   tops up most evenings, stops early when the sun did contribute
+#   >= 16.2  always runs to EXTEND_END *on a sunless day* — but the sun does
+#            contribute here: 2026-09-08 hit 16.9 by 18:30 with no top-up at all,
+#            so "always runs" really needs >= 20. Anything between stops early
+#            exactly on the days the sun already did the work, which is the point.
+# Still derive it from the measured baseline, NOT from horticultural tables: the
+# 54 lm/umol is a DAYLIGHT constant applied to an LED, and k only fixes the
+# sensor's under-read, not that spectral mismatch.
 _extend_min = int(os.getenv("LIGHT_EXTEND_END_MIN", "1230"))   # 20:30
 EXTEND_END = dtime(_extend_min // 60, _extend_min % 60)
-DLI_TARGET = float(os.getenv("DLI_TARGET", "4.0"))  # mol·m⁻²·day⁻¹
+DLI_TARGET = float(os.getenv("DLI_TARGET", "20"))  # mol·m⁻²·day⁻¹, k-scaled
 MIN_HOLD = 5 * 60        # after a switch, hold ≥ this (matches MANUAL_HOLD; lamp may raise own lux)
 STALE = 5 * 60           # lux older than this → treat as no reading (see decide())
 TICK = 60                # decision cadence, seconds
@@ -212,19 +221,38 @@ def extend_decision(dli, target, last):
 
 async def todays_dli():
     """Today's accumulated DLI (mol·m⁻²·day⁻¹) for the sensor device, from
-    InfluxDB — same lux/54 integral the Grafana DLI panel uses. Returns None on
-    any error (caller then does not extend). Queried from the DB rather than
-    accumulated in-process so it survives service restarts."""
+    InfluxDB. Returns None on any error (extend_decision then HOLDS the previous
+    answer). Queried from the DB rather than accumulated in-process so it
+    survives service restarts.
+
+    The raw BH1750 reads low against ground truth (Photone), so the integral is
+    scaled by the adopted k from the calibration pipeline — read live from
+    `k_adopted`, never hardcoded here, so a recalibration lands in one place.
+
+    ponytail: ONE scalar, not the per-cell canonical join. `mixed/none` is ~94%
+    of the daily integral (measured 2026-09-08: 716k of 763k lux-cells), and the
+    daylight cell's adopted k is still the contaminated 0.209968 — Phase D
+    blocker B2 — which would discount real daylight 5x inside the control loop.
+    A per-cell join here would also be the THIRD copy of the canonical join
+    (kconsume.py, k-migration.json). Upgrade to the real join when B2 clears and
+    light.py migrates (Phase D item 6)."""
     if not INFLUX_TOKEN:
         return None
     flux = (
         'import "timezone"\n'
         f'option location = timezone.location(name: "{TZ_NAME}")\n'
+        # adopted lux multiplier; no row -> query errors -> None -> hold last
+        f'k = (from(bucket: "{INFLUX_BUCKET}")\n'
+        '  |> range(start: -90d)\n'
+        '  |> filter(fn: (r) => r._measurement == "k_adopted"'
+        ' and r.target == "bh1750_lux_main" and r.source == "mixed"'
+        ' and r.regime == "none" and r._field == "value")\n'
+        '  |> last() |> findRecord(fn: (key) => true, idx: 0))._value\n'
         f'from(bucket: "{INFLUX_BUCKET}")\n'
         '  |> range(start: -25h)\n'
         '  |> filter(fn: (r) => r._measurement == "air" and r._field == "lux"'
         f' and r.device == "{SENSOR}")\n'
-        '  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n'
+        '  |> map(fn: (r) => ({ r with _value: r._value * k / 54.0 }))\n'
         '  |> aggregateWindow(every: 1d, fn: (tables=<-, column) =>'
         ' tables |> integral(unit: 1s), createEmpty: false)\n'
         '  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n'
@@ -445,11 +473,11 @@ def selftest():
     assert at(19, 0, 20000, ho=ext) == "OFF", "19:00 extended but bright (>15000) → OFF"
 
     # evening top-up: target comparison + hold-last on a failed DLI query
-    assert extend_decision(3.40, 4.0, False) is True, "below target → top up"
-    assert extend_decision(4.00, 4.0, True) is False, "at target (not <) → stop"
-    assert extend_decision(4.20, 4.0, True) is False, "past target → stop"
-    assert extend_decision(None, 4.0, True) is True, "query failed → hold ON, don't flap off"
-    assert extend_decision(None, 4.0, False) is False, "query failed → hold OFF too"
+    assert extend_decision(13.40, 15.7, False) is True, "below target → top up"
+    assert extend_decision(15.70, 15.7, True) is False, "at target (not <) → stop"
+    assert extend_decision(16.50, 15.7, True) is False, "past target → stop"
+    assert extend_decision(None, 15.7, True) is True, "query failed → hold ON, don't flap off"
+    assert extend_decision(None, 15.7, False) is False, "query failed → hold OFF too"
 
     # daily checkpoint (pure parts): once per local day, at/after 03:00
     from datetime import date
