@@ -8,6 +8,7 @@
     ./thermal_view.py ... --flipv --fliph          # fix the image orientation
     ./thermal_view.py ... --roi 8,12,16,20         # measure ONE component
     ./thermal_view.py ... --watch --log soak.csv   # log that region over time
+    ./thermal_view.py ... --roi 8,12,16,20 --centroid   # sub-pixel target position
 
 --roi r0,c0,r1,c1 (inclusive) is how this becomes an instrument rather than a
 picture. Aimed at the board, the frame contains the SoC, the regulator and the
@@ -17,6 +18,13 @@ after a change. Point it, read `hot @ r,c` to find the part, then box it.
 
 --log appends a CSV row per refresh (time, Ta, frame min/max, ROI min/mean/max)
 so a before/after soak is a diff of two files, not two remembered numbers.
+
+--centroid answers a different question from `hot @ r,c`: not "which pixel is
+hottest" but "where IS the warm thing", to a fraction of a pixel. That is the
+Phase 3 measurement — the servos' repeatability lands at about one thermal
+pixel, so an integer answer cannot resolve it. It prints only; the acceptance
+runs record raw frames instead (scan_repeat.py), so the CSV format above is
+unchanged and old soak logs stay comparable.
 
 32x24 is small enough that a terminal IS a reasonable display: two rows of
 pixels per line of text (upper/lower half-blocks) gives a square-ish 32x12
@@ -34,6 +42,7 @@ corner, see where it lands, and the right flags are the answer — put THAT in
 the firmware only once hardware has settled it, not as a guess today.
 """
 import json
+import statistics
 import sys
 import urllib.request
 
@@ -100,7 +109,87 @@ def roi_stats(px, cols, box):
     return min(vals), sum(vals) / len(vals), max(vals), len(vals)
 
 
-def show(doc, png=None, flipv=False, fliph=False, roi=None, log=None):
+# --- sub-pixel target position ----------------------------------------------
+# `hot @ r,c` above is an integer argmax: it answers "which pixel is hottest",
+# which is the right question when hunting a hot component and the WRONG one
+# when measuring whether the mechanism returns to the same place. MG996R's
+# +-1-2 deg maps to roughly one thermal pixel (1.72 deg/px pan, 1.46 deg/px
+# tilt), so an estimator quantised to whole pixels cannot resolve the very
+# thing Phase 3 exists to measure.
+MIN_CONTRAST_C = 5.0     # below this the "target" is not distinguishable from room
+MIN_SUPPORT_PX = 4       # a support this small is noise, not an object
+
+
+def centroid(px, rows, cols, box=None,
+             min_contrast=MIN_CONTRAST_C, min_support=MIN_SUPPORT_PX):
+    """Intensity-weighted centroid of the warm target -> sub-pixel (r, c).
+
+    Always returns a dict carrying its own validity, never a bare pair: a
+    rejected frame that returned (0, 0) or the frame centre would enter a
+    dataset looking exactly like a measurement.
+    """
+    out = {"ok": False, "reason": "", "r": None, "c": None,
+           "n": 0, "contrast": 0.0, "tbg": 0.0, "tth": 0.0}
+    r0, c0, r1, c1 = box if box else (0, 0, rows - 1, cols - 1)
+    win = [(r, c) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)]
+
+    # Background from the WHOLE frame, not the window: the window is chosen to
+    # contain the target, so its own median is already contaminated by it.
+    tbg = statistics.median(px)
+    kmax = max(win, key=lambda rc: px[rc[0] * cols + rc[1]])
+    tmax = px[kmax[0] * cols + kmax[1]]
+    out["tbg"], out["contrast"] = tbg, tmax - tbg
+    if out["contrast"] < min_contrast:
+        out["reason"] = f"low_contrast:{out['contrast']:.1f}C"
+        return out
+
+    # Half-max ABOVE BACKGROUND. Background-relative because the MLX90640's
+    # Ta-dependent offset moves every pixel together — an absolute threshold
+    # would let the support size drift with room temperature and manufacture
+    # displacement out of nothing. Half-max (~FWHM) because it stays stable
+    # while a cooling target loses contrast.
+    tth = tbg + 0.5 * out["contrast"]
+    out["tth"] = tth
+
+    # 4-connected component containing the peak, NOT every pixel over the
+    # threshold: a second warm object inside the window would otherwise drag
+    # the centroid silently, and nothing in the summary would show it.
+    inwin = lambda r, c: r0 <= r <= r1 and c0 <= c <= c1
+    seen, stack, sup = {kmax}, [kmax], []
+    while stack:
+        r, c = stack.pop()
+        sup.append((r, c))
+        for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+            if (nr, nc) in seen or not inwin(nr, nc):
+                continue
+            if px[nr * cols + nc] >= tth:
+                seen.add((nr, nc))
+                stack.append((nr, nc))
+    out["n"] = len(sup)
+    if out["n"] < min_support:
+        out["reason"] = f"support_too_small:{out['n']}px"
+        return out
+
+    # Weight is height ABOVE THE THRESHOLD, not above background. This is what
+    # makes the estimate sub-pixel stable: a pixel flickering across the
+    # threshold enters and leaves with weight ~0, contributing a continuous
+    # change instead of a step. Weighting by (T - tbg) would make that same
+    # pixel arrive already carrying half the contrast.
+    wsum = sr = sc = 0.0
+    for r, c in sup:
+        w = px[r * cols + c] - tth
+        wsum += w
+        sr += w * r
+        sc += w * c
+    if wsum <= 0:
+        out["reason"] = "zero_weight"
+        return out
+    out["ok"], out["reason"] = True, "ok"
+    out["r"], out["c"] = sr / wsum, sc / wsum
+    return out
+
+
+def show(doc, png=None, flipv=False, fliph=False, roi=None, log=None, cen=False):
     f = doc.get("frame")
     if not f:
         s = doc.get("stream", {})
@@ -127,6 +216,17 @@ def show(doc, png=None, flipv=False, fliph=False, roi=None, log=None):
         r0, c0, r1, c1 = box
         print(f"roi r{r0}-{r1} c{c0}-{c1} ({n}px)   "
               f"min {rmin:.2f}  mean {rmean:.2f}  max {rmax:.2f} C")
+    if cen:
+        # A live sub-pixel aiming instrument: watch this number sit still with
+        # the servos untouched and you are reading the noise floor with your
+        # own eyes, before committing to a long run that assumes it is small.
+        cd = centroid(px, rows, cols, box)
+        if cd["ok"]:
+            print(f"centroid r{cd['r']:.2f} c{cd['c']:.2f}   "
+                  f"{cd['n']}px over {cd['tth']:.2f} C   "
+                  f"contrast {cd['contrast']:.2f} C")
+        else:
+            print(f"centroid --  ({cd['reason']})")
     if log:
         # header only when the file is new, so --log can append across runs and
         # a before/after soak stays one continuous, self-describing series
@@ -172,14 +272,15 @@ def main(argv):
     src = argv[0]
     png, roi, log = opt("--png"), opt("--roi"), opt("--log")
     flipv, fliph = "--flipv" in argv, "--fliph" in argv
+    cen = "--centroid" in argv
     if "--watch" not in argv:
-        return show(fetch(src), png, flipv, fliph, roi, log)
+        return show(fetch(src), png, flipv, fliph, roi, log, cen)
     import time
     try:
         while True:
             print("\x1b[H\x1b[J", end="")   # home + clear, so it redraws in place
             try:
-                show(fetch(src), png, flipv, fliph, roi, log)
+                show(fetch(src), png, flipv, fliph, roi, log, cen)
             except OSError as e:
                 # a dropped frame or a Wi-Fi hiccup must not end a watch that
                 # is meant to run while somebody moves things in front of the
