@@ -64,8 +64,14 @@ def correct_sample(ts, value, target, device, station_map, cells, adopted):
     cell = cells.get((loc, floor_cell(ts))) if loc else None
     if cell is None or cell["source"] == "unknown":
         return value * seed, seed, "unknown"
-    if cell["source"] == "mixed":
-        return value * seed, seed, "mixed"       # v1 is honest about mixed light
+    if cell["source"] == "mixed" and (cell["source"], cell["regime"]) not in UNIVERSE[target]:
+        # Mixed light is uncorrectable for as7341_ppfd — its k is only k_observed,
+        # moving with the lamp/daylight ratio instead of describing the instrument.
+        # For the lux targets it IS in the legal matrix (see UNIVERSE), because
+        # lux-against-lux does not involve a spectral conversion. This check used
+        # to be unconditional and sat BEFORE the matrix lookup, so it silently
+        # overrode the matrix for every target.
+        return value * seed, seed, "mixed"
     if (cell["source"], cell["regime"]) not in UNIVERSE[target]:
         return value * seed, seed, "out-of-matrix"
     key = (target, cell["source"], cell["regime"], cell[EPOCH_FIELD[target]])
@@ -128,6 +134,9 @@ def selftest():
          "epoch": "e0-legacy", "value": 1.0, "adoption_state": "seed"},
         {"target": "bh1750_lux_ref", "source": "daylight", "regime": "diffuse",
          "epoch": "bh1750_lux_ref-e2", "value": 1.2, "adoption_state": "adopted"},
+        # mixed is a legal lux bucket from 2026-09-07, so it carries an adopted row
+        {"target": "bh1750_lux_main", "source": "mixed", "regime": "none",
+         "epoch": "e0-legacy", "value": 3.93, "adoption_state": "adopted"},
     ])
 
     # normal correction: non-grid ts truncates into its cell, k applies at raw ts
@@ -143,10 +152,18 @@ def selftest():
         c, k, f = correct_sample(T, 1000.0, "bh1750_lux_main", "livingroom",
                                  smap, cs, adopted)
         assert (c, k, f) == (1000.0, 1.0, "unknown")
-    # mixed: honest non-correction with its own flag
+    # mixed is now asymmetric, and that asymmetry is the contract:
+    #   lux targets  -> in the legal matrix, so the adopted k applies
+    #   as7341_ppfd  -> still an honest non-correction, flagged "mixed"
+    # Before 2026-09-07 the short-circuit was unconditional and ran BEFORE the
+    # matrix lookup, so it overrode the matrix for every target — which left 84%
+    # of the integrated lux uncorrected no matter what UNIVERSE said.
     c, k, f = correct_sample(T, 1000.0, "bh1750_lux_main", "livingroom", smap,
                              cell("mixed", "none"), adopted)
-    assert f == "mixed" and c == 1000.0
+    assert f is None and k != 1.0, f"lux_main mixed must be corrected, got {(c, k, f)}"
+    c, k, f = correct_sample(T, 1000.0, "as7341_ppfd", "livingroom", smap,
+                             cell("mixed", "none"), adopted)
+    assert f == "mixed" and k == SEEDS["as7341_ppfd"], "as7341 mixed stays uncorrected"
     # out-of-matrix: the ref target has no lamp bucket; "none" cells match nothing
     for src, reg in (("lamp", "none"), ("none", "none")):
         c, k, f = correct_sample(T, 1000.0, "bh1750_lux_ref", "livingroom",

@@ -52,7 +52,18 @@ E0 = "e0-legacy"
 # epoch starts as an honest unvalidated row instead of silently not existing.
 UNIVERSE = {
     "bh1750_lux_ref":  (("daylight", "diffuse"), ("daylight", "direct")),
-    "bh1750_lux_main": (("daylight", "diffuse"), ("daylight", "direct"), ("lamp", "none")),
+    # (mixed, none) is legal for the LUX targets and not for as7341_ppfd, and the
+    # asymmetry is the point. A lux bucket measures lux against lux — the same
+    # physical quantity on both sides, so an instrument's error does not stop
+    # being an instrument's error because two light sources are mixed. as7341's
+    # bucket measures ppfd against a counts integral, and THAT conversion is
+    # spectral, so a mixed k there is only k_observed: it moves with the
+    # lamp/daylight ratio rather than describing the instrument
+    # (PHOTONE-CAL-PLAN.md). Mixed cells carry 84% of the integrated lux here, so
+    # excluding them from the lux targets left the sensor's ~4x under-read
+    # uncorrected almost everywhere.
+    "bh1750_lux_main": (("daylight", "diffuse"), ("daylight", "direct"), ("lamp", "none"),
+                        ("mixed", "none")),
     "as7341_ppfd":     (("daylight", "diffuse"), ("daylight", "direct"), ("lamp", "none")),
 }
 EMPTY_REV = hashlib.sha256(b"").hexdigest()[:12]   # the evidence_rev of no evidence

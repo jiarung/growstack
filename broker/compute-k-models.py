@@ -622,6 +622,13 @@ from(bucket: "sensors")
             continue
         if (b["source"], b["regime"]) not in kmodels.UNIVERSE[b["target"]]:
             continue
+        if b["source"] == "mixed":
+            # Mixed is in the lux targets' legal matrix now, but it is still not
+            # published retained. The hazard the comment above describes is
+            # unchanged: a new epoch that has not yet seen mixed evidence would
+            # leave the previous epoch's payload sitting on the topic with nothing
+            # to overwrite it. Influx + the panels carry it; MQTT does not.
+            continue
         key = (b["target"], b["source"], b["regime"], b["epoch"])
         arow, _w = adopted_by_key[key]
         adopted_node = dict(arow, adopted_at=rfc3339(arow["adopted_at"]),
