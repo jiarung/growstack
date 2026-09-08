@@ -41,7 +41,7 @@
     "x": 0,
     "y": 0
    },
-   "description": "Raw readings plotted where they actually fall in time, not bucketed into days. Weighing happens when someone is free, not on a schedule, and a pot also drifts through the day with the plant's own respiration — so a daily bucket imposed a grid the measurements do not have and hid both effects. A watering shows here as a step up, drying as the slope between steps.\n\n背後的長條是當天的 DLI（右軸，lux/54），從 air.json 的「每日一值 vs DLI」面板搬過來的**概念** —— 但沒有搬它的做法。那張把重量壓成每日中位數，正是本面板上面那段話反對的日分桶；水量的問題是「這株今天喝了多少」，而分桶會把答案本身抹掉。\n\n所以重量維持原始時間戳，只把光量疊在後面。要看的是：**亮的日子，兩次秤重之間的下滑斜率是不是比較陡。** 那是耗水對光反應的直接證據，不需要先算出任何速率。\n\nDLI 用 lux/54 而不是光譜法，因為那是燈控實際依據的同一條線（`DLI_TARGET=4.0`），而光譜法目前對還在漂的 CAL 是線性相依的 —— 見 air.json 的 DLI 面板。",
+   "description": "Raw readings plotted where they actually fall in time, not bucketed into days. Weighing happens when someone is free, not on a schedule, and a pot also drifts through the day with the plant's own respiration — so a daily bucket imposed a grid the measurements do not have and hid both effects. A watering shows here as a step up, drying as the slope between steps.\n\n背後的長條是當天的 DLI（右軸，lux/54），從 air.json 的「每日一值 vs DLI」面板搬過來的**概念** —— 但沒有搬它的做法。那張把重量壓成每日中位數，正是本面板上面那段話反對的日分桶；水量的問題是「這株今天喝了多少」，而分桶會把答案本身抹掉。\n\n所以重量維持原始時間戳，只把光量疊在後面。要看的是：**亮的日子，兩次秤重之間的下滑斜率是不是比較陡。** 那是耗水對光反應的直接證據，不需要先算出任何速率。\n\nDLI 用 lux×k/54 而不是光譜法，因為那是燈控實際依據的同一條線（`DLI_TARGET`，目前 20；k 自 `k_adopted` 即時讀取），而光譜法目前對還在漂的 CAL 是線性相依的 —— 見 air.json 的 DLI 面板。",
    "fieldConfig": {
     "defaults": {
      "unit": "massg",
@@ -112,7 +112,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"DLI (mol/m²/day)\")"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\n// Scaled by the adopted k from the calibration pipeline — read live from\n// k_adopted, never hardcoded, so this panel and light.py:todays_dli() move\n// together. Before 2026-09-08 both integrated bare lux/54 and both were ~3.9x\n// low against Photone; the target was tuned on that same shrunken scale, so it\n// was self-consistent and wrong.\nk = (from(bucket: \"sensors\")\n  |> range(start: -90d)\n  |> filter(fn: (r) => r._measurement == \"k_adopted\" and r.target == \"bh1750_lux_main\"\n       and r.source == \"mixed\" and r.regime == \"none\" and r._field == \"value\")\n  |> last() |> findRecord(fn: (key) => true, idx: 0))._value\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value * k / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"DLI (mol/m²/day)\")"
     }
    ]
   },
@@ -953,7 +953,7 @@
     "x": 0,
     "y": 58
    },
-   "description": "Daily light integral from the BH1750, lux/54. This is the figure the light controller tops up against (DLI_TARGET, default 4.0), so it is the one to read when asking whether the evening top-up did its job. Absolute scale is not trustworthy — lux/54 is a daylight conversion applied to an LED — so read it relatively.\n\n橫線是 `DLI_TARGET`（broker/.env，目前 4）。低於目標的長條是橘色，達標是綠色 —— 所以「今天補夠了沒」一眼就看得出來，不必再去對照關燈時刻那張。\n\n**細線是其中免費的日光**（遮燈的 lux_ref 積分）。總量減去它就是燈實際做的工。兩者分開之後才看得出達標是靠天還是靠電。\n\n這張要回答的實際問題是：**今天負擔得起一次停燈校準嗎。** 過中天停燈 30 分鐘約花 0.165 mol（實測燈約 0.33 mol/h），所以長條高出橫線 0.165 以上，那天就有餘裕。\n\n先前根據「每天都跑到 20:30 上限」推論補光是赤字 —— 2026-08-18~23 的實測推翻了它：六天有三天達標。這張面板就是為了不要再用印象判斷這件事。",
+   "description": "Daily light integral from the BH1750, lux x k / 54, where k is the adopted multiplier from the calibration pipeline (read live from k_adopted, never hardcoded). This is the figure the light controller tops up against (DLI_TARGET, default 20), so it is the one to read when asking whether the evening top-up did its job. Before 2026-09-08 both this panel and the controller integrated bare lux/54, ~3.9x low against Photone. k fixes the sensor's under-read; it does NOT fix the 54 lm/umol daylight constant being applied to an LED, so the absolute scale is still not fully trustworthy.\n\n橫線是 `DLI_TARGET`（broker/.env，目前 20）。低於目標的長條是橘色，達標是綠色 —— 所以「今天補夠了沒」一眼就看得出來，不必再去對照關燈時刻那張。\n\n**細線是其中免費的日光**（遮燈的 lux_ref 積分，乘上它自己的 `k_adopted[bh1750_lux_ref/daylight/diffuse]` —— 兩顆感測器各有各的 k，不共用）。總量減去它就是燈實際做的工。兩者分開之後才看得出達標是靠天還是靠電。\n\n這張要回答的實際問題是：**今天負擔得起一次停燈校準嗎。** 過中天停燈 30 分鐘約花 0.65 mol（實測燈約 1.30 mol/h，新尺度），所以長條高出橫線 0.65 以上，那天就有餘裕。\n\n先前根據「每天都跑到 20:30 上限」推論補光是赤字 —— 2026-08-18~23 的實測推翻了它：六天有三天達標（那是在舊尺度、目標 4.0 下的判定）。這張面板就是為了不要再用印象判斷這件事。",
    "fieldConfig": {
     "defaults": {
      "unit": "none",
@@ -973,7 +973,7 @@
        },
        {
         "color": "green",
-        "value": 4.0
+        "value": 20
        }
       ]
      }
@@ -1054,7 +1054,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"DLI lux est.\")"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\n// Scaled by the adopted k from the calibration pipeline — read live from\n// k_adopted, never hardcoded, so this panel and light.py:todays_dli() move\n// together. Before 2026-09-08 both integrated bare lux/54 and both were ~3.9x\n// low against Photone; the target was tuned on that same shrunken scale, so it\n// was self-consistent and wrong.\nk = (from(bucket: \"sensors\")\n  |> range(start: -90d)\n  |> filter(fn: (r) => r._measurement == \"k_adopted\" and r.target == \"bh1750_lux_main\"\n       and r.source == \"mixed\" and r.regime == \"none\" and r._field == \"value\")\n  |> last() |> findRecord(fn: (key) => true, idx: 0))._value\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value * k / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"DLI lux est.\")"
     },
     {
      "refId": "B",
@@ -1062,7 +1062,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\n// lux_ref is the shielded BH1750, so this is daylight alone — the part of the\n// day's total that costs nothing. total minus this is what the lamp had to do.\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux_ref\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"其中免費的日光\")"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\n// Scaled by the adopted k from the calibration pipeline — read live from\n// k_adopted, never hardcoded, so this panel and light.py:todays_dli() move\n// together. Before 2026-09-08 both integrated bare lux/54 and both were ~3.9x\n// low against Photone; the target was tuned on that same shrunken scale, so it\n// was self-consistent and wrong.\nk = (from(bucket: \"sensors\")\n  |> range(start: -90d)\n  |> filter(fn: (r) => r._measurement == \"k_adopted\" and r.target == \"bh1750_lux_ref\"\n       and r.source == \"daylight\" and r.regime == \"diffuse\" and r._field == \"value\")\n  |> last() |> findRecord(fn: (key) => true, idx: 0))._value\n\n// lux_ref is the shielded BH1750, so this is daylight alone — the part of the\n// day's total that costs nothing. total minus this is what the lamp had to do.\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux_ref\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value * k / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"其中免費的日光\")"
     }
    ]
   },
