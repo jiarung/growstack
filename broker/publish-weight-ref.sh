@@ -37,11 +37,16 @@
 # completed cycle in 60d drops from % to the absolute line until it earns one;
 # regulars with normal watering cadence all carry 循環 basis and keep their %.)
 #
-# DEPLOY ORDER: flash the station firmware that understands provisional AND
-# name-only refs BEFORE first running this version. Old firmware drops payloads
-# missing sat_g/dry_g but keeps any previously cached full ref in RAM until
-# reboot — a demotion would leave it showing a stale % (retained clearing can't
-# fix an offline station either; ordering is the real fix, one station, ours).
+# DEPLOY ORDER, 2026-09-09 — this version is ADDITIVE, so the server may go first.
+# sat_g/dry_g keep their exact meaning and presence rules; anchor_ts/anchor_g/span_g
+# ride alongside and ArduinoJson ignores unknown keys. The one new tier, first_anchor,
+# ships WITHOUT sat_g, which the deployed firmware already treats as name-only — i.e.
+# exactly what those pots show today.
+#   The FOLLOW-UP that removes sat_g/dry_g/anchor_day must go AFTER the flash, for
+# the original reason: old firmware drops payloads missing sat_g/dry_g but keeps any
+# previously cached full ref in RAM until reboot — a demotion would leave it showing
+# a stale % (retained clearing can't fix an offline station either; ordering is the
+# real fix, one station, ours).
 #
 # Retained lifecycle: after a SUCCESSFUL query round, this round's valid set is
 # authoritative — any previously retained ref not in it (plant re-tagged, data
@@ -88,7 +93,13 @@ assert "v.timeRange" not in q, "panel 10 now uses dashboard time variables — c
 # full refs for plants whose span no longer qualifies.
 span_filter = "|> filter(fn: (r) => r.span > 5.0)"
 assert span_filter in q, "panel 10's span filter moved/changed — update publish-weight-ref.sh"
-print(q.replace(span_filter, ""))
+# Same idea for the first-anchor filter: the panel hides pots whose anchor is only
+# their FIRST weighing (not a watering), because a depletion% against it would be
+# fabricated. Here they must come through, as their own tier, so the OLED can show
+# the honest grams and mark them "1st".
+first_filter = "|> filter(fn: (r) => r.afirst == 0.0)"
+assert first_filter in q, "panel 10's first-anchor filter moved/changed — update publish-weight-ref.sh"
+print(q.replace(span_filter, "").replace(first_filter, ""))
 PY
 )"
 
@@ -129,16 +140,14 @@ if not rows:
 
 untagged = []
 published = set()          # plants that got a full/provisional ref this round
-unwatered = []          # no watering event yet -> no sat -> no ref
+unwatered = []          # sat_g absent — since the first-weighing fallback landed
+                        # this is NO LONGER the new-pot state (every pot with any
+                        # reading gets an anchor). It now means schema drift. Kept
+                        # as a non-fatal guard only because crashing here stopped
+                        # EVERY ref from publishing for three runs on 2026-08-31.
+first_anchored = []     # anchor is the pot's FIRST weighing, not a watering
 for r in sorted(rows, key=lambda r: r["plant_id"]):
     plant = r["plant_id"]
-    # dry_g is the panel's trig_g — the weight this pot reaches when it has given
-    # back as much water as it ever has. The firmware's (sat-w)/(sat-dry) then IS
-    # the panel's depletion%, so src/ needs no change for this to take effect.
-    # A pot with no watering event on record has no saturation reference at all
-    # (the panel joins satW on the anchor, so sat is null). That is the normal
-    # state of a pot added or repotted today — not a schema break. Crashing on it
-    # stopped EVERY ref from publishing for three runs on 2026-08-31.
     if not (r.get("sat_g") or "").strip():
         unwatered.append(plant)
         continue
@@ -147,12 +156,27 @@ for r in sorted(rows, key=lambda r: r["plant_id"]):
     except (KeyError, ValueError):
         print(f"bad row for {plant}: {r} — schema changed?", file=sys.stderr)
         sys.exit(1)
-    try:                                   # absent span -> provisional tier below
-        dry = float(r["trig_g"])
+    # anchor_g and first_anchor DECIDE THE PAYLOAD SHAPE, so schema drift in either
+    # must abort the round rather than silently mis-tier every pot.
+    try:
+        anchor_g = float(r["anchor_g"])
+        first = float(r["first_anchor"]) > 0.5
     except (KeyError, ValueError):
-        dry = float("nan")
-    if not math.isfinite(sat):
-        print(f"bad values for {plant}: sat={sat}", file=sys.stderr)
+        print(f"bad row for {plant}: missing anchor_g/first_anchor — panel schema changed?",
+              file=sys.stderr)
+        sys.exit(1)
+    # span_g is read directly (was: the panel's trig_g). dry_g is then DERIVED, so
+    # this script's tier gate and the firmware's own `sat - dry > 5` guard are
+    # provably the same number instead of two roundings that can differ by 0.1 g.
+    # The second round() is not cosmetic: round(2465.7,1) - round(164.3,1) is
+    # 2301.3999999999996, and json.dumps would ship all of it.
+    try:                                   # absent span -> provisional tier below
+        span = float(r["span_g"])
+    except (KeyError, ValueError):
+        span = float("nan")
+    dry = round(round(sat, 1) - round(span, 1), 1) if math.isfinite(span) else float("nan")
+    if not math.isfinite(sat) or not math.isfinite(anchor_g):
+        print(f"bad values for {plant}: sat={sat} anchor_g={anchor_g}", file=sys.stderr)
         sys.exit(1)
     # tier decision: FULL only for a span EARNED by a completed dry-down cycle
     # (basis == "循環") — a p10-basis span over a short history errs small and
@@ -165,29 +189,59 @@ for r in sorted(rows, key=lambda r: r["plant_id"]):
     if basis not in ("循環", "暫用 p10"):
         print(f"bad basis for {plant}: {basis!r} — panel schema changed?", file=sys.stderr)
         sys.exit(1)
-    full = basis == "循環" and math.isfinite(dry) and round(sat, 1) - round(dry, 1) > 5.0
-    # anchor_day is decorative — the firmware ignores it (src/weight_ref.cpp reads
-    # only sat_g/dry_g). It is derived from the panel's `days` rather than carried
-    # as its own column because that pivot's value column is float, and unioning a
-    # time into it is a type error. days = (now()-anchor)/86400e9, so this inverts
-    # to sub-millisecond accuracy — the date truncation is exact. Taipei is a fixed
-    # UTC+8 with no DST, so no tz database is needed (cron's python3 may lack one).
+    # `not first` is unreachable by construction (a completed cycle REQUIRES a >10 g
+    # jump, which is exactly a watering anchor) — one token, and it makes the
+    # invariant explicit instead of implied.
+    full = (not first) and basis == "循環" and math.isfinite(span) and round(span, 1) > 5.0
+    # anchor_ts is what the OLED actually uses: it recomputes the age live from
+    # time(nullptr), so the displayed "3.6D" never goes stale between hourly runs.
+    # anchor_day stays for human eyes in --dry-run and for the deployed firmware's
+    # payload shape; it is decorative to src/ either way.
+    # Both derive from the panel's `days` rather than a time column because that
+    # pivot's value column is float and unioning a time into it is a type error.
+    # days = (now()-anchor)/86400e9, so this inverts to sub-millisecond accuracy.
+    # Taipei is a fixed UTC+8 with no DST, so no tz database is needed (cron's
+    # python3 may lack one).
     try:
-        anchor = (dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
-                  - dt.timedelta(days=float(r["days"]))).date().isoformat()
+        anchor_dt = (dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
+                     - dt.timedelta(days=float(r["days"])))
+        anchor = anchor_dt.date().isoformat()
+        anchor_ts = int(anchor_dt.timestamp())
     except (KeyError, ValueError):
         anchor = ""
+        anchor_ts = None
     uids = plant_to_uids.get(plant)
     if not uids:
         untagged.append(plant)
         continue
-    if full:
-        payload = json.dumps({"plant_id": plant, "sat_g": round(sat, 1),
-                              "dry_g": round(dry, 1), "anchor_day": anchor})
+    # Legacy keys (sat_g/dry_g/anchor_day) come FIRST so the --dry-run diff against
+    # the currently retained set stays minimal and reviewable. They exist only for
+    # the firmware that is still flashed; the follow-up commit drops them.
+    if first:
+        # No sat_g on purpose: the deployed firmware reads that as name-only and
+        # draws no ref line — identical to what these pots show today. New firmware
+        # sees first_anchor and marks the line "1st".
+        d = {"plant_id": plant, "first_anchor": True, "anchor_day": anchor,
+             "anchor_g": round(anchor_g, 1)}
+        first_anchored.append(plant)
+    elif full:
+        d = {"plant_id": plant, "sat_g": round(sat, 1), "dry_g": round(dry, 1),
+             "anchor_day": anchor, "anchor_g": round(anchor_g, 1),
+             "span_g": round(span, 1)}
     else:
-        payload = json.dumps({"plant_id": plant, "sat_g": round(sat, 1),
-                              "provisional": True, "anchor_day": anchor})
+        d = {"plant_id": plant, "sat_g": round(sat, 1), "provisional": True,
+             "anchor_day": anchor, "anchor_g": round(anchor_g, 1)}
         print(f"provisional (span not yet earned): {plant}", file=sys.stderr)
+    if anchor_ts is not None:
+        d["anchor_ts"] = anchor_ts
+    payload = json.dumps(d)
+    # The size limit lives on the far side of the wire (src/weight_ref.cpp
+    # PAYLOAD_MAX = 192): over it the station drops the message SILENTLY and keeps
+    # whatever it had cached. Check here, where it can still be a log line.
+    if len(payload.encode()) > 192:
+        print(f"WARNING: {plant} payload {len(payload.encode())} B > 192 B — the "
+              f"station will drop it silently and keep its stale cached ref",
+              file=sys.stderr)
     for uid in uids:
         print(f"{prefix}/{uid}\t{payload}")
     published.add(plant)
@@ -205,9 +259,13 @@ for plant in name_only:
 if name_only:
     print("name-only (no watering anchor yet): " + ", ".join(name_only), file=sys.stderr)
 
+if first_anchored:
+    print("first-weighing anchor (no watering on record): " + ", ".join(first_anchored),
+          file=sys.stderr)
 if unwatered:
-    print(f"note: {len(unwatered)} pot(s) with no watering event yet, no ref: "
-          + ", ".join(unwatered), file=sys.stderr)
+    print(f"WARNING: {len(unwatered)} pot(s) reached the plan with an EMPTY sat_g. "
+          f"Since the first-weighing fallback this should be impossible — suspect "
+          f"panel 10 schema drift, not new pots: " + ", ".join(unwatered), file=sys.stderr)
 if untagged:
     print(f"note: {len(untagged)} retired id(s) with history but no tag, no ref published: "
           + ", ".join(untagged), file=sys.stderr)

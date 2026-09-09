@@ -427,31 +427,54 @@ review step before any `CAL` is actually adopted.
 ## Weigh-station reference values (cron)
 
 `publish-weight-ref.sh` gives the station's OLED the figure it shows while you
-hold a pot: how far this plant has fallen from its last full watering. It writes
-one retained MQTT message per tag, in one of three tiers —
+hold a pot: how long since this plant was last watered, how many grams it has
+lost since, and how far through its usual dry-down that is. It writes one
+retained MQTT message per tag, in one of four tiers —
 
 ```
-full        monitor-air/ref/weight/<uid>  {"plant_id":…,"sat_g":…,"dry_g":…,"anchor_day":…}
-provisional monitor-air/ref/weight/<uid>  {"plant_id":…,"sat_g":…,"provisional":true,"anchor_day":…}
-name-only   monitor-air/ref/weight/<uid>  {"plant_id":…,"name_only":true}
+full         {"plant_id":…,"anchor_ts":…,"anchor_g":…,"span_g":…}
+provisional  {"plant_id":…,"anchor_ts":…,"anchor_g":…}
+first-anchor {"plant_id":…,"anchor_ts":…,"anchor_g":…,"first_anchor":true}
+name-only    {"plant_id":…,"name_only":true}
 ```
+
+(Until the station is reflashed every non-name-only payload also carries the
+legacy `sat_g` / `dry_g` / `anchor_day`; see DEPLOY ORDER in the script.)
 
 Every uid in tag-map.json always has a retained ref. **name-only** is the floor:
-a mapped pot that has never been watered on the scale — nothing honest to say
-about water yet, but the OLED still greets it by name instead of a raw UID.
-Tiers upgrade in place as the plant earns them (first scale-witnessed watering
-creates the anchor → provisional; first completed dry-down → full).
+a mapped pot with no weight readings at all — nothing honest to say, but the OLED
+still greets it by name instead of a raw UID. Tiers upgrade in place as the plant
+earns them.
 
-— where `sat_g` is the plant's peak since **its own** last watering and `dry_g` is
-the weight it reaches once it has given back as much water as it ever has (`sat`
-minus the largest drawdown that plant completed in 60 days). The firmware's
-`(sat-w)/(sat-dry)` is therefore exactly the 該澆水了嗎 panel's depletion%.
+— where `anchor_ts` / `anchor_g` are **the moment and the weight of that plant's
+own last watering**, and `span_g` is the largest drawdown it completed in 60 days.
+The station does the arithmetic and nothing else: age from `time(nullptr)`, grams
+from `w - anchor_g`, and `(anchor_g - w)/span_g` — which is exactly the
+該澆水了嗎 panel's depletion%, because both come from this one Flux.
+
+`anchor_g` replaced `sat_g` (the peak *after* the watering) as the numerator on
+2026-09-09, so the age, the grams and the % are all measured from one point.
+Across 166 completed cycles the two are identical in 157; the change is semantic,
+not a bug fix. The 80/100 thresholds carried over unchanged because leave-one-out
+(130 cycles / 31 plants) put the two within 0.1 of a percentage point on every
+summary statistic.
+
+**first-anchor** is for a pot with no watering on record: its anchor falls back to
+its FIRST weighing, and the OLED marks the line `1st`. That weighing is not a
+saturated weight — the pot may already have been dry — so this tier never carries
+`span_g` and never shows a %.
+
+**Read the grams and the % as coarse.** Both are a difference of two weighing
+sessions, and the scale carries about ±11 g of additive zero drift (measured
+2026-09-09: independent of pot mass, with rain and hygroscopic uptake tested and
+ruled out). On a 35 g span that is a third of the scale. Below ~50% the number is
+mostly drift; above ~85% it is signal.
 
 A **provisional** ref is what a plant gets while its span is not yet EARNED by
 a completed dry-down cycle (the panel's basis ≠ "循環": new pot, repot, or a
-too-small span): the OLED shows the absolute drawdown ("-87g since wtr") and
-**no percentage**, because a % against an unearned span errs toward "drier than
-reality" and nudges overwatering. The plant graduates to a full ref — and the %
+too-small span): the OLED shows the age and the absolute drawdown ("3.6D -87g")
+and **no percentage**, because a % against an unearned span errs toward "drier
+than reality" and nudges overwatering. The plant graduates to a full ref — and the %
 appears — by completing its first real dry-down cycle; nothing to configure. The same payload also carries `plant_id`,
 which the OLED shows as the header ("cactus-03b") instead of the raw tag UID.
 
