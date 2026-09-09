@@ -3,10 +3,13 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <Wire.h>
+#include <errno.h>
 #include <esp_http_server.h>
+#include <stdlib.h>
 #include <math.h>
 #include <time.h>
 
+#include "af.h"
 #include "cam_pins.h"
 #include "camera.h"
 #include "health.h"
@@ -112,7 +115,13 @@ static const char MENU[] =
     "                 ?hex=1 dumps one whole frame for offline analysis\n"
     "GET /i2c/scan    who answers on the shared bus — run BEFORE plugging servos\n"
     "GET /servo       pan/tilt, one axis; no query = report only, nothing moves\n"
-    "                 ?ch=5&us=1500  ch5=PAN ch6=TILT, 600..2400, 0 releases\n";
+    "                 ?ch=5&us=1500  ch5=PAN ch6=TILT, 600..2400, 0 releases\n"
+    "GET /cam/af      lens focus motor; nothing is loaded at boot\n"
+    "                 ?load=1[&bytes=N]  upload the AF firmware (volatile)\n"
+    "                 ?focus=1 run autofocus   ?cmd=0x03 raw command\n"
+    "GET /cam/tune    exposure + orientation at runtime; no query = report\n"
+    "                 ?ae=-2..2  ?gainceil=2|4|8|16|32|64|128  ?bright=-2..2\n"
+    "                 ?hmirror=0|1  ?vflip=0|1\n";
 
 static esp_err_t indexHandler(httpd_req_t* req) {
     char line[192];
@@ -224,6 +233,36 @@ static bool qHas(const char* q, const char* key) {
     return httpd_query_key_value(q, key, v, sizeof(v)) == ESP_OK;
 }
 
+// Strict integer parse: the ENTIRE value must be a number.
+//
+// atoi("foo") is 0, and strtol without an endptr check is no better. A typo'd
+// query then applies a real, valid value and answers "ok" — which is exactly
+// the failure every endpoint in this file claims to prevent by rejecting
+// rather than clamping. It is not merely cosmetic: `/servo?ch=5&us=typo`
+// parses as us=0, and 0 means RELEASE, and a released axis holding a camera
+// against gravity drops it (servo.h, invariant 2). A misspelling must not be
+// able to do that.
+static bool qParse(const char* v, int& out) {
+    if (!v || !*v) return false;
+    char* end = nullptr;
+    errno = 0;
+    const long n = strtol(v, &end, 0);   // base 0: accepts 0x3F as well as 63
+    if (errno == ERANGE || end == v || *end != '\0') return false;
+    if (n < INT32_MIN || n > INT32_MAX) return false;
+    out = (int)n;
+    return true;
+}
+
+// One integer query argument.
+//   0 = key absent (not asked for)   1 = present and clean   -1 = present but garbage
+// The three-way answer matters: "absent" and "garbage" must not collapse into
+// the same silence.
+static int qArg(const char* q, bool haveQ, const char* key, int& out) {
+    char v[16];
+    if (!haveQ || httpd_query_key_value(q, key, v, sizeof(v)) != ESP_OK) return 0;
+    return qParse(v, out) ? 1 : -1;
+}
+
 static int qInt(const char* q, const char* key, int dflt) {
     char v[16];
     if (httpd_query_key_value(q, key, v, sizeof(v)) != ESP_OK) return dflt;
@@ -323,20 +362,18 @@ static esp_err_t powerHandler(httpd_req_t* req) {
     // a plain bool cannot.
     const char *rCpu = "", *rXclk = "", *rTx = "", *rCam = "", *rRest = "";
 
-    if (haveQ && httpd_query_key_value(q, "cpu", v, sizeof(v)) == ESP_OK) {
-        bool ok = power::setCpuMhz(atoi(v));
-        rCpu = ok ? "ok" : "rejected";
-        applied += ok;
+    int n = 0;
+    switch (qArg(q, haveQ, "cpu", n)) {
+        case 1:  { bool ok = power::setCpuMhz(n); rCpu = ok ? "ok" : "rejected"; applied += ok; break; }
+        case -1: rCpu = "rejected (not a number)"; break;
     }
-    if (haveQ && httpd_query_key_value(q, "xclk", v, sizeof(v)) == ESP_OK) {
-        bool ok = cameraSetXclkMhz(atoi(v));
-        rXclk = ok ? "ok" : "rejected";
-        applied += ok;
+    switch (qArg(q, haveQ, "xclk", n)) {
+        case 1:  { bool ok = cameraSetXclkMhz(n); rXclk = ok ? "ok" : "rejected"; applied += ok; break; }
+        case -1: rXclk = "rejected (not a number)"; break;
     }
-    if (haveQ && httpd_query_key_value(q, "tx", v, sizeof(v)) == ESP_OK) {
-        bool ok = power::setWifiTxDbm(atoi(v));
-        rTx = ok ? "ok" : "rejected";
-        applied += ok;
+    switch (qArg(q, haveQ, "tx", n)) {
+        case 1:  { bool ok = power::setWifiTxDbm(n); rTx = ok ? "ok" : "rejected"; applied += ok; break; }
+        case -1: rTx = "rejected (not a number)"; break;
     }
     if (haveQ && httpd_query_key_value(q, "rest", v, sizeof(v)) == ESP_OK) {
         bool ok = cameraSetRestSize(v);
@@ -378,10 +415,12 @@ static esp_err_t rangeHandler(httpd_req_t* req) {
     char q[32];
     if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
         char v[8];
-        if (httpd_query_key_value(q, "n", v, sizeof(v)) == ESP_OK) {
-            n = atoi(v);
-            if (n < 1) n = 1;
-            if (n > 40) n = 40;   // each read paces at the timing budget
+        int want = 0;
+        // Clamping is right HERE (n only sets how long the burst runs, and a
+        // huge value is a nuisance not a hazard) — but garbage still must not
+        // read as a number.
+        if (qArg(q, true, "n", want) == 1) {
+            n = want < 1 ? 1 : (want > 40 ? 40 : want);   // each read paces at the timing budget
         }
     }
     // CHUNKED, with a small line buffer: the httpd task's stack is 4 KB, so a
@@ -836,17 +875,20 @@ static esp_err_t i2cScanHandler(httpd_req_t* req) {
 // why), and a command to the other axis blocks until the previous move has
 // settled — the one-axis-at-a-time current budget, enforced not documented.
 static esp_err_t servoHandler(httpd_req_t* req) {
-    char q[64], v[12];
+    char q[64];
     const bool haveQ = httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK;
     const char* result = "";           // "" = no move attempted this call
-    int ch = -1, us = -1;
+    int ch = 0, us = 0;
 
-    if (haveQ && httpd_query_key_value(q, "ch", v, sizeof(v)) == ESP_OK) ch = atoi(v);
-    if (haveQ && httpd_query_key_value(q, "us", v, sizeof(v)) == ESP_OK) us = atoi(v);
-
-    if (ch >= 0 && us >= 0) {
+    // A garbage value must NOT fall through as a number here: us=0 is the
+    // release command, so `?us=typo` would silently drop a loaded axis.
+    const int gotCh = qArg(q, haveQ, "ch", ch);
+    const int gotUs = qArg(q, haveQ, "us", us);
+    if (gotCh < 0 || gotUs < 0) {
+        result = "rejected (ch/us must be numbers)";
+    } else if (gotCh == 1 && gotUs == 1) {
         result = servo::setUs((uint8_t)ch, (uint16_t)us) ? "ok" : "rejected";
-    } else if (ch >= 0 || us >= 0) {
+    } else if (gotCh == 1 || gotUs == 1) {
         // half a command is a typo, and acting on it would move an axis to a
         // width the caller never named
         result = "rejected (need BOTH ch and us)";
@@ -879,6 +921,120 @@ static esp_err_t servoHandler(httpd_req_t* req) {
     return httpd_resp_send(req, body, m);
 }
 
+// GET /cam/af[?load=1][?focus=1][?cmd=0x03] — the lens's focus motor.
+//
+// Nothing is loaded at boot on purpose. Whether this firmware takes and whether
+// the VCM then moves is the open question; doing it automatically would answer
+// it in a boot log nobody is reading, and a volatile load means a power cycle
+// is always the way back.
+//
+// ?cmd is a raw escape for the same reason /cam/reg has one: which commands
+// this blob honours beyond the two the reference driver issues is empirical,
+// and trying one costs a power cycle at worst.
+static esp_err_t camAfHandler(httpd_req_t* req) {
+    char q[64];
+    const bool haveQ = httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK;
+    const char* did = "";
+
+    char v[12];
+    if (haveQ && httpd_query_key_value(q, "load", v, sizeof(v)) == ESP_OK) {
+        // ?bytes= caps the upload. How much AF program memory a given sensor
+        // actually has is empirical: on this one everything from 0x8FFF up
+        // aliases to one cell, so the full blob silently truncates.
+        int bytes = 0;
+        const int gotBytes = qArg(q, haveQ, "bytes", bytes);
+        if (gotBytes < 0 || bytes < 0) {
+            did = "rejected (bytes must be a non-negative number)";
+        } else {
+            did = af::load(gotBytes == 1 ? (size_t)bytes : 0) ? "load ok" : "load FAILED";
+        }
+    } else if (haveQ && httpd_query_key_value(q, "focus", v, sizeof(v)) == ESP_OK) {
+        did = af::focus() ? "focus ok" : "focus FAILED";
+    } else {
+        int c = 0;
+        switch (qArg(q, haveQ, "cmd", c)) {
+            case 1:  did = (c >= 0 && c <= 0xFF && af::command((uint8_t)c))
+                           ? "cmd ok" : "cmd FAILED"; break;
+            case -1: did = "rejected (cmd must be a number)"; break;
+        }
+    }
+
+    const af::Status st = af::status();
+    char body[640];
+    int m = snprintf(body, sizeof(body),
+        "{\n  \"loaded\": %s,\n  \"did\": \"%s\",  \"note\": \"%s\",\n"
+        "  \"blob_bytes\": %u,\n  \"sent\": %u,\n  \"load_ms\": %lu,\n"
+        "  \"write_fails\": %u,\n  \"verify_fail_at\": %ld,\n"
+        "  \"fw_state_0x3029\": %d,   \"_ready_is\": 112,\n"
+        "  \"cmd_ack_0x3023\": %d,    \"_idle_is\": 0,\n"
+        "  \"sys_reset_0x3000\": %d,  \"_bit5_mcu_bit6_pgm\": true,\n"
+        "  \"clk_en_0x3004\": %d,\n  \"clk_en_0x3005\": %d\n}\n",
+        st.loaded ? "true" : "false", did, st.note,
+        (unsigned)af::blobBytes(), (unsigned)st.sent, (unsigned long)st.load_ms,
+        (unsigned)st.write_fails, (long)st.verify_fail_at,
+        st.fw_state, st.cmd_ack, st.sys_reset,
+        st.clk_en0, st.clk_en1);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, body, m);
+}
+
+// GET /cam/tune[?ae=0&gainceil=32&bright=0&hmirror=0&vflip=0] — exposure and
+// orientation, at runtime. No query = report only.
+//
+// This exists because the opposite did not work. ae_level -2 and
+// GAINCEILING_8X were compiled in during bring-up to tame one bright scene,
+// and every frame since came back nearly black on a dim bench — a value chosen
+// for a room nobody is standing in any more. Runtime knobs keep the question
+// open; a constant closes it silently.
+//
+// Careful when tuning DURING focus work: gain amplifies noise, and noise is
+// high-frequency, so a higher ceiling INFLATES Laplacian sharpness scores.
+// Sharpness numbers are comparable within one sweep, never across a change here.
+static esp_err_t camTuneHandler(httpd_req_t* req) {
+    char q[96];
+    const bool haveQ = httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK;
+    const char *rAe = "", *rGc = "", *rBr = "", *rHm = "", *rVf = "";
+    int applied = 0;
+
+    int n = 0;
+    switch (qArg(q, haveQ, "ae", n)) {
+        case 1:  { bool ok = cameraSetAeLevel(n); rAe = ok ? "ok" : "rejected"; applied += ok; break; }
+        case -1: rAe = "rejected (not a number)"; break;
+    }
+    switch (qArg(q, haveQ, "gainceil", n)) {
+        case 1:  { bool ok = cameraSetGainCeiling(n); rGc = ok ? "ok" : "rejected"; applied += ok; break; }
+        case -1: rGc = "rejected (not a number)"; break;
+    }
+    switch (qArg(q, haveQ, "bright", n)) {
+        case 1:  { bool ok = cameraSetBrightness(n); rBr = ok ? "ok" : "rejected"; applied += ok; break; }
+        case -1: rBr = "rejected (not a number)"; break;
+    }
+    switch (qArg(q, haveQ, "hmirror", n)) {
+        case 1:  { bool ok = cameraSetMirror(n); rHm = ok ? "ok" : "rejected"; applied += ok; break; }
+        case -1: rHm = "rejected (not a number)"; break;
+    }
+    switch (qArg(q, haveQ, "vflip", n)) {
+        case 1:  { bool ok = cameraSetFlip(n); rVf = ok ? "ok" : "rejected"; applied += ok; break; }
+        case -1: rVf = "rejected (not a number)"; break;
+    }
+
+    const CameraTune t = cameraTune();
+    char body[512];
+    int m = snprintf(body, sizeof(body),
+        "{\n  \"sensor_ok\": %s,\n  \"applied\": %d,\n"
+        "  \"ae_level\": %d,       \"_range\": \"-2..2\",\n"
+        "  \"gainceiling_x\": %d,  \"_choices\": \"2,4,8,16,32,64,128\",\n"
+        "  \"gainceiling_raw\": %d,  \"_x_is_0_until_set\": true,\n"
+        "  \"brightness\": %d,\n  \"hmirror\": %d,\n  \"vflip\": %d,\n"
+        "  \"set\": {\"ae\": \"%s\", \"gainceil\": \"%s\", \"bright\": \"%s\", "
+        "\"hmirror\": \"%s\", \"vflip\": \"%s\"}\n}\n",
+        t.ok ? "true" : "false", applied, t.ae_level, t.gainceiling_x,
+        t.gainceiling_raw, t.brightness, t.hmirror, t.vflip,
+        rAe, rGc, rBr, rHm, rVf);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, body, m);
+}
+
 bool endpointsStart() {
     // The table comes FIRST because the config is derived from it.
     // HTTPD_DEFAULT_CONFIG caps max_uri_handlers at 8, and this table sat at
@@ -901,6 +1057,8 @@ bool endpointsStart() {
         {"/thermal/raw", HTTP_GET, thermalRawHandler,  nullptr, false, false, nullptr},
         {"/i2c/scan",    HTTP_GET, i2cScanHandler,     nullptr, false, false, nullptr},
         {"/servo",       HTTP_GET, servoHandler,       nullptr, false, false, nullptr},
+        {"/cam/af",      HTTP_GET, camAfHandler,       nullptr, false, false, nullptr},
+        {"/cam/tune",    HTTP_GET, camTuneHandler,     nullptr, false, false, nullptr},
     };
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();

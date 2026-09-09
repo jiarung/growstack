@@ -55,3 +55,27 @@ bool cameraIsIdle();
 // cycle restores every default, which is what makes experimenting here safe.
 int cameraRegRead(int reg);
 bool cameraRegWrite(int reg, int mask, int value);
+
+// --- runtime sensor tuning (/cam/tune) -------------------------------------
+// Exposure is deliberately NOT fixed at init any more: the previous hard-coded
+// ae_level -2 / GAINCEILING_8X were right for one bring-up scene and wrong
+// everywhere since, which is exactly the failure a runtime knob prevents.
+// All setters reject out-of-range input instead of clamping it.
+struct CameraTune {
+    bool ok = false;
+    int  ae_level = 0;        // -2..2
+    // The multiplier itself (2,4,8,...128), or 0 when it cannot be known —
+    // see cameraTune(). Never a computed guess.
+    int  gainceiling_x = 0;
+    int  gainceiling_raw = -1;   // what the driver's status struct actually holds
+    int  brightness = 0;      // -2..2
+    int  hmirror = 0;
+    int  vflip = 0;
+};
+CameraTune cameraTune();
+
+bool cameraSetAeLevel(int level);      // -2..2
+bool cameraSetGainCeiling(int x);      // 2,4,8,16,32,64,128 (not the enum index)
+bool cameraSetBrightness(int level);   // -2..2
+bool cameraSetMirror(int on);          // 0/1
+bool cameraSetFlip(int on);            // 0/1

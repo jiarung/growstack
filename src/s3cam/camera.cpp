@@ -69,13 +69,22 @@ bool cameraInit() {
     sensor_t* s = esp_camera_sensor_get();
     if (s) {
         sensorPid = s->id.PID;
-        // mild defaults; real tuning is out of scope for phase 1B, but the
-        // bring-up scene (hotel room, bare lamp in frame) blows out at the
-        // stock AE target — bias it down two notches so aiming is usable
+        // Orientation is pinned to a known state; exposure is NOT.
+        //
+        // This used to force ae_level -2 and GAINCEILING_8X. Both were tuned
+        // for one bring-up scene (a hotel room with a bare lamp in frame that
+        // blew out at the stock AE target) and then quietly became permanent —
+        // which is why every frame on a dim bench came back nearly black, with
+        // the gain ceiling refusing to make up the difference. A value chosen
+        // for a scene that no longer exists is worse than no value: it is an
+        // opinion nobody remembers holding.
+        //
+        // So the sensor now keeps the driver's own defaults, and /cam/tune
+        // makes these adjustable at runtime — same reasoning as /power's
+        // cooling knobs: which setting is right is an empirical question, and
+        // baking in a guess is how you stop asking it.
         s->set_vflip(s, 0);
         s->set_hmirror(s, 0);
-        s->set_ae_level(s, -2);        // AE target: darker end of the range
-        s->set_gainceiling(s, GAINCEILING_8X);   // cap AGC noise-pumping in dim corners
         // Buffers are allocated; now drop to the resting size so the sensor is
         // not free-running at 5MP for the entire time nobody is asking.
         if (restSize != STILL_SIZE) s->set_framesize(s, restSize);
@@ -84,6 +93,66 @@ bool cameraInit() {
                   "(actual WxH rides in every capture's JSON)\n",
                   cameraSensorName(), JPEG_QUALITY, cameraRestSizeName());
     return true;
+}
+
+// --- runtime sensor tuning (see /cam/tune) ---------------------------------
+// Every setter REJECTS an out-of-range value rather than clamping it: a
+// silently clamped typo reads as success and sends you looking for a fault in
+// the optics that is not there.
+
+bool cameraSetAeLevel(int level) {
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s || !s->set_ae_level || level < -2 || level > 2) return false;
+    return s->set_ae_level(s, level) >= 0;
+}
+
+bool cameraSetGainCeiling(int x) {
+    // Accepts the multiplier the datasheet talks in (2..128), not the enum
+    // index, so the query string says what it means.
+    int n = -1;
+    for (int i = 0; i <= 6; i++) if (x == (1 << (i + 1))) n = i;
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s || !s->set_gainceiling || n < 0) return false;
+    return s->set_gainceiling(s, (gainceiling_t)n) >= 0;
+}
+
+bool cameraSetBrightness(int level) {
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s || !s->set_brightness || level < -2 || level > 2) return false;
+    return s->set_brightness(s, level) >= 0;
+}
+
+bool cameraSetMirror(int on) {
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s || !s->set_hmirror || (on != 0 && on != 1)) return false;
+    return s->set_hmirror(s, on) >= 0;
+}
+
+bool cameraSetFlip(int on) {
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s || !s->set_vflip || (on != 0 && on != 1)) return false;
+    return s->set_vflip(s, on) >= 0;
+}
+
+CameraTune cameraTune() {
+    CameraTune t;
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s) return t;
+    t.ae_level = s->status.ae_level;
+    // status.gainceiling is only meaningful once something has SET it through
+    // the driver API: the struct records what was written, it does not read the
+    // sensor back. Since init deliberately no longer forces a ceiling, the
+    // field starts as whatever was in memory — 24 on this board, which the
+    // obvious `1 << (n+1)` turns into a confident 33554432. Report 0 for
+    // "not known" instead of a fabricated multiplier, and expose the raw value
+    // so the reader can see WHY it is unknown.
+    t.gainceiling_raw = s->status.gainceiling;
+    t.gainceiling_x = (s->status.gainceiling <= 6) ? (1 << (s->status.gainceiling + 1)) : 0;
+    t.brightness = s->status.brightness;
+    t.hmirror = s->status.hmirror;
+    t.vflip = s->status.vflip;
+    t.ok = true;
+    return t;
 }
 
 const char* cameraSensorName() {
