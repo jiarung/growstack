@@ -188,13 +188,4 @@ size_t rawCopy(uint8_t* dst, size_t cap) {
     return n;
 }
 
-size_t rawLen() {
-    portENTER_CRITICAL(&mux);
-    size_t n = rawFill;
-    portEXIT_CRITICAL(&mux);
-    return n;
-}
-
-size_t rawCapacity() { return RAW_CAP; }
-
 }  // namespace thermal

@@ -65,15 +65,6 @@ bool begin() {
     return true;
 }
 
-void releaseAll() {
-    if (!ok) return;
-    const uint8_t chs[2] = {CH_PAN, CH_TILT};
-    for (int ax = 0; ax < 2; ax++) {
-        pca.setPWM(chs[ax], 0, 4096);   // bit12 = full-off, the datasheet's "no pulse"
-        commanded[ax] = 0;
-    }
-}
-
 bool setUs(uint8_t ch, uint16_t us) {
     const int ax = axisOf(ch);
     // An unwired channel is refused rather than driven: a typo'd number would

@@ -66,9 +66,6 @@ bool setUs(uint8_t ch, uint16_t us);
 // Any other channel number returns US_UNKNOWN: nothing else is wired.
 uint16_t lastUs(uint8_t ch);
 
-// Explicit, never automatic (invariant 2). Both axes go limp.
-void releaseAll();
-
 // Mechanical settling allowance for one move — also the enforced gap between
 // commands to different channels. MG996R spec is ~0.17 s/60deg at 4.8 V; this
 // covers a large move plus overshoot ringing. Phase 3's stop-settle-capture

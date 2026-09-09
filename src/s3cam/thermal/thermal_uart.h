@@ -57,7 +57,5 @@ bool lastAmbientC(float& out);
 void rawArm();                       // start (or restart) filling the buffer
 bool rawBusy();                      // still filling
 size_t rawCopy(uint8_t* dst, size_t cap);   // snapshot into the caller's buffer
-size_t rawLen();
-size_t rawCapacity();
 
 }  // namespace thermal
