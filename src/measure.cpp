@@ -1,7 +1,7 @@
 #include "measure.h"
 #include "sensors.h"       // hx711WindowStats()
 #include "mqtt_client.h"   // mqttPublishMeasureEvent()
-#include "weight_ref.h"    // cached {sat_g, dry_g} per tag -> the "used %" line
+#include "weight_ref.h"    // cached watering anchor per tag -> the ref line
 #include "log.h"
 #include <Adafruit_PN532.h>
 #include <Wire.h>
@@ -9,6 +9,7 @@
 #include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>          // WiFi.RSSI() for the publish-timing diagnostic
+#include <time.h>          // difftime() for the ref line's age
 
 namespace {
 
@@ -91,27 +92,51 @@ void oledTagHeader() {
     else       { oled.print("Tag "); oled.println(curUid); }
 }
 
-// "-165g  used 87%" at y=44 — current weight against the retained watering ref for
-// this tag: grams short of the last full watering, and how much of the observed
-// water span (sat-dry, span>5g guaranteed by the cache) is gone. Drawn only with a
-// calibrated scale — raw counts must never meet a gram baseline — and a cached ref;
-// otherwise the line is simply absent, and the screens look exactly as before.
+// The ref line at y=44: how long since the anchor, how many grams from it, and
+// how much of the observed dry-down span is gone —  "9.9D -109g 120%".
+//
+// One grammar, three optional pieces: [age] [signed diff][ %|1st]. The signed
+// diff removes a branch rather than adding one — "+8g" already says wetter than
+// the anchor, so the old separate "wet" wording is gone.
+//
+// Drawn only with a calibrated scale (raw counts must never meet a gram
+// baseline) and a cached anchor; otherwise the line is simply absent and the
+// screens look exactly as they did before any ref arrived.
+//
+// Every number here is a subtraction. anchor_g and span_g are defined once, in
+// the broker's panel query, so the OLED and the dashboard cannot disagree.
 void oledRefLine(float w, bool calibrated) {
     if (!calibrated) return;
-    float sat, dry;
+    WeightRef r;
+    if (!weightRefGet(curUid, &r)) return;      // name-only: no line, as today
+
     char line[24];
-    if (weightRefLookup(curUid, &sat, &dry)) {           // full ref: earned span
-        if (w > sat) snprintf(line, sizeof(line), "+%.0fg  wet", (double)(w - sat));
-        else snprintf(line, sizeof(line), "-%.0fg  used %.0f%%",
-                      (double)(sat - w), (double)((sat - w) / (sat - dry) * 100.0f));
-    } else if (weightRefSat(curUid, &sat)) {             // provisional: new pot
-        // absolute drawdown ONLY — a % against an unmeasured span reads "drier
-        // than reality" and nudges overwatering, the cactus-killing direction.
-        // The % appears by itself once the pot earns a full dry-down cycle.
-        if (w > sat) snprintf(line, sizeof(line), "+%.0fg  wet", (double)(w - sat));
-        else snprintf(line, sizeof(line), "-%.0fg  since wtr", (double)(sat - w));
-    } else {
-        return;
+    int n = 0;
+    // No NTP yet means the clock is sitting in 1970: an age computed from it
+    // would read like a confident "56.8D". Omit the age instead — the grams and
+    // the percentage are still true without it.
+    if (r.has_ts && logTimeSynced()) {
+        double h = difftime(time(nullptr), (time_t)r.anchor_ts) / 3600.0;
+        if (h < 0) h = 0;                       // clock skew / a ref from the future
+        n = (h < 24.0) ? snprintf(line, sizeof(line), "%.1fH ", h)
+                       : snprintf(line, sizeof(line), "%.1fD ", h / 24.0);
+        // snprintf returns the length it WOULD have written, so an absurd age
+        // could otherwise push n past the buffer and make the remaining-size
+        // arithmetic below wrap around.
+        if (n < 0 || n >= (int)sizeof(line)) n = (int)sizeof(line) - 1;
+    }
+    n += snprintf(line + n, sizeof(line) - n, "%+.0fg", (double)(w - r.anchor_g));
+    if (n < 0 || n >= (int)sizeof(line)) n = (int)sizeof(line) - 1;
+
+    if (r.has_span) {
+        float pct = (r.anchor_g - w) / r.span_g * 100.0f;
+        if (pct >  999.0f) pct =  999.0f;       // makes the 21-char budget a proof,
+        if (pct < -999.0f) pct = -999.0f;       // not a hope
+        snprintf(line + n, sizeof(line) - n, " %.0f%%", (double)pct);
+    } else if (r.first_anchor) {
+        // The anchor is this pot's FIRST weighing, not a watering: it was not
+        // necessarily saturated, so a percentage against it would be fiction.
+        snprintf(line + n, sizeof(line) - n, " 1st");
     }
     oled.setTextSize(1);
     oled.setCursor(0, 44);

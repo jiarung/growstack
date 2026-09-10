@@ -19,12 +19,15 @@ constexpr unsigned PAYLOAD_MAX = 192;   // real payloads are ~110 B
 constexpr size_t PLANT_MAX = 20;   // "cactus-03b" style ids; OLED line is 21 chars
 
 struct Entry {
-    char  uid[UID_HEX_MAX + 1];
-    char  plant[PLANT_MAX + 1];    // "" when the payload had no usable plant_id
-    float sat_g, dry_g;            // meaningless when the matching has_* is false
-    bool  has_sat;                 // false = name-only ref (no watering anchor)
-    bool  has_dry;                 // false = provisional or name-only
-    bool  used;
+    char     uid[UID_HEX_MAX + 1];
+    char     plant[PLANT_MAX + 1];  // "" when the payload had no usable plant_id
+    float    anchor_g, span_g;      // meaningless when the matching has_* is false
+    uint32_t anchor_ts;
+    bool     has_anchor;            // false = name-only ref (no watering anchor)
+    bool     has_span;              // false = provisional or name-only
+    bool     has_ts;
+    bool     first_anchor;
+    bool     used;
 };
 Entry cache[CAP] = {};
 
@@ -86,35 +89,45 @@ void weightRefOnMessage(const char* uid, const uint8_t* payload, unsigned int le
     memcpy(buf, payload, len); buf[len] = '\0';
     JsonDocument doc;
     if (deserializeJson(doc, buf)) { logf("[ref] %s dropped: bad json\n", uid); return; }
-    // Three tiers off the same topic, keyed by which fields exist:
-    //   sat+dry = FULL (may show used%) · sat only = PROVISIONAL (absolute
-    //   drawdown) · neither = NAME-ONLY (a brand-new pot: nothing honest to
-    //   say about water, but the OLED can still greet it by name).
+    // Four tiers off the same topic, keyed by which fields exist:
+    //   anchor+span = FULL (may show a %) · anchor only = PROVISIONAL (absolute
+    //   drawdown) · anchor + first_anchor = FIRST (the anchor is the pot's own
+    //   first weighing, which is not a watering, so never a %) · none = NAME-ONLY
+    //   (a brand-new pot: nothing honest to say about water, but the OLED can
+    //   still greet it by name).
     // Present-but-not-a-number is neither tier — malformed, dropped.
-    bool satPresent = !doc["sat_g"].isUnbound();
-    bool hasSat = doc["sat_g"].is<float>();
-    if (satPresent && !hasSat) {
-        logf("[ref] %s dropped: malformed sat_g\n", uid);
+    bool anchorPresent = !doc["anchor_g"].isUnbound();
+    bool hasAnchor = doc["anchor_g"].is<float>();
+    if (anchorPresent && !hasAnchor) {
+        logf("[ref] %s dropped: malformed anchor_g\n", uid);
         return;
     }
     // isUnbound() (not isNull()!) distinguishes "key absent" from an explicit
     // JSON null — ArduinoJson reports isNull()==true for BOTH, and an explicit
     // null must be dropped as malformed, never silently demote a cached ref.
-    float sat = hasSat ? (float)doc["sat_g"] : 0.0f;
-    bool dryPresent = !doc["dry_g"].isUnbound();
-    bool hasDry = doc["dry_g"].is<float>();
-    if ((dryPresent && !hasDry) || (hasDry && !hasSat)) {
-        logf("[ref] %s dropped: malformed dry_g\n", uid);   // incl. dry without sat
+    float anchor = hasAnchor ? (float)doc["anchor_g"] : 0.0f;
+    bool spanPresent = !doc["span_g"].isUnbound();
+    bool hasSpan = doc["span_g"].is<float>();
+    if ((spanPresent && !hasSpan) || (hasSpan && !hasAnchor)) {
+        logf("[ref] %s dropped: malformed span_g\n", uid);  // incl. span without anchor
         return;
     }
-    float dry = hasDry ? (float)doc["dry_g"] : 0.0f;
+    float span = hasSpan ? (float)doc["span_g"] : 0.0f;
     // The broker never publishes these, so seeing one means somebody else wrote to
     // the topic — keep whatever good entry we already have rather than overwrite.
-    if ((hasSat && !isfinite(sat)) ||
-        (hasDry && (!isfinite(dry) || sat - dry <= MIN_SPAN_G))) {
-        logf("[ref] %s dropped: sat=%.1f dry=%.1f\n", uid, sat, dry);
+    // A span at or under the floor gets the same refusal the broker and the panel
+    // make: a % against a span that narrow reads "drier than reality" and nudges
+    // overwatering, the cactus-killing direction.
+    if ((hasAnchor && !isfinite(anchor)) ||
+        (hasSpan && (!isfinite(span) || span <= MIN_SPAN_G))) {
+        logf("[ref] %s dropped: anchor=%.1f span=%.1f\n", uid, anchor, span);
         return;
     }
+    // Absent is legal and simply omits the age: the grams and the % stay true
+    // without it, so a missing timestamp must not gate ingest either.
+    bool hasTs = doc["anchor_ts"].is<uint32_t>();
+    uint32_t ts = hasTs ? (uint32_t)doc["anchor_ts"] : 0;
+    bool firstAnchor = doc["first_anchor"] | false;
     // the name is best-effort display data, never an ingest gate (see
     // sanitizePlant) — a name-only ref with an unusable name still ingests,
     // because its real job may be DEMOTING a stale full/provisional entry
@@ -127,31 +140,35 @@ void weightRefOnMessage(const char* uid, const uint8_t* payload, unsigned int le
 
     strncpy(cache[i].uid, uid, sizeof(cache[i].uid) - 1);
     cache[i].uid[sizeof(cache[i].uid) - 1] = '\0';
-    cache[i].sat_g = sat;
-    cache[i].dry_g = dry;
-    cache[i].has_sat = hasSat;
-    cache[i].has_dry = hasDry;
+    cache[i].anchor_g = anchor;
+    cache[i].span_g = span;
+    cache[i].anchor_ts = ts;
+    cache[i].has_anchor = hasAnchor;
+    cache[i].has_span = hasSpan;
+    cache[i].has_ts = hasTs;
+    cache[i].first_anchor = firstAnchor;
     strncpy(cache[i].plant, plant, sizeof(cache[i].plant) - 1);
     cache[i].plant[sizeof(cache[i].plant) - 1] = '\0';
     cache[i].used  = true;
     const char* name = cache[i].plant[0] ? cache[i].plant : "unnamed";
-    if (hasDry)      logf("[ref] %s (%s) sat=%.1f dry=%.1f\n", uid, name, sat, dry);
-    else if (hasSat) logf("[ref] %s (%s) sat=%.1f PROVISIONAL\n", uid, name, sat);
-    else             logf("[ref] %s (%s) NAME-ONLY\n", uid, name);
+    if (hasSpan)          logf("[ref] %s (%s) anchor=%.1f span=%.1f ts=%lu\n",
+                               uid, name, anchor, span, (unsigned long)ts);
+    else if (firstAnchor) logf("[ref] %s (%s) anchor=%.1f FIRST ts=%lu\n",
+                               uid, name, anchor, (unsigned long)ts);
+    else if (hasAnchor)   logf("[ref] %s (%s) anchor=%.1f PROVISIONAL ts=%lu\n",
+                               uid, name, anchor, (unsigned long)ts);
+    else                  logf("[ref] %s (%s) NAME-ONLY\n", uid, name);
 }
 
-bool weightRefLookup(const char* uid, float* sat_g, float* dry_g) {
+bool weightRefGet(const char* uid, WeightRef* out) {
     int i = find(uid);
-    if (i < 0 || !cache[i].has_dry) return false;   // provisional refs never yield a %
-    *sat_g = cache[i].sat_g;
-    *dry_g = cache[i].dry_g;
-    return true;
-}
-
-bool weightRefSat(const char* uid, float* sat_g) {
-    int i = find(uid);
-    if (i < 0 || !cache[i].has_sat) return false;   // name-only refs have no anchor
-    *sat_g = cache[i].sat_g;
+    if (i < 0 || !cache[i].has_anchor) return false;   // name-only: nothing to draw
+    out->anchor_g     = cache[i].anchor_g;
+    out->span_g       = cache[i].span_g;
+    out->anchor_ts    = cache[i].anchor_ts;
+    out->has_ts       = cache[i].has_ts;
+    out->has_span     = cache[i].has_span;
+    out->first_anchor = cache[i].first_anchor;
     return true;
 }
 

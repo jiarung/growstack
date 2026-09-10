@@ -1,11 +1,31 @@
 #pragma once
 #include <stdint.h>
 
-// Per-plant watering references — {sat_g, dry_g} — published RETAINED by the broker
+// Per-plant watering references, published RETAINED by the broker
 // (broker/publish-weight-ref.sh) at monitor-air/ref/weight/<uid>, one per tag UID.
-// The station caches them so the OLED can show "how far from the last full watering"
-// while a pot sits on the scale. The broker owns all the statistics; the device only
-// ever subtracts.
+// The station caches them so the OLED can show how far a pot has drawn down since
+// its last watering, and how long ago that was.
+//
+// The broker owns all the statistics; the device only ever subtracts. That
+// sentence used to be aspirational — sat and dry were defined in a Grafana panel's
+// Flux while the percentage was computed here in C++, one definition in two
+// places. The anchor form makes it literal: the broker sends the point to measure
+// from and the width of the span, and every arithmetic step here is a subtraction.
+
+// A cached reference, in the only shape the display needs.
+//
+// anchor_g is the weighing taken AT the watering — not the peak that followed it.
+// The two are the same reading 157 times in 166 cycles, and moving to the anchor
+// makes the age, the grams and the percentage all measure from ONE point, so the
+// OLED and the dashboard cannot drift apart.
+struct WeightRef {
+    float    anchor_g;      // grams at the anchoring weighing
+    float    span_g;        // observed dry-down width; only when has_span
+    uint32_t anchor_ts;     // epoch seconds of the anchor; only when has_ts
+    bool     has_ts;        // false = broker had no timestamp; omit the age
+    bool     has_span;      // false = provisional; absolute drawdown, NO percentage
+    bool     first_anchor;  // the anchor IS the pot's first weighing, not a watering
+};
 
 // Ingest one ref message for a tag UID (the topic's last segment). Called from the
 // MQTT callback — parse-on-arrival, because a (re)connect delivers every retained
@@ -15,17 +35,14 @@
 // inverted values — is dropped without touching the cache.
 void weightRefOnMessage(const char* uid, const uint8_t* payload, unsigned int len);
 
-// Look up a FULL cached ref (sat + earned dry span). Returns false when the UID
-// has no valid entry OR only a provisional one — the caller (the OLED) then
-// falls back to weightRefSat() and never fabricates a percentage.
-bool weightRefLookup(const char* uid, float* sat_g, float* dry_g);
-
-// The sat anchor alone — true for full AND provisional refs, false for
-// name-only ones. Provisional = the broker saw a watering anchor but no
-// trustworthy span yet (new pot / repot): the honest display is the absolute
-// drawdown, "-87g since wtr". Name-only = not even an anchor (never watered
-// on the scale): the ref exists solely so weightRefPlant() can name the pot.
-bool weightRefSat(const char* uid, float* sat_g);
+// The cached ref for a UID. Returns false when there is no entry, or only a
+// name-only one — i.e. false means "draw no line", which is exactly what the
+// caller needs to decide and the only thing it has to check.
+//
+// Name-only = the tag is mapped but the plant has never been watered on the
+// scale. There is nothing honest to say about water, but the ref still exists
+// so weightRefPlant() can greet the pot by name instead of a raw UID.
+bool weightRefGet(const char* uid, WeightRef* out);
 
 // The plant's human name ("cactus-03b") from the same retained ref, or nullptr
 // when unknown/unnamed — the OLED then falls back to the raw UID. Points into
