@@ -40,6 +40,11 @@ void logTimeBegin() {
     configTime(GMT_OFFSET_SEC, DST_OFFSET_SEC, "pool.ntp.org", "time.google.com");
 }
 
+// Same threshold formatStamp() decides on, deliberately not a second copy of
+// the number: if "synced" ever means two different instants, the log prefix and
+// the OLED age would disagree about whether the clock is real.
+bool logTimeSynced() { return time(nullptr) >= SYNC_THRESHOLD; }
+
 void logf(const char* fmt, ...) {
     emitPrefix();
     // Roomy enough for the longest line (mqtt publish: topic + ~200B payload).
