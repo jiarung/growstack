@@ -37,16 +37,15 @@
 # completed cycle in 60d drops from % to the absolute line until it earns one;
 # regulars with normal watering cadence all carry 循環 basis and keep their %.)
 #
-# DEPLOY ORDER, 2026-09-09 — this version is ADDITIVE, so the server may go first.
-# sat_g/dry_g keep their exact meaning and presence rules; anchor_ts/anchor_g/span_g
-# ride alongside and ArduinoJson ignores unknown keys. The one new tier, first_anchor,
-# ships WITHOUT sat_g, which the deployed firmware already treats as name-only — i.e.
-# exactly what those pots show today.
-#   The FOLLOW-UP that removes sat_g/dry_g/anchor_day must go AFTER the flash, for
-# the original reason: old firmware drops payloads missing sat_g/dry_g but keeps any
-# previously cached full ref in RAM until reboot — a demotion would leave it showing
-# a stale % (retained clearing can't fix an offline station either; ordering is the
-# real fix, one station, ours).
+# DEPLOY ORDER, 2026-09-10 — the legacy keys sat_g/dry_g/anchor_day are GONE, which
+# was only safe once the station ran firmware that reads anchor_g/span_g/anchor_ts.
+# That flash was confirmed before this change; the ordering mattered because old
+# firmware drops payloads missing sat_g/dry_g yet keeps any previously cached full
+# ref in RAM until reboot, so a demotion would have left it showing a stale % —
+# and clearing a retained topic cannot reach a station that is offline.
+#   Consequence for the future: a station rolled BACK to pre-2026-09-10 firmware
+# would see every payload as name-only and simply draw no ref line. That is the
+# honest failure, not a wrong number, which is why no compatibility shim is kept.
 #
 # Retained lifecycle: after a SUCCESSFUL query round, this round's valid set is
 # authoritative — any previously retained ref not in it (plant re-tagged, data
@@ -151,11 +150,6 @@ for r in sorted(rows, key=lambda r: r["plant_id"]):
     if not (r.get("sat_g") or "").strip():
         unwatered.append(plant)
         continue
-    try:
-        sat = float(r["sat_g"])
-    except (KeyError, ValueError):
-        print(f"bad row for {plant}: {r} — schema changed?", file=sys.stderr)
-        sys.exit(1)
     # anchor_g and first_anchor DECIDE THE PAYLOAD SHAPE, so schema drift in either
     # must abort the round rather than silently mis-tier every pot.
     try:
@@ -165,23 +159,16 @@ for r in sorted(rows, key=lambda r: r["plant_id"]):
         print(f"bad row for {plant}: missing anchor_g/first_anchor — panel schema changed?",
               file=sys.stderr)
         sys.exit(1)
-    # span_g is read directly (was: the panel's trig_g). dry_g is then DERIVED, so
-    # this script's tier gate and the firmware's own `sat - dry > 5` guard are
-    # provably the same number instead of two roundings that can differ by 0.1 g.
-    # The second round() is not cosmetic: round(2465.7,1) - round(164.3,1) is
-    # 2301.3999999999996, and json.dumps would ship all of it.
     try:                                   # absent span -> provisional tier below
         span = float(r["span_g"])
     except (KeyError, ValueError):
         span = float("nan")
-    dry = round(round(sat, 1) - round(span, 1), 1) if math.isfinite(span) else float("nan")
-    if not math.isfinite(sat) or not math.isfinite(anchor_g):
-        print(f"bad values for {plant}: sat={sat} anchor_g={anchor_g}", file=sys.stderr)
+    if not math.isfinite(anchor_g):
+        print(f"bad values for {plant}: anchor_g={anchor_g}", file=sys.stderr)
         sys.exit(1)
     # tier decision: FULL only for a span EARNED by a completed dry-down cycle
     # (basis == "循環") — a p10-basis span over a short history errs small and
-    # would inflate the %. Anything else is PROVISIONAL: sat only, no dry_g,
-    # so the firmware can never compute a % from an unearned span.
+    # would inflate the %. Anything else is PROVISIONAL: an anchor with no span.
     # Span is judged on the ROUNDED values that actually ship: a raw 5.03 g
     # rounds to 5.0 on the wire and the firmware's own >5 g guard would then
     # reject the "full" payload outright — worse than provisional.
@@ -193,11 +180,9 @@ for r in sorted(rows, key=lambda r: r["plant_id"]):
     # jump, which is exactly a watering anchor) — one token, and it makes the
     # invariant explicit instead of implied.
     full = (not first) and basis == "循環" and math.isfinite(span) and round(span, 1) > 5.0
-    # anchor_ts is what the OLED actually uses: it recomputes the age live from
+    # anchor_ts is what the OLED uses: it recomputes the age live from
     # time(nullptr), so the displayed "3.6D" never goes stale between hourly runs.
-    # anchor_day stays for human eyes in --dry-run and for the deployed firmware's
-    # payload shape; it is decorative to src/ either way.
-    # Both derive from the panel's `days` rather than a time column because that
+    # It derives from the panel's `days` rather than a time column because that
     # pivot's value column is float and unioning a time into it is a type error.
     # days = (now()-anchor)/86400e9, so this inverts to sub-millisecond accuracy.
     # Taipei is a fixed UTC+8 with no DST, so no tz database is needed (cron's
@@ -205,32 +190,24 @@ for r in sorted(rows, key=lambda r: r["plant_id"]):
     try:
         anchor_dt = (dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
                      - dt.timedelta(days=float(r["days"])))
-        anchor = anchor_dt.date().isoformat()
         anchor_ts = int(anchor_dt.timestamp())
     except (KeyError, ValueError):
-        anchor = ""
         anchor_ts = None
     uids = plant_to_uids.get(plant)
     if not uids:
         untagged.append(plant)
         continue
-    # Legacy keys (sat_g/dry_g/anchor_day) come FIRST so the --dry-run diff against
-    # the currently retained set stays minimal and reviewable. They exist only for
-    # the firmware that is still flashed; the follow-up commit drops them.
+    # One tier is one shape. The station reads anchor_g, span_g, anchor_ts and
+    # first_anchor and nothing else, so nothing else is sent.
     if first:
-        # No sat_g on purpose: the deployed firmware reads that as name-only and
-        # draws no ref line — identical to what these pots show today. New firmware
-        # sees first_anchor and marks the line "1st".
-        d = {"plant_id": plant, "first_anchor": True, "anchor_day": anchor,
-             "anchor_g": round(anchor_g, 1)}
+        d = {"plant_id": plant, "first_anchor": True, "anchor_g": round(anchor_g, 1)}
         first_anchored.append(plant)
     elif full:
-        d = {"plant_id": plant, "sat_g": round(sat, 1), "dry_g": round(dry, 1),
-             "anchor_day": anchor, "anchor_g": round(anchor_g, 1),
+        d = {"plant_id": plant, "anchor_g": round(anchor_g, 1),
              "span_g": round(span, 1)}
     else:
-        d = {"plant_id": plant, "sat_g": round(sat, 1), "provisional": True,
-             "anchor_day": anchor, "anchor_g": round(anchor_g, 1)}
+        # No span_g: the firmware can then never compute a % from an unearned one.
+        d = {"plant_id": plant, "provisional": True, "anchor_g": round(anchor_g, 1)}
         print(f"provisional (span not yet earned): {plant}", file=sys.stderr)
     if anchor_ts is not None:
         d["anchor_ts"] = anchor_ts

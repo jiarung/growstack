@@ -35,9 +35,10 @@ d = tempfile.mkdtemp()
 with open(os.path.join(d, "rows.csv"), "w", newline="") as f:
     w = csv.writer(f)
     w.writerow(["#group", "x"])
-    # span_g is now read directly; dry_g is DERIVED (sat - span). anchor_g is the
-    # weighing AT the watering, which differs from sat_g only when a later reading
-    # was higher — cactus-16 below is that case.
+    # sat_g stays in the INPUT header: the planner still reads it as a presence
+    # check (an empty one means panel schema drift, not a new pot). It is simply
+    # never published. anchor_g is the weighing AT the watering, which differs
+    # from sat_g only when a later reading was higher — cactus-16 is that case.
     w.writerow(HDR)
     w.writerow(["cactus-03b", "432.0", "187.0", "3.5", "循環", "432.0", "0"])    # earned cycle -> FULL
     w.writerow(["cactus-15b", "380.0", "2.0", "1.2", "暫用 p10", "380.0", "0"])  # tiny span -> provisional
@@ -58,38 +59,45 @@ assert r.returncode == 0, f"expected exit 0, got {r.returncode}: {r.stderr}"
 lines = dict(l.split("\t") for l in r.stdout.strip().splitlines())
 
 full = json.loads(lines["monitor-air/ref/weight/AABBCCDD"])
-# THIS assertion IS the backward-compatibility contract: until the station is
-# reflashed, the deployed firmware reads only sat_g/dry_g, and dry_g is now
-# DERIVED from span_g rather than read from the panel's trig_g.
+# The legacy keys are GONE as of 2026-09-10 — asserting their ABSENCE is the
+# point, not an oversight: a payload that still carried sat_g/dry_g would mean
+# the follow-up half-landed, and the only symptom on the station would be a
+# silently larger message creeping back toward PAYLOAD_MAX.
 assert "provisional" not in full, full
-assert full["sat_g"] == 432.0 and full["dry_g"] == 245.0, full
-assert full["dry_g"] == round(round(full["sat_g"], 1) - 187.0, 1), full
-assert "anchor_day" in full, full
-# and the new fields the reflashed firmware will use
+for gone in ("sat_g", "dry_g", "anchor_day"):
+    assert gone not in full, (gone, full)
 assert full["anchor_g"] == 432.0 and full["span_g"] == 187.0, full
 assert isinstance(full["anchor_ts"], int) and full["anchor_ts"] > 1600000000, full
 
-# FIRST-weighing anchor: carries anchor_g/anchor_ts and the marker, and NO sat_g —
-# so the still-deployed firmware reads it as name-only and simply draws no ref
-# line, exactly what these pots show today.
+# FIRST-weighing anchor: carries anchor_g/anchor_ts and the marker, and NO span_g.
+# The anchor is the pot's own first weighing, which was not necessarily saturated,
+# so a percentage against it would be fiction — the station shows "1st" instead.
 fa = json.loads(lines["monitor-air/ref/weight/CCDDEEFF"])
-assert fa["first_anchor"] is True and "sat_g" not in fa and "span_g" not in fa, fa
+assert fa["first_anchor"] is True and "span_g" not in fa, fa
 assert fa["anchor_g"] == 188.4 and isinstance(fa["anchor_ts"], int), fa
 assert "first-weighing anchor (no watering on record): cactus-25" in r.stderr, r.stderr
 
-# anchor_g is independent of sat_g — cactus-16 was weighed higher AFTER its watering
+# anchor_g is the watering reading, NOT the peak that followed it: cactus-16's
+# input row carries sat_g 500.0 and anchor_g 492.0, and only the latter ships.
 p16 = json.loads(lines["monitor-air/ref/weight/22334455"])
-assert p16["sat_g"] == 500.0 and p16["anchor_g"] == 492.0, p16
+assert p16["anchor_g"] == 492.0 and "sat_g" not in p16, p16
 
 # nothing may exceed the firmware's PAYLOAD_MAX; over it the station drops the
 # message silently and keeps its stale cached ref
 for topic, payload in lines.items():
     assert len(payload.encode()) <= 192, (topic, len(payload.encode()), payload)
+# Dropping the legacy keys took the full tier from ~150 B to ~90 B. Asserting the
+# NEW ceiling is what makes that a guarantee rather than a note: a legacy key
+# creeping back would still pass the 192 B check and only show up much later, as
+# a station silently dropping refs once a plant name grew long enough.
+_full_b = len(lines["monitor-air/ref/weight/AABBCCDD"].encode())
+assert _full_b <= 100, ("full tier payload grew", _full_b,
+                        lines["monitor-air/ref/weight/AABBCCDD"])
 for uid, why in (("11223344", "tiny span"), ("22334455", "p10 basis despite big span"),
                  ("55667788", "rounding boundary")):
     p = json.loads(lines[f"monitor-air/ref/weight/{uid}"])
-    assert p.get("provisional") is True and "dry_g" not in p, (why, p)
-    assert isinstance(p["sat_g"], float), (why, p)
+    assert p.get("provisional") is True and "span_g" not in p, (why, p)
+    assert isinstance(p["anchor_g"], float), (why, p)
 assert "cactus-99" in r.stderr and "no ref published" in r.stderr  # informational note
 # name-only tier: a mapped plant with NO watering anchor (absent from the
 # panel CSV entirely) still gets a ref carrying just the name
@@ -111,7 +119,7 @@ lines0 = dict(l.split("	") for l in r0.stdout.strip().splitlines())
 assert len(lines0) == 6, lines0          # all six mapped uids
 for uid in ("AABBCCDD", "11223344", "22334455", "55667788", "99AABBCC", "CCDDEEFF"):
     nn = json.loads(lines0[f"monitor-air/ref/weight/{uid}"])
-    assert nn.get("name_only") is True and "sat_g" not in nn, (uid, nn)
+    assert nn.get("name_only") is True and "anchor_g" not in nn, (uid, nn)
 
 # restore the normal CSV for the bad-basis case below
 with open(os.path.join(d, "rows.csv"), "w", newline="") as f:
@@ -127,5 +135,6 @@ r2 = subprocess.run(["python3", "-", d, tagmap, "monitor-air/ref/weight"],
                     input=plan_py, capture_output=True, text=True)
 assert r2.returncode == 1 and "bad basis" in r2.stderr, (r2.returncode, r2.stderr)
 
-print("pass weight-ref plan (full/provisional/first-anchor/name-only tiers, p10 demotion,\n      rounding, derived dry_g back-compat, payload size, untagged, bad-basis bail)")
+print("pass weight-ref plan (full/provisional/first-anchor/name-only tiers, p10 demotion,\n"
+      "      rounding, legacy keys absent, payload size, untagged, bad-basis bail)")
 EOF

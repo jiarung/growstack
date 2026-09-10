@@ -438,8 +438,16 @@ first-anchor {"plant_id":…,"anchor_ts":…,"anchor_g":…,"first_anchor":true}
 name-only    {"plant_id":…,"name_only":true}
 ```
 
-(Until the station is reflashed every non-name-only payload also carries the
-legacy `sat_g` / `dry_g` / `anchor_day`; see DEPLOY ORDER in the script.)
+Those four shapes are the whole contract — the station reads `anchor_g`,
+`span_g`, `anchor_ts` and `first_anchor` and nothing else, so nothing else is
+sent. The legacy `sat_g` / `dry_g` / `anchor_day` were dropped on 2026-09-10,
+once the station ran firmware that reads the anchor fields; the full tier went
+from ~150 B to ~90 B against the firmware's 192 B limit. That ordering was the
+whole point: old firmware drops a payload missing `sat_g`/`dry_g` but keeps any
+ref already cached in RAM until it reboots, so removing them first would have
+left a stale percentage on screen, and clearing a retained topic cannot reach a
+station that is offline. A station rolled back to older firmware now simply
+draws no ref line — the honest failure, not a wrong number.
 
 Every uid in tag-map.json always has a retained ref. **name-only** is the floor:
 a mapped pot with no weight readings at all — nothing honest to say, but the OLED
