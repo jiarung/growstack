@@ -536,7 +536,7 @@
       "properties": [
        {
         "id": "displayName",
-        "value": "lux/54（控制器依據）"
+        "value": "lux×k/54（已校準・控制器依據）"
        }
       ]
      },
@@ -548,7 +548,7 @@
       "properties": [
        {
         "id": "displayName",
-        "value": "光譜 PPFD (CAL=0.0017469)"
+        "value": "光譜×CAL（CAL 未重導，約低 4×）"
        }
       ]
      }
@@ -570,7 +570,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\n// Scaled by the adopted k from the calibration pipeline — read live from\n// k_adopted, never hardcoded, so this panel and light.py:todays_dli() move\n// together. Before 2026-09-08 both integrated bare lux/54 and both were ~3.9x\n// low against Photone; the target was tuned on that same shrunken scale, so it\n// was self-consistent and wrong.\nk = (from(bucket: \"sensors\")\n  |> range(start: -90d)\n  |> filter(fn: (r) => r._measurement == \"k_adopted\" and r.target == \"bh1750_lux_main\"\n       and r.source == \"mixed\" and r.regime == \"none\" and r._field == \"value\")\n  |> last() |> findRecord(fn: (key) => true, idx: 0))._value\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value * k / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"lux/54（控制器依據）\")"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\n\n// Scaled by the adopted k from the calibration pipeline — read live from\n// k_adopted, never hardcoded, so this panel and light.py:todays_dli() move\n// together. Before 2026-09-08 both integrated bare lux/54 and both were ~3.9x\n// low against Photone; the target was tuned on that same shrunken scale, so it\n// was self-consistent and wrong.\nk = (from(bucket: \"sensors\")\n  |> range(start: -90d)\n  |> filter(fn: (r) => r._measurement == \"k_adopted\" and r.target == \"bh1750_lux_main\"\n       and r.source == \"mixed\" and r.regime == \"none\" and r._field == \"value\")\n  |> last() |> findRecord(fn: (key) => true, idx: 0))._value\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and r._field == \"lux\" and r.device == \"livingroom\")\n  |> map(fn: (r) => ({ r with _value: r._value * k / 54.0 }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"lux×k/54（已校準・控制器依據）\")"
     },
     {
      "refId": "B",
@@ -578,7 +578,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\nCAL = 0.0017469\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and r.device == \"livingroom\"\n       and (r._field == \"f415\" or r._field == \"f445\" or r._field == \"f480\" or r._field == \"f515\"\n         or r._field == \"f555\" or r._field == \"f590\" or r._field == \"f630\" or r._field == \"f680\"\n         or r._field == \"saturated\"))\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.f415 and exists r.f445 and exists r.f480 and exists r.f515\n       and exists r.f555 and exists r.f590 and exists r.f630 and exists r.f680)\n  // 65535 is the I2C read-failure value, not light. Without this the fault mode\n  // renders as a huge PPFD spike and inflates the day's integral.\n  |> filter(fn: (r) => (not exists r.saturated or r.saturated == 0.0)\n       and r.f415 < 65535.0 and r.f445 < 65535.0 and r.f480 < 65535.0 and r.f515 < 65535.0\n       and r.f555 < 65535.0 and r.f590 < 65535.0 and r.f630 < 65535.0 and r.f680 < 65535.0)\n  |> map(fn: (r) => ({ _time: r._time, _value: CAL * (r.f415/55.0*415.0 + r.f445/110.0*445.0\n       + r.f480/210.0*480.0 + r.f515/390.0*515.0 + r.f555/590.0*555.0 + r.f590/840.0*590.0\n       + r.f630/1350.0*630.0 + r.f680/1070.0*680.0) }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"光譜 PPFD (CAL=0.0017469)\")"
+     "query": "import \"timezone\"\noption location = timezone.location(name: \"Asia/Taipei\")\nCAL = 0.0017469\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"spectrum\" and r.mode == \"ambient\" and r.device == \"livingroom\"\n       and (r._field == \"f415\" or r._field == \"f445\" or r._field == \"f480\" or r._field == \"f515\"\n         or r._field == \"f555\" or r._field == \"f590\" or r._field == \"f630\" or r._field == \"f680\"\n         or r._field == \"saturated\"))\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.f415 and exists r.f445 and exists r.f480 and exists r.f515\n       and exists r.f555 and exists r.f590 and exists r.f630 and exists r.f680)\n  // 65535 is the I2C read-failure value, not light. Without this the fault mode\n  // renders as a huge PPFD spike and inflates the day's integral.\n  |> filter(fn: (r) => (not exists r.saturated or r.saturated == 0.0)\n       and r.f415 < 65535.0 and r.f445 < 65535.0 and r.f480 < 65535.0 and r.f515 < 65535.0\n       and r.f555 < 65535.0 and r.f590 < 65535.0 and r.f630 < 65535.0 and r.f680 < 65535.0)\n  |> map(fn: (r) => ({ _time: r._time, _value: CAL * (r.f415/55.0*415.0 + r.f445/110.0*445.0\n       + r.f480/210.0*480.0 + r.f515/390.0*515.0 + r.f555/590.0*555.0 + r.f590/840.0*590.0\n       + r.f630/1350.0*630.0 + r.f680/1070.0*680.0) }))\n  |> aggregateWindow(every: 1d, fn: (tables=<-, column) => tables |> integral(unit: 1s), createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value / 1000000.0 }))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> yield(name: \"光譜×CAL（CAL 未重導，約低 4×）\")"
     }
    ]
   },
