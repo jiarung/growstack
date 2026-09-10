@@ -23,6 +23,17 @@ import aiomqtt
 from kasa import Credentials, Discover
 
 # ---- calibration knobs (tune in place) ----
+# These stay on the SENSOR's own raw scale, deliberately. The BH1750 reads ~3.93x low
+# against ground truth (Photone) and everything else was moved onto the corrected scale
+# on 2026-09-08..10 — but multiplying BOTH sides of `lux < LUX_ON_BELOW` by the same k is
+# an identity, so converting buys the control loop nothing and costs it a per-tick k
+# lookup plus that lookup's failure mode. The corrected numbers live in air.json panel 5's
+# description, which is where a human reconciles the two.
+#   LUX_ON_BELOW  5000  ≈ 19,650 Photone lux
+#   LUX_OFF_ABOVE 15000 ≈ 59,000
+# NOT re-calibrated: these encode the judgement they were originally tuned to, not an
+# answer to "below what irradiance should the lamp start". That is a horticultural
+# question and needs its own evidence — a unit conversion must not smuggle it in.
 LUX_ON_BELOW = 5000      # after ON_START, under this → ON
 LUX_OFF_ABOVE = 15000    # over this → OFF (e.g. direct sun); else hold last state
 # Operating window comes from .env (minutes since midnight) — the SAME vars gate

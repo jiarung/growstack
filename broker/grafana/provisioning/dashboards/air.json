@@ -422,6 +422,7 @@
   },
   {
    "id": 5,
+   "description": "BH1750 的照度，**乘上校準管線採納的 k**（`k_adopted`，即時讀取不寫死）—— 所以這裡的數字是 Photone 參照的尺度，和本儀表板的 DLI 面板同一把尺。\n\n**兩顆感測器各有各的 k**（main 3.93、ref 2.84），不共用：它們是兩個獨立封裝、不同光學（main 石英玻璃片，ref 自製塑膠擴散罩），ref 只遮燈不遮天。\n\n2026-09-10 之前這張畫的是原始讀數，是全站最後一張還在舊尺度上的面板。\n\n**`light.py` 的門檻仍以感測器原始尺度表示**，因為比較式兩邊同乘 k 是恆等的，換算對控制毫無作用、只會多一次查詢和它的失效模式。要對照的話，換算過來是：\n\n| light.py | 原始 lux | 這張圖上 |\n|---|---|---|\n| `LUX_ON_BELOW` | 5,000 | 約 19,650 |\n| `LUX_OFF_ABOVE` | 15,000 | 約 59,000 |\n\n門檻本身**沒有重新校準過** —— 它們編碼的是當初調出來的判斷，不是「植物在多少 PPFD 以下該補光」的答案。那是園藝問題，要有理由才動。",
    "title": "Light (lux + lux_ref)",
    "type": "timeseries",
    "datasource": {
@@ -475,7 +476,7 @@
       "type": "influxdb",
       "uid": "influxdb-monitor-air"
      },
-     "query": "from(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and (r._field == \"lux\" or r._field == \"lux_ref\"))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: true)\n  |> map(fn: (r) => ({ _time: r._time, _value: r._value, device: r.device, sensor: r._field }))\n  |> group(columns: [\"device\", \"sensor\"])"
+     "query": "// Photone-referenced. Each sensor carries its OWN adopted multiplier — two separate\n// enclosures with different optics, so k_main != k_ref — read live from k_adopted,\n// never hardcoded, so a recalibration lands in one place. Same source the DLI panels\n// use; before 2026-09-10 this panel was the last one still plotting raw counts.\nkMain = (from(bucket: \"sensors\")\n  |> range(start: -90d)\n  |> filter(fn: (r) => r._measurement == \"k_adopted\" and r.target == \"bh1750_lux_main\"\n       and r.source == \"mixed\" and r.regime == \"none\" and r._field == \"value\")\n  |> last() |> findRecord(fn: (key) => true, idx: 0))._value\nkRef = (from(bucket: \"sensors\")\n  |> range(start: -90d)\n  |> filter(fn: (r) => r._measurement == \"k_adopted\" and r.target == \"bh1750_lux_ref\"\n       and r.source == \"daylight\" and r.regime == \"diffuse\" and r._field == \"value\")\n  |> last() |> findRecord(fn: (key) => true, idx: 0))._value\n\nfrom(bucket: \"sensors\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"air\" and (r._field == \"lux\" or r._field == \"lux_ref\"))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: true)\n  |> map(fn: (r) => ({ _time: r._time,\n       _value: r._value * (if r._field == \"lux\" then kMain else kRef),\n       device: r.device, sensor: r._field }))\n  |> group(columns: [\"device\", \"sensor\"])\n"
     }
    ]
   },
