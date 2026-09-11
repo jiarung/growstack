@@ -45,15 +45,55 @@ _程式面(kconsume.py + fixture + k-migration dashboard)完成後,遷移本身�
   引擎層 panic，不是語法問題。**這是整個 migration matrix 的驗收工具，它壞著就沒有 7 天平行期可言。**
 
 - [ ] **B2 — `k_adopted[bh1750_lux_main/daylight/diffuse] = 0.209968` 是已知錯誤值。**
-  來自被撤回的汙染配對（見 `docs/incidents/2026-09.md#0901`）。它是 `carry`，
-  而 `provisional` 不會置換已採納值，所以不會自己好。
-  **2026-09-10 carry 寬限到期**會變 `stale` 並開始告警 —— 但**值不會變**，只是多一個警報。
-  只佔 1.3% 的積分光量，但翻 item 2 就會把它套進 daylight cell。
-  **2026-09-11 實測：預言完全應驗** —— `adoption_state=stale`、`reason=carry-expired`、
-  `value` 仍是 `0.209968`。所以這一項沒有自己好，也不會自己好。
-  `as7341_ppfd` 三個桶同樣全是 `stale`/`carry-expired`（lamp/none 停在被 08-24
-  感測器故障汙染的 `0.228541`）—— 面板不受影響，因為 2026-09-11 的 `adoption_state`
-  閘門會擋下未採納的值，但**過期的 carry 本身仍然沒有清除機制**。
+  來自被撤回的汙染配對（見 `docs/incidents/2026-09.md#0901`）。`model_id` 顯示它是在
+  **e0-legacy** 賺到的，carry 進 e1 後於 2026-09-10 到期 —— `stale` / `carry-expired`，
+  **值仍是 `0.209968`**（2026-09-11 實測，預言完全應驗）。
+
+  ### 2026-09-11 重新評估：這不是「待修的阻塞」，是「量不到的天花板」
+
+  **自動路徑全部無效**，因為證據收不到：
+
+  ```
+  bh1750_lux_main / daylight/diffuse / e1
+    estimate    17.5312      n_sessions  1      status  unvalidated
+  ```
+
+  `unvalidated` 在採納表裡什麼都不觸發（`kadopt.py:177`「provisional never
+  displaces an earned value; unvalidated says nothing」）。epoch 重置也不適用 ——
+  B4 的正當性來自一個**已記錄的器材事件**，而 B2 的壞值來自一個**已經修好的程式
+  缺陷**（`ref_only` 配對汙染），沒有器材變更可標。照搬 B4 就是 codex 警告的
+  「用 epoch 機制洗白一次重置」。
+
+  **n=1 的原因是這個站點的幾何**：`ref_only` 排除了燈開著的 daylight 列，而
+  08-11 以來 13 筆 daylight 量測裡**只有 1 筆燈是關的**。這就是
+  [`FLOWS.md` 的 gap 8](../broker/FLOWS.md#known-gaps)。
+
+  ### 它值多少（2026-09-11 實測，近 7 天）
+
+  | cell | 佔積分光量 |
+  |---|---|
+  | mixed/none | 81.4% |
+  | lamp/none | 14.4% |
+  | unknown/unknown | 1.9% |
+  | **daylight/diffuse** | **0.74%** |
+  | none/none | 0.2% |
+
+  修好它對校正後 DLI 的影響是 **+3.5%**。代價是**五次停燈 30 分鐘的日光量測**
+  （每次約 0.65 mol，只能挑晴天，用面板 3 判斷當天有沒有餘裕）。
+
+  **而唯一的候選替代值是 `17.5312`、n=1、`unvalidated`** —— 那筆 09-01 07:45 的
+  晨窗量測，感測器讀 461 lux 而 Photone 讀 8,080。它本身就被標記為可能的離群值。
+  **用一個未驗證的孤例換掉一個已知錯誤的值，不是修復。**
+
+  ### 結論
+
+  **降級為已知天花板，不再當阻塞。** 目前的曝險是校正後 DLI 低約 3.5%，而且管線
+  自己已經把該桶標成 `stale`；air.json 的 `kOf()` 也會退回 seed 不顯示它。
+  `kconsume` 仍會套用（`kconsume.py:84` 只對 `seed` 退回）—— 那是已揭露的行為。
+
+  **要真的關掉它，需要的是量測活動而不是程式改動**：晴天用 `lamp-hold.sh` 停燈
+  30 分鐘，在樹冠點量一次 daylight Photone，重複五次。在那之前，這一項不該再被
+  當成「下一步要修什麼」。
 
 - [ ] **B3 — 通量比的基準與量測窗不同尺。**
   `cal-review-reminder.sh` 在 pre-lamp 窗算 `clear/lux`，門檻卻用 6.0（註解引用燈下量的 6.3–6.6 基準）。
@@ -62,7 +102,7 @@ _程式面(kconsume.py + fixture + k-migration dashboard)完成後,遷移本身�
   健康期的 pre-lamp 值實測是 1.1–3.3，門檻 6.0 比健康值本身還高 2–5 倍，
   也就是它不可能以正確的理由通過。現行硬體的健康 pre-lamp 基準**還沒有樣本**。
 
-- [ ] **B4 — `as7341_ppfd` 三個桶全部 `stale`/`carry-expired`，`lamp/none` 停在被汙染的 `0.228541`。**
+- [x] **B4 ✅ 2026-09-11 — `as7341_ppfd` 三個桶全部 `stale`/`carry-expired`，`lamp/none` 停在被汙染的 `0.228541`。**
   來源是 2026-08-24 20:00 那次量測：`photone=220` 但 `spec_ppfd_at=1.68`（S≈962），
   AS7341 當時正在崩潰途中 —— 19:55 的 `clear` 只有 416（同日同時段中位數 10,917），
   20:15 全通道進入 65535 的 I2C 失敗哨兵。**現有的准入規則沒有一條擋得住它**：
@@ -172,6 +212,22 @@ _程式面(kconsume.py + fixture + k-migration dashboard)完成後,遷移本身�
 
      2026-09-02 就是靠這組發現兩條 k-model 規則從來沒被載入過，靜默了 11 天
      （`MAINTENANCE.md:133`）。
+
+  ### 執行結果（2026-09-11）
+
+  `as7341_ppfd-e2` 已登記，**第一次 cron 就 bootstrap 採納**，與推演完全一致：
+
+  ```
+  k_adopted[as7341_ppfd/lamp/none/e2]
+    value 0.00674918   state adopted   reason bootstrap
+    model_id  as7341_ppfd/lamp/none/as7341_ppfd-e2@2026-09-11T05:54:14Z
+  daylight/diffuse、daylight/direct  → seed 0.0017469
+  panel 9  ~100 → 327.5      （Photone 實測 320）
+  ```
+
+  告警從 5 列降到 3 列，消失的正是 as7341 的兩列；剩下 3 列是 lux 的真實 stale。
+  三數核對 8/8/8（`rules.yaml.tmpl` / `rules.yaml` / API），Grafana 另外 force-recreate
+  過 —— `start.sh` 只渲染不重建。commit `d1aede5`。
 
   ### 殘留風險
 
