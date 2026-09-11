@@ -702,6 +702,17 @@ groups:
                        and (r._field == "adoption_state" or r._field == "state_since"))
                   |> last()
                   |> pivot(rowKey: ["_time", "target", "source", "regime", "epoch"], columnKey: ["_field"], valueColumn: "_value")
+                  // CURRENT epoch only. A superseded epoch's bucket stops being
+                  // written the moment a new one is declared (adoption iterates
+                  // the current epoch's universe keys, compute-k-models.py:133),
+                  // so it freezes wherever it was — usually stale — and would
+                  // alarm forever with nothing a human could do about it. The
+                  // newest write per cell IS the current epoch, because the new
+                  // bucket is written at materialize time, after the old one's
+                  // last write. This avoids putting epochs.json into InfluxDB.
+                  |> group(columns: ["target", "source", "regime"])
+                  |> top(n: 1, columns: ["_time"])
+                  |> group()
                   |> filter(fn: (r) => r.adoption_state == "held" or r.adoption_state == "stale")
                   // age from state_since, NOT from the row's write time: a held
                   // bucket keeps getting rewritten when new evidence revs land,

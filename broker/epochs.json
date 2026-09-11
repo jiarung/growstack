@@ -49,6 +49,22 @@
         "app_ver": "3.2.1"
       },
       "prev": "e0-legacy"
+    },
+    {
+      "epoch_id": "as7341_ppfd-e2",
+      "target": "as7341_ppfd",
+      "start": "2026-09-04T03:20:00Z",
+      "reason": "sensor repositioned 2026-09-04 11:20 after the desiccant knock: clear recovered 43x (515 -> 22,385) while lux held 3,114-4,387 (docs/incidents/2026-09.md#0904)",
+      "device": "livingroom",
+      "config": {
+        "gain": 4.0,
+        "tint_ms": 280.78
+      },
+      "photone": {
+        "phone": "iPhone 15 Pro",
+        "app_ver": "3.2.1"
+      },
+      "prev": "as7341_ppfd-e1"
     }
   ],
   "station_map": [
