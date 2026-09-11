@@ -12,7 +12,7 @@
 _目標:每天固定時間對「開燈前日光窗」自動跑 PPFD 校準,把**候選 CAL + 品質指標**寫進 InfluxDB → Grafana 顯示,讓校準持續被監測、可見,不用每次手動跑。_
 
 > 這是 **host 端(broker/)** 工作。firmware 不用改。搬到 grafana host 執行。
-> 相關:`calibrate-ppfd.sh`(重用其核心)、`PPFD-CALIBRATION.md`、`PHOTONE-CAL-PLAN.md`、`SENSOR-DRIFT-DESIGN.md`、`grafana/provisioning/dashboards/air.json`(PPFD 面板 id 9/11/12,`CAL=0.0017469`)。
+> 相關:`calibrate-ppfd.sh`(重用其核心)、`PPFD-CALIBRATION.md`、`PHOTONE-CAL-PLAN.md`、`SENSOR-DRIFT-DESIGN.md`、`grafana/provisioning/dashboards/air.json`(PPFD 面板 id 9/12,`CAL=0.0017469`;面板 11 已刪除)。
 
 ---
 
@@ -40,7 +40,7 @@ _目標:每天固定時間對「開燈前日光窗」自動跑 PPFD 校準,把**
   → 算 候選 CAL(OLS/median) + 品質(R²、drift%、N、lux span、valid) + ratio canary
   → docker exec influx write → measurement `ppfd_cal`(tag: device)
   → Grafana 面板讀 `ppfd_cal` → CAL 趨勢 + 現用 CAL 參考線 + 品質/valid + ratio
-  → (人工)趨勢穩定且偏離 → 手動改 air.json CAL(9/11/12)+ redeploy
+  → (人工)趨勢穩定且偏離 → 手動改 air.json CAL(僅面板 12;面板 9 自 2026-09-11 改讀管線)+ redeploy
 ```
 
 ## InfluxDB schema(新 measurement `ppfd_cal`)
@@ -87,7 +87,8 @@ _目標:每天固定時間對「開燈前日光窗」自動跑 PPFD 校準,把**
 - **驗收**:面板顯示序列;`valid=0` 的日子看得出斷點/標記。
 
 ### Phase 5 — 覆核/套用 SOP(文件,保持人工)
-- 寫進 `PPFD-CALIBRATION.md`:**候選 CAL 連續 N 天穩定、且與現用 CAL 偏離 > X%、品質良好(r2 高、drift 低、valid)→ 才手動更新 air.json 面板 9/11/12 的 CAL,redeploy dashboard。**
+- 寫進 `PPFD-CALIBRATION.md`:**候選 CAL 連續 N 天穩定、且與現用 CAL 偏離 > X%、品質良好(r2 高、drift 低、valid)→ 才手動更新 air.json 面板 9/12 的 CAL,redeploy dashboard。**
+  ⚠ 2026-09-11 起面板 9 不再寫死 CAL（改讀 `k_adopted[as7341_ppfd]`，由 `adoption_state` 把關），手動更新只剩面板 12 —— 而面板 12 是**對照用**的，它保持寫死才有意義。
 - **絕不自動改公式。** 權威錨仍以 Photone(`PHOTONE-CAL-PLAN.md`)為準,本 job 負責「盯漂移 + 提候選值」。
 
 ---

@@ -739,7 +739,7 @@
   },
   {
    "id": 12,
-   "title": "PPFD — spectrum vs Photone ground-truth (livingroom)",
+   "title": "PPFD — spectrum vs Photone ground-truth（對照用，CAL 固定不隨管線走）",
    "type": "timeseries",
    "datasource": {
     "type": "influxdb",

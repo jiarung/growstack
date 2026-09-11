@@ -15,7 +15,7 @@ _程式面(kconsume.py + fixture + k-migration dashboard)完成後,遷移本身�
 
 | # | 消費者 | 平行儀表 | 翻法 | 閘 |
 |---|---|---|---|---|
-| 1 | air.json Spectrum PPFD(panel 9/11/12 硬編碼 CAL) | k-migration「item 1」 | 面板 map 的 `CAL *` 改為 canonical join 的 `k *`(照 k-migration query) | 7d ≤2% + as7341 桶 ≥provisional |
+| 1 | air.json Spectrum PPFD(panel 9 自 2026-09-11 讀 k_adopted;panel 12 仍硬編碼,對照用) | k-migration「item 1」 | 面板 map 的 `CAL *` 改為 canonical join 的 `k *`(照 k-migration query) | 7d ≤2% + as7341 桶 ≥provisional |
 | 2 | air.json DLI-lux / daily.json 總 lux(lux/54) | 「item 2」+ delta 表 | `(lux×k_main)/54` | 7d ≤2% + lux_main daylight 桶 valid |
 | 3 | daily.json 遮燈 DLI(lux_ref/54) | 「item 3」 | `(lux_ref×k_ref)/54` | 7d ≤2% + lux_ref 桶 valid |
 | 4 | ratio canary 基準 | — | 分母改校正 lux 後**重定基準區間**(舊區間作廢) | item 2 翻完後 |
