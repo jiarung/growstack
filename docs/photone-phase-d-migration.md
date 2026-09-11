@@ -49,6 +49,11 @@ _程式面(kconsume.py + fixture + k-migration dashboard)完成後,遷移本身�
   而 `provisional` 不會置換已採納值，所以不會自己好。
   **2026-09-10 carry 寬限到期**會變 `stale` 並開始告警 —— 但**值不會變**，只是多一個警報。
   只佔 1.3% 的積分光量，但翻 item 2 就會把它套進 daylight cell。
+  **2026-09-11 實測：預言完全應驗** —— `adoption_state=stale`、`reason=carry-expired`、
+  `value` 仍是 `0.209968`。所以這一項沒有自己好，也不會自己好。
+  `as7341_ppfd` 三個桶同樣全是 `stale`/`carry-expired`（lamp/none 停在被 08-24
+  感測器故障汙染的 `0.228541`）—— 面板不受影響，因為 2026-09-11 的 `adoption_state`
+  閘門會擋下未採納的值，但**過期的 carry 本身仍然沒有清除機制**。
 
 - [ ] **B3 — 通量比的基準與量測窗不同尺。**
   `cal-review-reminder.sh` 在 pre-lamp 窗算 `clear/lux`，門檻卻用 6.0（註解引用燈下量的 6.3–6.6 基準）。

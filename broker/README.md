@@ -253,6 +253,13 @@ wrong and the correction factor is unresolved; that is what
 [`PHOTONE-CAL-PLAN.md`](PHOTONE-CAL-PLAN.md) exists to settle. Recalibrate with
 `CAL_new = CAL_old · (PPFD_meter / shown value)`.
 
+Since 2026-09-11 the panels no longer hardcode that constant: they read
+`k_adopted[as7341_ppfd/lamp/none]` — which IS a CAL, derived from
+`photone_ppfd / Σ(counts/R·λ)` against ground truth rather than through lux —
+gated on `adoption_state`, so the frozen value above is what renders until the
+pipeline earns a replacement. Recalibrating by hand is therefore no longer the
+mechanism; collecting lamp-hour Photone sessions is.
+
 Both the `lux/54` DLI and the spectrum DLI are charted side by side, the former
 labelled LEGACY. Note that the light controller's evening top-up decides against
 the **lux estimate**, not the spectrum one.

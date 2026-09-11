@@ -68,7 +68,7 @@ shouts when something goes quiet.
 | Doc | Question it answers | State |
 |---|---|---|
 | [`docs/photone-cal-pipeline.md`](docs/photone-cal-pipeline.md) | **the contract** — bucket universe, estimator spec, epoch registry, adoption brake | authoritative; cited by `kmodels.py`, `kadopt.py`, `kconsume.py`, `mark-epoch.sh`, `analyze-photone.sh` |
-| [`broker/PPFD-CALIBRATION.md`](broker/PPFD-CALIBRATION.md) | is the PPFD scale real µmol·m⁻²·s⁻¹? how is `CAL` measured? | daylight calibrated; the lamp case unresolved; the current `CAL` is declared stale |
+| [`broker/PPFD-CALIBRATION.md`](broker/PPFD-CALIBRATION.md) | is the PPFD scale real µmol·m⁻²·s⁻¹? how is `CAL` measured? | daylight calibrated; the lamp case unresolved; the frozen `CAL` is stale, and since 2026-09-11 the panels take it from the pipeline instead, once earned |
 | [`broker/PPFD-CAL-ROUTINE-PLAN.md`](broker/PPFD-CAL-ROUTINE-PLAN.md) | the routine that actually runs daily, and when a `CAL` may be adopted | live — `ppfd-cal-daily.sh` + `cal-review-reminder.sh` |
 | [`broker/PPFD-CAL-DAILY-PLAN.md`](broker/PPFD-CAL-DAILY-PLAN.md) | — | **superseded 2026-08-17** by the row above; kept only for its reasoning |
 | [`broker/PHOTONE-CAL-PLAN.md`](broker/PHOTONE-CAL-PLAN.md) | design of `record-photone.sh`, the ground-truth recorder | built |

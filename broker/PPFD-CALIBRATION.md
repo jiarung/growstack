@@ -56,6 +56,19 @@ BH1750**去交叉校準 AS7341 光譜。搭配 `calibrate-ppfd.sh` 使用。原�
   見 [`docs/incidents/2026-07.md`](../docs/incidents/2026-07.md#0722)),
   兩顆 BH1750 也已於 08-11 更換。必須重配,見「開始之前」。
 
+  **2026-09-11 起,面板不再寫死這個值。** air.json 面板 7/9 改讀
+  `k_adopted[as7341_ppfd/lamp/none]`,並以 `adoption_state` 把關 ——
+  **未採納就退回 0.0017469**,所以在管線達標之前畫面不變。
+
+  那個 k **本身就是一個 CAL**:`kadopt.py:28-30` 的 seed 正是 0.0017469、
+  單位 `umol_m2_s_per_count`,而 `kmodels.py:239` 以
+  `photone_ppfd ÷ Σ(counts/R·λ)` 導出 —— **直接對地面實測,不經過 lux**,
+  因此不繼承 BH1750 約 3.9× 的低讀。現行估計 **0.0063–0.0068**(是舊值的約 3.9 倍);
+  lamp/none 於 2026-09-11 為 n=3、CI 相對寬度 0.409(門檻 0.20),尚未達標。
+
+  ⚠ 別把它和每日 `ppfd-cal-daily.sh` 的 `cal_ols` 搞混:那條綁著未校正的 lux,
+  近兩週穩定在 **約 0.0014**,方向與上面相反。見 `PPFD-CAL-ROUTINE-PLAN.md`。
+
 ## 感測器佈局(重要)
 
 - `lux`(BH1750 @ 0x23)= 在植物位置,**被植物燈照到**。
