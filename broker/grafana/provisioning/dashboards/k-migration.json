@@ -91,7 +91,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "item 1 — spectrum PPFD: hardcoded CAL vs adopted bucket",
-      "description": "raw = 0.0017469 × S (what air.json panel 9/11/12 hardcodes today). corrected = k_adopted[as7341_ppfd × context] × S. S is the same counts integral as the production panels; saturated samples are dropped the same way; every fallback multiplies CAL so the lines coincide until a bucket earns adoption.",
+      "description": "raw = 0.0017469 × S — the frozen constant. As of 2026-09-11 air.json panels 7/9 no longer hardcode it: they resolve CAL from k_adopted[as7341_ppfd/lamp/none], gated on the bucket being adopted-or-held and not a carry, and fall back to this same frozen value otherwise (panel 11 was deleted; panel 12 keeps the constant on purpose, it is the ground-truth comparison). corrected = k_adopted[as7341_ppfd × context] × S. S is the same counts integral as the production panels; saturated samples are dropped the same way; every fallback multiplies CAL so the lines coincide until a bucket earns adoption.",
       "datasource": {"type": "influxdb", "uid": "influxdb-monitor-air"},
       "gridPos": {"h": 9, "w": 24, "x": 0, "y": 29},
       "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 0, "spanNulls": true}}, "overrides": []},

@@ -252,13 +252,28 @@ async def todays_dli():
     flux = (
         'import "timezone"\n'
         f'option location = timezone.location(name: "{TZ_NAME}")\n'
-        # adopted lux multiplier; no row -> query errors -> None -> hold last
+        # Adopted lux multiplier. No row -> the query errors -> None -> hold last.
+        #
+        # ABSOLUTE range, not -90d: k_adopted is written only when something CHANGES
+        # (verified 2026-09-11 — a 2-hour window returns nothing), so a relative range
+        # silently loses a bucket that has been stable and takes the DLI with it.
+        #
+        # e0-legacy excluded, then group() before last(): the measurement is tagged by
+        # epoch, so last() alone returns one row PER epoch and findRecord picks whichever
+        # table comes back first. On 2026-09-11 e0-legacy was written 08-31 and the
+        # declared epoch 09-10, so the newest row is not reliably the right one either.
+        #
+        # NOT gated on adoption_state, unlike the Grafana panels, and the difference is
+        # deliberate. A panel must not DISPLAY a coefficient the pipeline has disowned;
+        # a controller wants the best available ESTIMATE, and a stale-but-once-earned k
+        # still beats reverting to raw counts — which would read ~4x dark and run the
+        # lamp to the cap for no reason. Same number, two jobs.
         f'k = (from(bucket: "{INFLUX_BUCKET}")\n'
-        '  |> range(start: -90d)\n'
+        '  |> range(start: 1970-01-01T00:00:00Z)\n'
         '  |> filter(fn: (r) => r._measurement == "k_adopted"'
         ' and r.target == "bh1750_lux_main" and r.source == "mixed"'
-        ' and r.regime == "none" and r._field == "value")\n'
-        '  |> last() |> findRecord(fn: (key) => true, idx: 0))._value\n'
+        ' and r.regime == "none" and r.epoch != "e0-legacy" and r._field == "value")\n'
+        '  |> group() |> last() |> findRecord(fn: (key) => true, idx: 0))._value\n'
         f'from(bucket: "{INFLUX_BUCKET}")\n'
         '  |> range(start: -25h)\n'
         '  |> filter(fn: (r) => r._measurement == "air" and r._field == "lux"'
