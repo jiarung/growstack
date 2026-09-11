@@ -62,6 +62,126 @@ _程式面(kconsume.py + fixture + k-migration dashboard)完成後,遷移本身�
   健康期的 pre-lamp 值實測是 1.1–3.3，門檻 6.0 比健康值本身還高 2–5 倍，
   也就是它不可能以正確的理由通過。現行硬體的健康 pre-lamp 基準**還沒有樣本**。
 
+- [ ] **B4 — `as7341_ppfd` 三個桶全部 `stale`/`carry-expired`，`lamp/none` 停在被汙染的 `0.228541`。**
+  來源是 2026-08-24 20:00 那次量測：`photone=220` 但 `spec_ppfd_at=1.68`（S≈962），
+  AS7341 當時正在崩潰途中 —— 19:55 的 `clear` 只有 416（同日同時段中位數 10,917），
+  20:15 全通道進入 65535 的 I2C 失敗哨兵。**現有的准入規則沒有一條擋得住它**：
+  器材沒換、燈的狀態正確、設定相符、cell 合法、counts 為正且低於 `SAT_COUNT`。
+
+  它不會自己好。`carry` 過期只改狀態不改值（B2 同理，2026-09-11 已驗證）。而若
+  放著等新證據進來，`kadopt.py:153-170` 的 ±10% 煞車一定會跳（0.00675 vs 0.228541
+  差 34 倍），桶會變 `held` 並等 `ack-k-hold.sh`。
+
+  ### 處置：補標 2026-09-04 重新擺位這個 epoch
+
+  **這個 epoch 本來就該標，與汙染值無關** —— 它是
+  [`2026-09.md#0904`](incidents/2026-09.md#0904) 已經記錄在案的事件，而且用
+  BH1750 當對照組：`clear` 在 11:20 恢復 **43 倍**（515 → 22,385），而 `lux` 在
+  同一段時間只在 3,114–4,387 之間（擺位動作當下那一筆是 3,114，前後都在 4,100–4,400）。
+  **光沒有變，變的只有 AS7341 看到的** —— 那是 counts→PPFD 映射改變的定義。
+  漏標它本身就是缺失；重置汙染值是順帶的結果，不是理由。
+
+  燈下（固定參考光源）`clear` 逐日中位數獨立佐證（台北日期）：
+
+  ```
+  9-2  11,412    9-3  404（仍在劣化 regime，事故紀錄當日通量比 2.97）
+  9-4  22,473 ← 階躍    9-5  22,532    9-6  22,878
+  ```
+
+  **邊界 `2026-09-04T03:20:00Z`（= 09-04 11:20 台北，事故紀錄裡「放回去的那一刻」）**
+
+  | 量測 | source | k | 落在 |
+  |---|---|---|---|
+  | 09-01 07:45 | daylight | 0.0108 | e1（舊） |
+  | 09-07 19:15 | lamp | 0.00435 | **e2** |
+  | 09-09 20:00 | lamp | 0.00675 | **e2** |
+  | 09-10 19:00/19:30/20:00 | lamp | 0.0071 | **e2**（間隔 30 分，仍串成 1 session） |
+
+  燈下證據 **n=3 全數保留**；08-24/25 的故障期與 09-03 的劣化期都留在舊側。
+  唯一的代價是那筆孤例日光（n=1）留在 e1 —— 但它在儀器狀態改變之前，本來就不該混算。
+
+  **三個桶都不會 carry。** `materialize()` 只在前身是 `adopted`/`held` 時繼承
+  （`kadopt.py:76`），而 `lamp/none` 與 `daylight/diffuse` 是 `stale`、
+  `daylight/direct` 是 `seed` —— docstring 明寫「seed/stale predecessors have
+  nothing earned to carry」。三個桶在 e2 全部回到 seed `0.0017469`。
+
+  **然後會自動發生**：`lamp/none` 的 model status 已是 `provisional`，而
+  `kadopt.py:144-149` 的 seed 分支在 `provisional` 或 `valid` 就 bootstrap，
+  **不過 ±10% 煞車**。所以下一次 cron（每小時 :10）會直接採納約 0.0069，
+  `reason="bootstrap"`，不進 `held`、不需要 `ack-k-hold.sh`。
+  air.json 面板 7/9 會在一小時內從 PPFD ~100 跳到 ~370，與 Photone 實測的 320 一致。
+
+  ### 步驟
+
+  `--config` 與 `--photone` 是必填（`mark-epoch.sh:123,129`），沿用 e1 的值：
+
+  ```bash
+  cd ~/monitor-air/broker
+  ./mark-epoch.sh epoch --target as7341_ppfd --device livingroom \
+    --start 2026-09-04T03:20:00Z \
+    --config '{"gain": 4.0, "tint_ms": 280.78}' \
+    --photone '{"phone": "iPhone 15 Pro", "app_ver": "3.2.1"}' \
+    --reason "sensor repositioned 2026-09-04 11:20 after the desiccant knock: clear recovered 43x while lux held flat at 4,100-4,400 (docs/incidents/2026-09.md#0904)"
+  ./mark-epoch.sh list
+  # 同一輪：告警只看當前 epoch（見下節），改完必須重啟 Grafana 才會載入
+  python3 kmodels.py --selftest
+  ./compute-k-models.sh --fixture fixtures
+  env -i PATH=/usr/bin:/bin HOME="$HOME" bash -c "cd $PWD && ./compute-k-models.sh"
+  git add epochs.json && git commit        # append-only 註冊表，必須進版控
+  ```
+
+  ### 必須同時處理的副作用
+
+  **`k-adoption-stuck` 告警會繼續對 e1 的三列叫。** 它從 1970 掃描**所有** epoch，
+  對任何 `held`/`stale` 超過 24h 的列告警（`rules.yaml.tmpl:699,705`），而建立 e2
+  不會改動 e1，採納流程也只處理當前 epoch 的 universe（`compute-k-models.py:133`）。
+  **被取代的 epoch 停在 stale 是預期狀態，不是待辦** —— 告警應該只看每個 target
+  的當前 epoch。不修的話這一步會換來三個永久誤報。
+
+  **修法（必須與標記 epoch 同一輪做，不能只列在驗收）**：在 pivot 之後、
+  `adoption_state` 過濾之前，對每個 `(target, source, regime)` 只留 `_time` 最新的
+  那一列。被取代的 epoch 在 `compute-k-models.py:133` 之後就不再被寫入，而當前
+  epoch 的桶至少在 materialize 當下寫過一次，所以「最新的寫入」就是「當前 epoch」——
+  不需要把 `epochs.json` 搬進 InfluxDB。
+
+  ```flux
+  // 在既有的 pivot 之後加：
+  |> group(columns: ["target", "source", "regime"])
+  |> top(n: 1, columns: ["_time"])
+  |> group()
+  // 然後才是既有的 filter(adoption_state == "held" or ... == "stale")
+  ```
+
+  改的是 `rules.yaml.tmpl`，而告警規則**只在 Grafana 啟動時讀取**（面板有 watcher，
+  規則沒有）—— 改完要重啟容器，否則看起來生效其實沒有。這是本 repo 的既有陷阱。
+
+  ### 驗收
+
+  1. `epochs.json` 多一列 `as7341_ppfd-e2`
+  2. `k_model` 出現 e2 的桶，`lamp/none` n=3、estimate ≈ 0.0069
+  3. `k_adopted[.../e2]` → `adopted` / `bootstrap` / 約 0.0069，且 `model_id` 指向 e2
+  4. panel 9 從 ~100 變 ~370，對得上 Photone 的 320
+  5. lux 兩個 target 完全不受影響（epoch 是 per-target）
+  6. `k-adoption-stuck` 沒有因為 e1 產生新的誤報
+  7. 告警規則**真的載入了** —— 用 `MAINTENANCE.md:155-157` 那組核對，三個數字必須一致：
+
+     ```bash
+     grep -c '^ *- uid:' grafana/provisioning/alerting/rules.yaml{.tmpl,}
+     curl -s -u ... localhost:3001/api/v1/provisioning/alert-rules | jq length
+     ```
+
+     2026-09-02 就是靠這組發現兩條 k-model 規則從來沒被載入過，靜默了 11 天
+     （`MAINTENANCE.md:133`）。
+
+  ### 殘留風險
+
+  - **本項會重置 k-migration 的 7 天平行期時鐘**，標 epoch 本來就是這種事件。
+  - **e1 的桶不會消失，`0.228541` 仍躺在那裡。** 而 `kconsume.py:84-85` 只對 `seed`
+    退回並標記，**其餘狀態一律套用 `row["value"]`，包含 `stale`** —— 所以**邊界之前
+    的歷史 cell 在正規消費端仍會乘到那個汙染值**。air.json 的 `kOf()` 有額外把關，
+    但那是顯示政策，不是 `kconsume` 的行為。這一項 B4 不解決。
+  - `daylight/diffuse` 在 e2 從 n=0 開始，短期內沒有日光係數。
+
 ## 已完成的前置
 
 - [x] **2026-09-07 — `(mixed, none)` 進入 lux 目標的合法矩陣，消費端短路解除。**
