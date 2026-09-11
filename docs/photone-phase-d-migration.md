@@ -36,13 +36,39 @@ _程式面(kconsume.py + fixture + k-migration dashboard)完成後,遷移本身�
 翻任何一項生產面板之前，這三件必須先解決。**前兩件是硬阻塞**：沒有平行面板就沒有驗收依據，
 而汙染的採納值會被直接套進去。
 
-- [ ] **B1 — k-migration 平行面板五個裡四個是壞的，而且從來沒有運作過。**
-  `raw` 那個 union 的真實分支帶著 `range()` 留下的 `_start/_stop/_measurement/_field/device`，
-  dummy 列只有三欄，schema 不合 → `record is missing label _value`。
-  （`k` 和 `ctx` 兩個 union 都有 `keep()` 對齊，唯獨 `raw` 漏了。）
-  補上 `keep()` 後 schema 錯誤消失，露出下一層：
-  **`internal error: panic: arrow/array: index out of range`**，panel 1/2/3/4 同一個錯。
-  引擎層 panic，不是語法問題。**這是整個 migration matrix 的驗收工具，它壞著就沒有 7 天平行期可言。**
+- [x] **B1 ✅ 2026-09-11 — k-migration 五個面板全部可用了。**
+  `raw` union 的 schema 不合（`keep()` 漏了）已於 `a78cc7f` 修好；那之後只剩 panel 4
+  的 `integral: found out-of-order times` —— **`group()` 之後 Flux 不保證列序**，而
+  `integral()` 逐列走並拒絕亂序。兩處 `integral` 前補 `sort(columns: ["_time"])`。
+  同一個坑 `daily.json` panel 10 的 `cyc` 區塊早就帶著註解修過了。
+
+  ### 但「面板能跑」不是這一項真正的問題
+
+  修完之後 panel 4 讀 **+33%**，而 mixed 佔 81% 的光、k=3.93，校正側該給約 **+270%**。
+  原因在 `cor` 的條件裡：
+
+  ```flux
+  if l.src == "unknown" or l.src == "mixed" ...  then 1.0 else r.value
+                          ^^^^^^^^^^^^^^^^^^
+  ```
+
+  **`(mixed,none)` 自 `7a64a3f` 起就是 lux 目標的合法 cell**（`kmodels.py` UNIVERSE），
+  `kconsume` 和生產面板都在校正它 —— **只有這個驗收工具還停在舊矩陣**。
+  它不是壞掉，是**在量一個生產端早就離開的宇宙**，而一個會渲染錯誤數字的面板
+  比一個會報錯的面板危險。
+
+  panel 1 / 4（`bh1750_lux_main`）已改為納入 `(mixed,none)`；
+  **panel 2（`bh1750_lux_ref`，矩陣只有 daylight）與 panel 3（`as7341_ppfd`，mixed
+  對它只是 k_observed）刻意保留排除** —— 三者現在各自對上 `kmodels.py` 的 UNIVERSE。
+
+  修正後 panel 4：`09-09 272.8 / 09-10 269.2 / 09-11 271.0`（散佈 1.5%）。
+
+  ### ±2% 閘門已作廢，改讀穩定度
+
+  那個閘門假設的是「切換前的平行期，校正側應等於 raw」。生產端已於 2026-09-08..11
+  切走（air.json 即時讀 `k_adopted`），所以 **+270% 是設計上的結果，不是失敗**。
+  現在該看的是**這條線穩不穩** —— 跳動代表某個係數動了或 cell 組成變了，兩者都值得知道。
+  面板標題與描述已改寫，不再宣稱一個沒人會再用的門檻。
 
 - [ ] **B2 — `k_adopted[bh1750_lux_main/daylight/diffuse] = 0.209968` 是已知錯誤值。**
   來自被撤回的汙染配對（見 `docs/incidents/2026-09.md#0901`）。`model_id` 顯示它是在
