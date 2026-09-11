@@ -33,8 +33,20 @@ FLUX=$(cat <<FLUXEOF
 import "date"
 import "timezone"
 option location = timezone.location(name: "$TZ_NAME")
+// The THROUGHPUT ratio is measured in the LAMP window (09:00-18:00), not in the
+// pre-lamp window the CAL candidate comes from. Until 2026-09-11 it used 06:00-08:00
+// and compared the result against 6.0 — a baseline derived under the lamp — so it
+// was reading one scale against another's threshold and reported OK all through the
+// worst optical degradation this rig has had.
+//
+// The fix is not a conversion factor, because there is no stable one: measured over
+// 2026-08-30..09-10 the lamp/pre-lamp ratio ran 0.29 to 0.93, a 3.2x spread. The two
+// windows measure different things. Morning daylight changes spectrum day to day;
+// the lamp does not, which is exactly why air.json panel 17 and the
+// spectrum-throughput-drift alert both isolate the optical path under it. Same
+// window as those two now (540-1080), so 6.0 finally compares like with like.
 inW = (t) => { m = date.hour(t: t) * 60 + date.minute(t: t)
-               return m >= 360 and m < 480 }
+               return m >= 540 and m < 1080 }
 cal = from(bucket: "sensors") |> range(start: -${DAYS}d)
   |> filter(fn: (r) => r._measurement == "ppfd_cal" and r.device == "$DEVICE")
   |> filter(fn: (r) => exists r.window_mode and r.window_mode == "pre-lamp")
