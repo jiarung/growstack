@@ -86,7 +86,7 @@ owns what runs today. Individual failures belong in
 |---|---|
 | Environment + light telemetry | running |
 | Grow-lamp control, DLI-target evening top-up | running |
-| Weigh station (NFC → weight → plant id) | running; 16 plants registered |
+| Weigh station (NFC → weight → plant id) | running; 27 tags — 26 plants and one bare-soil control |
 | Deadman alerts (sensors, weather feed) | running |
 | Nightly InfluxDB backup to HDD | running |
 | Leaf reflectance → vegetation indices | **blocked** — the AS7263 does not aim at the leaf, and the bands NDRE/CIre need are not on the AS7341 |

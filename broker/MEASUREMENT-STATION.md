@@ -52,6 +52,29 @@ Subscribe `monitor-air/+/measure/event_raw`. Per message:
    {"plant_id": "cactus-01", "uid": "00A8635C", "weight_g": 334.8}
    ```
 
+## Control pots — a tag that is not a plant
+
+`cactus-nature-evapotranspiration` is bare soil with nothing growing in it, weighed
+in the same sessions as the plants. Its drawdown IS the evaporation the plants'
+drawdown is confounded with, so reading the two side by side is what separates
+"the plant used water" from "the surface gave it up".
+
+It is a full member of everything mechanical — a tag, a retained ref, a row in the
+weight history, a line on daily.json panel 1 — and is **excluded from the two
+watering-decision tables** (`該澆水了嗎`, `最久沒澆水`) by an explicit `controls`
+list in their Flux. That list is not optional: the reference has to be RE-WETTED
+periodically or it dries out and stops evaporating, and a re-wetting is a >10 g
+jump, which this pipeline cannot tell apart from watering a plant. Without the
+list it would quietly appear as a pot that needs water.
+
+`cactus-water-ref` is in the same list. It exists in the reflect plant dropdown and
+has never been tagged or weighed.
+
+**Comparing rates, not subtracting them.** Evaporation scales with exposed surface,
+not with mass, and the reference is 207 g against plants from 108 g to 2,311 g. Read
+its loss rate next to a plant's; do not subtract one from the other as if the
+surfaces matched.
+
 ## UID → plant_id map (version-controlled — NOT flow/global context)
 Keep it in git (survives rebuilds, reviewable). ⚠️ The Node-RED container mounts only the named volume
 `/data`; a repo file under `broker/node-red/` is NOT visible inside unless you mount it. Do ONE of:
