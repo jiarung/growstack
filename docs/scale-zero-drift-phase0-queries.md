@@ -146,7 +146,7 @@ from(bucket: "sensors")
 
 ---
 
-# 執行結果 — 2026-09-11，broker host
+# <a id="results"></a>執行結果 — 2026-09-11，broker host
 
 **結論：回溯修正不可行。只能往前，實體參考物是唯一的路。**
 
