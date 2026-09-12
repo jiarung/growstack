@@ -71,7 +71,30 @@ case "$code" in 2*) ;; *) echo "contact point setup failed (HTTP $code): $(cat /
 # Dropping it rather than correcting it to `field`: grouping by device means one
 # message listing every dead field on a board, instead of six messages for one
 # unplugged sensor. The template ranges over the group, so they all show.
-pol_body='{"receiver":"telegram","group_by":["alertname","device"],"group_wait":"30s","group_interval":"5m","repeat_interval":"6h"}'
+# The default route renotifies every 6h, which is right for a deadman: a silent
+# sensor wants nagging until someone plugs it back in.
+#
+# `k-model bucket stuck` is not that. It is the backstop for "nobody dealt with a
+# held/stale bucket in 24h" — the FIRST notification comes from `k-model adoption
+# needs a human` (for: 1m), which is untouched, so a genuinely new hold still
+# arrives immediately. This one only says the situation persists.
+#
+# And for at least one bucket the situation persists by measurement, not neglect:
+# bh1750_lux_ref/daylight/diffuse has 13 sessions and a CI relative width of 0.53
+# against the 0.20 gate, because daylight k for this site scatters 2.9x on moving
+# railing shadows (PPFD-CAL-ROUTINE-PLAN.md) and this sensor is shielded from the
+# lamp, the only condition where the same sensor scatters 3%. Every 6 hours it
+# repeats an instruction — collect more Photone readings — that cannot work there.
+# Weekly keeps the reminder without training anyone to ignore the channel.
+#
+# Matching on alertname rather than adding a suppression list, deliberately: the
+# bucket stays visible and the other two stuck buckets, which DO want measurements,
+# keep showing up in the same message.
+pol_body='{"receiver":"telegram","group_by":["alertname","device"],
+  "group_wait":"30s","group_interval":"5m","repeat_interval":"6h",
+  "routes":[{"receiver":"telegram",
+             "object_matchers":[["alertname","=","k-model bucket stuck — held/stale unattended"]],
+             "repeat_interval":"7d"}]}'
 code=$(printf '%s' "$pol_body" | api PUT "/api/v1/provisioning/policies")
 case "$code" in 2*) ;; *) echo "policy setup failed (HTTP $code): $(cat /tmp/gf_resp)" >&2; exit 1;; esac
 
