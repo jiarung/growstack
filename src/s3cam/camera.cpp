@@ -30,6 +30,7 @@ static framesize_t restSize = FRAMESIZE_VGA;
 static constexpr uint32_t FRAMESIZE_SETTLE_MS = 500;
 
 static uint16_t sensorPid = 0;
+static bool camInitOk = false;   // see cameraPresent()
 static bool camIdle = false;
 static bool raisedForCapture = false;
 
@@ -61,6 +62,7 @@ bool cameraInit() {
     c.fb_location  = CAMERA_FB_IN_PSRAM;
     c.grab_mode    = CAMERA_GRAB_LATEST;   // stills want the freshest frame, not a queue
 
+    camInitOk = false;
     esp_err_t err = esp_camera_init(&c);
     if (err != ESP_OK) {
         Serial.printf("[cam] init failed: 0x%x — wrong pin map? see cam_pins.h alternates\n", err);
@@ -92,8 +94,11 @@ bool cameraInit() {
     Serial.printf("[cam] up: sensor=%s  still=QSXGA q=%d  fb=PSRAM x2  rest=%s "
                   "(actual WxH rides in every capture's JSON)\n",
                   cameraSensorName(), JPEG_QUALITY, cameraRestSizeName());
+    camInitOk = true;
     return true;
 }
+
+bool cameraPresent() { return camInitOk; }
 
 // --- runtime sensor tuning (see /cam/tune) ---------------------------------
 // Every setter REJECTS an out-of-range value rather than clamping it: a

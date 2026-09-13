@@ -68,16 +68,26 @@ void setup() {
     // the port early means the parser sees the stream from the first frame
     thermal::begin();
 
+    // The camera's success does NOT gate the server any more. It used to, and the
+    // consequence was that a sensor this board can no longer probe took the
+    // thermal UART, the rangefinder, the servos and /health offline with it —
+    // subsystems that share nothing with the camera except a PCB. The symptom
+    // was a bare "Connection refused" with no way to ask the board why, which is
+    // the worst possible failure for a board whose job is now to be diagnosable.
     camOk = cameraInit();
-    if (camOk && endpointsStart()) {
-        Serial.printf("[s3cam] ready: http://%s/  (/stream /capture /observation /last.jpg "
-                      "/i2c/scan /servo)\n",
-                      WiFi.localIP().toString().c_str());
-    } else if (!camOk) {
-        Serial.println("[s3cam] camera init FAILED — endpoints not started; "
-                       "try the alternate pin maps in cam_pins.h");
+    if (!camOk) {
+        Serial.println("[s3cam] camera init FAILED — /capture /stream /observation "
+                       "will report it; everything else still serves. Wrong pin map? "
+                       "see cam_pins.h alternates");
+    }
+    if (endpointsStart()) {
+        Serial.printf("[s3cam] ready: http://%s/   camera=%s thermal=on range=%s servo=%s\n",
+                      WiFi.localIP().toString().c_str(),
+                      camOk ? "ok" : "ABSENT",
+                      rangefinderPresent() ? "ok" : "absent",
+                      servo::present() ? "ok" : "absent");
     } else {
-        Serial.println("[s3cam] httpd start FAILED");
+        Serial.println("[s3cam] httpd start FAILED — nothing is reachable");
     }
 }
 

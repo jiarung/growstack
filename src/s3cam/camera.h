@@ -8,6 +8,12 @@
 // while streaming and restores after.
 
 bool cameraInit();                    // true = sensor probed + configured
+
+// Did cameraInit() succeed? Asked by the endpoints, which now start whether or
+// not the camera did: a dead sensor must not take the thermal UART, the
+// rangefinder, the servos and /health down with it — they share nothing with it
+// but a board.
+bool cameraPresent();
 const char* cameraSensorName();       // "OV5640" / "OV2640" / "unknown(0x..)"
 camera_fb_t* cameraCapture();         // full-res capture; caller MUST return it
 void cameraRelease(camera_fb_t* fb);  // esp_camera_fb_return wrapper
