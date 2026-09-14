@@ -31,7 +31,7 @@ _time           _value
 
 Also takes a file (`./influx-q.sh -f q.flux`) or stdin (`echo '<flux>' | ./influx-q.sh`).
 It converts timestamps to local time, drops the bookkeeping columns, and flattens
-the multi-block CSV — see [the traps](#six-traps) for why each of those matters.
+the multi-block CSV — see [the traps](#seven-traps) for why each of those matters.
 
 The raw form, if you want the unprocessed output:
 
@@ -94,7 +94,7 @@ option location = timezone.location(name: "Asia/Taipei")
   |> aggregateWindow(every: 1d, fn: count, createEmpty: true)
 ```
 
-## Six traps
+## Seven traps
 
 Each of these has already produced a wrong conclusion in this project.
 
@@ -151,6 +151,26 @@ Median lux by cell, seven days: `daylight 54 · lamp 4145 · mixed 4394 · none 
 Anything averaged over daylight cells is therefore an average over twilight, and it
 will look like a statement about sunlight. Check the hour distribution and the lux
 level before drawing a conclusion from that bucket.
+
+**7. Never correlate a ratio against its own numerator.** For any derived quantity
+`k = A / B`, `corr(k, A)` is high by construction — the two share a term, so random
+data produces it. Only `corr(k, B)` carries information about whether `k` actually
+varies with the thing you think it varies with.
+
+This trap put a wrong explanation on a real limitation and pointed at a
+blueprint-level fix. `k = photone / sensor` for the lux buckets was written up as
+`corr(k, 亮度) = +0.949`, concluded to be a compressed sensor response, and used to
+argue the single-multiplier model had to be replaced. Measured:
+
+| | |
+|---|---|
+| `corr(k, photone)` — the numerator | **+0.774**, and spurious |
+| `corr(k, sensor)` — the denominator | **+0.444**, real but modest |
+
+The scatter turned out to track time of day (`corr(ln k, hour) = −0.665`), which is
+the moving railing shadow `PPFD-CAL-ROUTINE-PLAN.md` had already measured at 2.9x —
+a siting problem no model shape can fix. Full working in
+[`2026-09.md#0912-ratio-corr`](../docs/incidents/2026-09.md#0912-ratio-corr).
 
 ## Related
 
