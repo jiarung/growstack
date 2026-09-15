@@ -277,6 +277,12 @@ bool cameraSetRestSize(const char* name) {
     else if (!strcmp(name, "svga"))  want = FRAMESIZE_SVGA;
     else if (!strcmp(name, "qsxga")) want = STILL_SIZE;
     else return false;
+    // No sensor means nothing to resize, and returning true here would have
+    // /power answer "ok" AND reset the die-temperature peak for a change that
+    // never reached any hardware — the same shape of lie as a silently clamped
+    // typo. Every sibling setter already guards this; this one was the omission.
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s) return false;
     restSize = want;
     // apply now unless a capture is mid-flight holding the sensor at QSXGA;
     // its cameraRelease will pick up the new resting size
