@@ -7,3 +7,10 @@ Diagnostics:
   Suppress:
     - pp_file_not_found
     - ovl_no_viable_member_function_in_call
+    # Same cause, different diagnostic id: clangd cannot see that
+    # HardwareSerial derives from Print, because that inheritance sits behind
+    # ESP-IDF conditionals a host clang does not resolve. Serial.printf() then
+    # reports "cannot initialize object parameter of type 'Print'". The real
+    # compiler has never once objected — every `pio run` succeeds — so this is
+    # an editor artefact, not a defect being papered over.
+    - member_function_call_bad_type
