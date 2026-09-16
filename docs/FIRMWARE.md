@@ -20,10 +20,10 @@ whether it is live: [`../broker/FLOWS.md`](../broker/FLOWS.md).
 | Visible spectrum | **AS7341** 8-channel (415–680 nm) + clear + NIR | I²C |
 | NIR spectrum | **AS7263** 6-band (610/680/730/760/810/860 nm) | I²C |
 | Weight | **HX711** load-cell ADC | GPIO — `DT = 4`, `SCK = 5` (not I²C) |
-| Tag reader | **PN532** NFC | I²C |
+| Tag reader | **PN532** NFC | **software SPI** — I²C was abandoned, its clock stretching broke on the ESP32-S3 (`src/measure.cpp:16`) |
 | Display | **SSD1306** OLED | I²C |
 
-Everything except the HX711 shares one I²C bus (`Wire`, `SDA = GPIO17`,
+Everything except the HX711 **and the PN532** shares one I²C bus (`Wire`, `SDA = GPIO17`,
 `SCL = GPIO18`); the addresses do not collide.
 
 **Why two BH1750s.** `lux` sits where the plant is and therefore sees the grow
@@ -192,4 +192,12 @@ src/
 - **`event_id` is session-scoped** — it restarts at 1 after a reboot, so it is not
   a long-term primary key. The server dedups on `(device, event_id)` within a
   60 s window.
+- **Two NFC tags read unreliably** — `cactus-15b` and `cactus-10` often fail to
+  scan and sometimes need the enclosure opened. Their tags sit on an uneven
+  backing with an air gap behind them, which detunes them. A diagnostic patch and
+  a hypothesis worth testing first — that `TAG_POLL_MS = 50` may be cutting off
+  the PN532's own retry budget, in which case raising the retry count would change
+  nothing — are written up at
+  [`incidents/2026-09.md#0901-nfc-scan`](incidents/2026-09.md#0901-nfc-scan).
+  Not yet measured.
 - **WiFi is 2.4 GHz only.**

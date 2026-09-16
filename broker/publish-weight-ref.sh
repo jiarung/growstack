@@ -98,7 +98,12 @@ assert span_filter in q, "panel 10's span filter moved/changed — update publis
 # the honest grams and mark them "1st".
 first_filter = "|> filter(fn: (r) => r.afirst == 0.0)"
 assert first_filter in q, "panel 10's first-anchor filter moved/changed — update publish-weight-ref.sh"
-print(q.replace(span_filter, "").replace(first_filter, ""))
+# Control pots (bare-soil evaporation reference) are kept out of the panel's TABLE
+# but must still get a retained ref, so the OLED can show their drawdown. Same
+# strip-and-assert treatment as the other two display filters.
+ctrl_filter = "|> filter(fn: (r) => not contains(value: r.plant_id, set: controls))"
+assert ctrl_filter in q, "panel 10's control-pot filter moved/changed — update publish-weight-ref.sh"
+print(q.replace(span_filter, "").replace(first_filter, "").replace(ctrl_filter, ""))
 PY
 )"
 
