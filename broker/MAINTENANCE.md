@@ -307,6 +307,44 @@ any uid. That is the observable definition, and the data is already in the
 database — see the `live` block in `daily.json` panels 10 and 14. It agreed
 exactly with `tag-map.json` (26 of 26) the day it was written.
 
+**⚠ 2026-09-17 — that derivation assumes every ending has a successor, and one
+did not.** `cactus-13-2` 果凍化（rotted to mush). There is no successor to hand
+the tag to, so releasing the tag from `tag-map.json` changed nothing the panels
+can see: the plant still owned that uid's most recent *reading*, stayed `live`,
+and sat in 該澆水了嗎 at 168% asking to be watered with nothing left to water.
+The OLED side self-healed — `publish-weight-ref.sh` reads `tag-map.json` and
+reported it as a retired id with no ref — but the panels read InfluxDB, and
+InfluxDB does not know about the map.
+
+So the panels now carry an `ended` list beside `controls`, and it is a flag,
+which this section spent two paragraphs arguing against. The argument still
+holds for the case it was written for; it just is not the only case. Keep the
+list short, and take an entry OUT the moment its tag goes onto another pot —
+then the derivation works again on its own. See
+[`../docs/incidents/2026-09.md#0917-ended-no-successor`](../docs/incidents/2026-09.md#0917-ended-no-successor).
+
+### Ending a pot with no successor
+
+Not a repot — nothing takes its place. Four steps, and the third is the one that
+is easy to believe is unnecessary.
+
+1. **Release the tag**: remove the uid from `node-red/tag-map.json`. `add-tag.sh`
+   has no remove, so this is a hand edit — keep it sorted, `indent=2`, one
+   trailing newline, the way that script writes it. Node-RED re-reads the file
+   per measurement, so a later scan of that tag resolves to `plant_id="unknown"`
+   with no restart.
+2. **Refresh the references**: `./publish-weight-ref.sh`. The retained ref for
+   that uid is cleared and the plant is reported as *retired with history but no
+   tag*.
+3. **Add the id to `ended`** in `daily.json` panels 10 and 14. Skipping this
+   leaves a dead plant in the watering table forever — see above for why the
+   derived definition cannot catch it.
+4. **Keep the readings.** Nothing is deleted. The history is the record of a pot
+   that existed, and `ended` hides it from the decision tables without touching
+   it.
+
+Ids are never reused, ended or not.
+
 ### Capturing an AS7341 failure
 
 The failure leaves WiFi alive, so **take the evidence before cutting power**:
