@@ -6,6 +6,50 @@
 // board (and most S3-CAM clones) copies. If esp_camera_init fails with 0x105 /
 // 0x103 or the probe finds no sensor, try the alternates below IN ORDER and
 // record the winner in docs/mlx90640/phase-1b.md.
+//
+// Two boards now. -DCAM_BOARD_XIAO selects the Seeed XIAO ESP32S3 Sense; the
+// default is the Goouuu ESP32-S3-CAM the project started on. They differ in the
+// camera map AND in where the other peripherals can live, because XIAO's camera
+// claims 39/40 — exactly where the Goouuu build put the thermal UART.
+#if defined(CAM_BOARD_XIAO)
+
+// Seeed XIAO ESP32S3 Sense. Camera rides the B2B connector on the expansion
+// board, which also carries AF_VCC — the pin the Goouuu board leaves floating
+// and that cost a solder bridge to reach.
+#define CAM_PIN_PWDN   -1
+#define CAM_PIN_RESET  -1
+#define CAM_PIN_XCLK   10
+#define CAM_PIN_SIOD   40   // SCCB SDA
+#define CAM_PIN_SIOC   39   // SCCB SCL
+#define CAM_PIN_D7     48
+#define CAM_PIN_D6     11
+#define CAM_PIN_D5     12
+#define CAM_PIN_D4     14
+#define CAM_PIN_D3     16
+#define CAM_PIN_D2     18
+#define CAM_PIN_D1     17
+#define CAM_PIN_D0     15
+#define CAM_PIN_VSYNC  38
+#define CAM_PIN_HREF   47
+#define CAM_PIN_PCLK   13
+
+// The exposed castellated pads are D0-D5 and D8-D12 = GPIO1-9, 41, 42. The
+// camera uses none of them, so a full UART and a full I2C bus survive
+// alongside it — which is the reason this board was chosen.
+//   D4/D5 = GPIO5/6   I2C     (VL53L0X + PCA9685)
+//   D6/D7 = GPIO43/44 UART    (GY-MCU90640)
+// Avoid D11/D12 (GPIO41/42, the onboard mic) and D2/D8-D10 (the SD slot).
+#define RANGE_PIN_SDA   5
+#define RANGE_PIN_SCL   6
+#define THERMAL_PIN_RX 44
+#define THERMAL_PIN_TX 43
+
+#else
+
+// Goouuu ESP32-S3-CAM (phase-1b.md D3) — the ESP32S3_EYE / Freenove map, which
+// most S3-CAM clones copy. If esp_camera_init fails with 0x105 / 0x103 or the
+// probe finds no sensor, the alternates at the bottom of this file are the
+// candidates, in order.
 #define CAM_PIN_PWDN   -1
 #define CAM_PIN_RESET  -1
 #define CAM_PIN_XCLK   15
@@ -23,10 +67,8 @@
 #define CAM_PIN_HREF    7
 #define CAM_PIN_PCLK   13
 
-// Non-camera peripherals live here too, so pin allocation has ONE authority
-// and a collision is a compile error rather than a field mystery. Free and
-// safe on this N16R8 board: 1, 14, 21, 38-42, 47 (33-37 are octal PSRAM,
-// 19/20 native USB, 43/44 UART0, 26-32 flash — all unusable).
+// Free and safe on this N16R8 board: 1, 14, 21, 38-42, 47 (33-37 are octal
+// PSRAM, 19/20 native USB, 43/44 UART0, 26-32 flash — all unusable).
 #define RANGE_PIN_SDA  41
 #define RANGE_PIN_SCL  42
 // GY-MCU90640 thermal camera, UART. CROSSED: module TX -> our RX, module RX ->
@@ -34,6 +76,8 @@
 // unconnected — its onboard MCU owns that bus and does the calibration math.)
 #define THERMAL_PIN_RX 39
 #define THERMAL_PIN_TX 40
+
+#endif
 
 // Switching to an ALTERNATE map below would put camera data lines on 41/42;
 // the peripherals must move first. Caught here, at compile time.
