@@ -1,0 +1,21 @@
+# These files are host tooling, not part of any PlatformIO env, so
+# `pio run -t compiledb` never emits a compile command for them and clangd
+# falls back to bare defaults — no -I, so #include "gymcu_parser.h" fails and
+# the whole gymcu namespace reads as undeclared.
+#
+# The root .clangd suppresses pp_file_not_found, which hides the CAUSE and
+# leaves only the symptom ("use of undeclared identifier 'gymcu'"). That is
+# worth knowing before chasing the symptom.
+#
+# The paths are relative on purpose: clangd resolves them against the file's
+# own directory when there is no compile command, so this stays correct on the
+# other host and in a differently-named checkout.
+#
+# Authority for these flags is test/thermal/run.sh, which is what actually
+# compiles these files. If that changes, change this too — they are two copies
+# of one fact, and the only defence is that they sit ten lines apart in the
+# same directory.
+CompileFlags:
+  Add:
+    - -std=c++11
+    - -I../../src/s3cam/thermal

@@ -849,8 +849,10 @@ static esp_err_t i2cScanHandler(httpd_req_t* req) {
     }
     if (!found) {
         const char* none =
-            "\nNOTHING answered. That is the bus itself, not a chip:\n"
-            "  - SDA/SCL swapped, or not on 41/42\n"
+            "\nNOTHING answered. That is the BUS, not a chip — with no device\n"
+            "attached there are no pull-ups either, so every address NAKs and\n"
+            "\"nothing wired\" and \"wired wrong\" look identical here:\n"
+            "  - SDA/SCL swapped, or on different pins than the two above\n"
             "  - no common ground between the board and the peripheral\n"
             "  - peripheral VCC missing (PCA9685 VCC is 3V3, NOT the servo V+)\n";
         httpd_resp_send_chunk(req, none, strlen(none));
