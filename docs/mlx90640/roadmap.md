@@ -95,6 +95,24 @@ min..max 並永遠印出範圍,室溫幾度的差異才看得見。`--flipv/--fl
   **兩軸永不同時驅動**(sequential move,兼顧供電餘裕)
 - 驗收:A→B→C→A ×10,thermal ROI 位移統計(這就是 MVP metric #2 的雛形)
 
+**細節計畫:[phase-3-plan.md](./phase-3-plan.md)**(2026-09-18 從 dev host 搬進 repo)。
+那份把「驗收」展開成可判定的閘門,其中三件不在上面這五行裡、但缺了就白做:
+
+- **雜訊底線是硬性前置**。MG996R 規格 ±1.5° 換算成 pan ±0.87px / tilt ±1.03px ——
+  答案就落在 1 個像素上。σ_static > 0.3px 時儀器解析不了這個問題,硬跑只會得到
+  一個無法解讀的數字。
+- **每場前後各夾一個靜態區塊**。兩塊的平均質心位移 > 0.2px 就是目標被碰到或
+  冷掉了,整場作廢重跑 —— **不在分析裡補償**。前半 5 次 vs 後半 5 次若出現單調
+  漂移,量到的是漂移不是重複性。
+- **通過標準開跑前寫死**(P90 徑向 ≤ 1.0px、每軸 p2p ≤ 2.0px)。看到直方圖之後
+  才挑的標準不是標準 —— `tasks/lessons.md` 記過「迎合性同意」。
+
+**目前進度**:Stage 1.1 已完成 —— `centroid()` 在 `thermal_view.py`,
+閘門測試 `test/thermal/test_centroid.py`。**缺口是 `tools/s3cam/scan_repeat.py`**
+(`--mode static|gain|repeat`),Stage 2 與 Stage 3 全部依賴它,且它是純 host 邏輯,
+不需要板子在場。Phase 4 的 `observe.py` / `viewer.py` **不涵蓋這件事**:那兩支做的是
+RGB+thermal 配對與取景,這裡要的是同一個目標重複拍 N 次的位移統計。
+
 ## Phase 4 — observation 整合 🔧(RGB 側已由 1B 拉前)
 
 產出:scan 一次 = 完整 observation(RGB + thermal + pose + env),儲存依 Phase 0 定案
