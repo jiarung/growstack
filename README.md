@@ -36,6 +36,7 @@ shouts when something goes quiet.
 | `src/`, `platformio.ini` | ESP32-S3 firmware — one project, every node |
 | `broker/` | the whole server side, Docker Compose |
 | `docs/` | firmware manual + media |
+| `tools/s3cam/` | host-side instruments for the camera node — zero dependencies |
 
 ## Where to go
 

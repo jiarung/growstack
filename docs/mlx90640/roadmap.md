@@ -101,7 +101,52 @@ min..max 並永遠印出範圍,室溫幾度的差異才看得見。`--flipv/--fl
 - environment 欄位接既有 monitor-air pipeline,不重造
 - 驗收:完整 observation 落地可回讀;1B 的 proto flow 升級為正式路徑
 
+**thermal 側:patch 寫好了,還沒上板(2026-09-17)**。改動**不在** working tree ——
+server host 編不了也燒不了韌體,一個沒編譯過的 .cpp 留在樹上只會讓人以為它是活的。
+它在 `docs/mlx90640/thermal-bundle.patch`,在 dev host 上:
+
+```bash
+git apply docs/mlx90640/thermal-bundle.patch
+pio run -e s3cam -t upload
+```
+
+經 codex 以「當作直接上板」的角度審過(buffer 大小、printf arity、millis 溢位、
+未初始化讀取、httpd stack),但**沒有編譯過** —— 第一次 build 出錯是預期內的事,
+不是意外。
+
+套上之後,`/observation` 不再回 `"thermal": null`:它在同一次曝光旁邊 take 一幀,
+矩陣比照 `rgb` 以檔名引用,由新的 `/last.thermal` 供應。三件事刻意寫進 schema
+而不是藏起來:
+
+- `age_ms` —— 模組 4 Hz,「最新的完整幀」本來就可能差一個幀週期。回報上界而不是
+  裝作同時,因為逐距離 registration 只在「什麼都沒動」時成立,而消費端沒有這個
+  數字就無從判斷。
+- `thermal.file` 帶的是**那一幀自己的 capture id**,不是這次 observation 的。
+  `take()` 是消費型的,落在兩幀之間的拍攝會沿用前一幀 —— 沿用可以,把它重新蓋章
+  成新 capture 不行(`X-Capture-Id` 存在的唯一理由就是證明兩半是同一次)。
+  兩個 id 不同 = 這幀是沿用來的,消費端看得見。
+- **沒有 `emissivity`**。§7 列了這欄,但韌體既不設定也不知道這個值,在這裡編一個
+  常數進去,它在資料集裡看起來會和量出來的一模一樣。
+
+副作用(patch 內已寫進 `/thermal` 的註解):`/observation` 也會消耗幀,所以緊接其後
+的 `/thermal` 可能在一個幀週期內合法回 `"frame": null`。那不是故障 —— `/thermal`
+報的是活的串流,與某次拍攝配對的那幀請找 `/last.thermal`。
+
+**工具**:`tools/s3cam/observe.py` —— 把 RGB + thermal + 測距取成一個 bundle,
+並且**只有韌體真的打包時才敢說 co-timed**;舊韌體走兩次請求的降級路徑,回報實測
+skew 並標記 `co_timed=False`。沿用幀(`carried`)與過鬆的配對(`stale`)各自有名字。
+**在 patch 上板之前,這兩個工具就已經可用** —— 走降級路徑,標 `co_timed=False`。
+`tools/s3cam/viewer.py` —— `./viewer.py http://<ip>` 之後開 `localhost:8723`:
+RGB 疊熱像、距離、逐幀 snapshot(不串流),在圖上拉一個框就回報框內溫度。
+
+離線測試 `test/s3cam/test_observe.py`(假板子,不需硬體)。
+
 ## Phase 5 — registration + MVP metrics 🔧
+
+> viewer 的對位滑桿是**拿來抄下來的**。視差隨距離變,所以一組 scale/dx/dy 只在它
+> 被找到的那個距離上有意義,頁面把距離和參數並排顯示就是為了這件事。
+> `Registration` 目前刻意是不帶距離項的仿射 —— 在量到第二個距離之前,一張只有
+> 一個點的內插表是在假裝。
 
 產出:三個量測報告 → X/Z 去留決策
 - repeatability(同 pose ×10:leaf temp mean/median/P10-P90、ROI 位移)
@@ -112,7 +157,9 @@ min..max 並永遠印出範圍,室溫幾度的差異才看得見。`--flipv/--fl
 ## 明確不做(MVP)
 
 X/Z 機構全家桶(handoff.md §11 清單)、continuous video、ML segmentation
-(先人工 ROI)、bypass 模組 MCU 直驅 I²C(保留退路,不先做)。
+(先人工 ROI)—— 「人工 ROI」這一階段已經有東西了:viewer 拉框即得框內
+溫度,而換成偵測器時它呼叫的是同一個 `observe.thermal_stats()`,不是在 JS 裡重寫
+一份映射、bypass 模組 MCU 直驅 I²C(保留退路,不先做)。
 
 ## 風險備忘
 
