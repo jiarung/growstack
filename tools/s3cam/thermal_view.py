@@ -9,6 +9,7 @@
     ./thermal_view.py ... --roi 8,12,16,20         # measure ONE component
     ./thermal_view.py ... --watch --log soak.csv   # log that region over time
     ./thermal_view.py ... --roi 8,12,16,20 --centroid   # sub-pixel target position
+    ./thermal_view.py ... --centroid --cold        # the target is COLDER than the room
 
 --roi r0,c0,r1,c1 (inclusive) is how this becomes an instrument rather than a
 picture. Aimed at the board, the frame contains the SoC, the regulator and the
@@ -90,6 +91,75 @@ def orient(px, rows, cols, flipv, fliph):
     return [v for row in grid for v in row]
 
 
+def orientation_conflict(frame_orientation, flipv, fliph):
+    """-> a warning string when host flips would undo the board's own, else None.
+
+    Firmware from 2026-09-19 rotates the thermal frame on the device, because
+    orientation is a property of how the head is MOUNTED and that is a fact
+    about the device. A host that then applies --flipv --fliph rotates a second
+    time, and two 180-degree rotations are the identity: the frame comes back
+    looking completely ordinary, every number is computable, and every one of
+    them is about the wrong pixels. Nothing downstream can notice.
+
+    A frame with no `orientation` field predates the change and is wire order,
+    so the flags are still how it gets corrected — that case stays silent.
+    """
+    if frame_orientation != "rot180":
+        return None
+    if not (flipv or fliph):
+        return None
+    both = flipv and fliph
+    return ("the board already reports orientation=rot180 and "
+            + ("--flipv --fliph would rotate it back to wire order"
+               if both else "a host flip would mirror it")
+            + " — drop the host flips")
+
+
+def orientation_mismatch(rgb_orientation, thermal_orientation):
+    """-> a warning when the two sensors are not in the same frame, else None.
+
+    /cam/tune keeps the camera's hmirror/vflip adjustable at runtime while the
+    thermal rotation is compiled in. That is useful while a mounting is being
+    decided and dangerous afterwards: turn one of them off and the two images
+    are in different coordinate systems, so every box mapped from RGB lands on
+    the wrong thermal pixels — silently, because each image on its own still
+    looks perfectly sensible.
+
+    An older board reports no RGB tag; that predates the correction and is not
+    something to shout about, so it stays quiet.
+    """
+    if not rgb_orientation or not thermal_orientation:
+        return None
+    if rgb_orientation == thermal_orientation:
+        return None
+    return (f"RGB is {rgb_orientation} but the thermal frame is "
+            f"{thermal_orientation} — the two are in different coordinate "
+            f"systems, so any box mapped between them lands on the wrong "
+            f"pixels. Fix /cam/tune, or reflash so both agree.")
+
+
+def flip_box(box, rows, cols, flipv, fliph):
+    """Re-index an inclusive box the way orient() re-indexes the array.
+
+    orient() moves every pixel; a box named in one orientation therefore names
+    different pixels in the other. Two places in the viewer learned this the
+    hard way — a box dragged on the RGB went through Registration in WIRE
+    order while the centroid was computed on the ORIENTED frame, so the two
+    agreed only while both flips were off.
+
+    Both transforms are involutions, so this converts in either direction. The
+    property that matters is that it agrees with orient(): the pixels inside
+    flip_box(b) of the oriented frame are exactly the pixels inside b of the
+    raw one. test_scan_stats.py asserts that rather than trusting it.
+    """
+    r0, c0, r1, c1 = box
+    if flipv:
+        r0, r1 = rows - 1 - r1, rows - 1 - r0
+    if fliph:
+        c0, c1 = cols - 1 - c1, cols - 1 - c0
+    return r0, c0, r1, c1
+
+
 def parse_roi(s, rows, cols):
     """'r0,c0,r1,c1' -> inclusive box, validated against the frame it will index."""
     try:
@@ -121,13 +191,38 @@ MIN_SUPPORT_PX = 4       # a support this small is noise, not an object
 
 
 def centroid(px, rows, cols, box=None,
-             min_contrast=MIN_CONTRAST_C, min_support=MIN_SUPPORT_PX):
-    """Intensity-weighted centroid of the warm target -> sub-pixel (r, c).
+             min_contrast=MIN_CONTRAST_C, min_support=MIN_SUPPORT_PX,
+             polarity="hot"):
+    """Intensity-weighted centroid of the target -> sub-pixel (r, c).
+
+    `polarity` picks which way the target stands out. "cold" is implemented by
+    NEGATING the frame and running the identical estimator: every step below is
+    an inequality about distance from the background, and negation turns each
+    one into its mirror exactly — the median negates, the max becomes the min,
+    "at least the half-max above background" becomes "at most the half-min
+    below". Writing a second copy with the comparisons flipped would be four
+    opportunities to flip three of them, and the two copies would then disagree
+    only on the frames that matter.
+
+    A cold target is a real case: a chilled cup is as good a registration mark
+    as a hot one and easier to keep still, but the hot estimator does not
+    merely miss it — it locks onto whatever IS hottest, which on this bench is
+    usually the board, and reports a confident centroid for the wrong object.
 
     Always returns a dict carrying its own validity, never a bare pair: a
     rejected frame that returned (0, 0) or the frame centre would enter a
     dataset looking exactly like a measurement.
     """
+    if polarity not in ("hot", "cold"):
+        raise ValueError(f"polarity must be 'hot' or 'cold', got {polarity!r}")
+    if polarity == "cold":
+        out = centroid([-v for v in px], rows, cols, box,
+                       min_contrast, min_support, "hot")
+        # Back to real temperatures for anything a human reads. contrast is a
+        # magnitude and stays positive; tbg and tth are temperatures and negate.
+        out["tbg"], out["tth"] = -out["tbg"], -out["tth"]
+        return out
+
     out = {"ok": False, "reason": "", "r": None, "c": None,
            "n": 0, "contrast": 0.0, "tbg": 0.0, "tth": 0.0}
     r0, c0, r1, c1 = box if box else (0, 0, rows - 1, cols - 1)
@@ -189,7 +284,8 @@ def centroid(px, rows, cols, box=None,
     return out
 
 
-def show(doc, png=None, flipv=False, fliph=False, roi=None, log=None, cen=False):
+def show(doc, png=None, flipv=False, fliph=False, roi=None, log=None, cen=False,
+         cold=False):
     f = doc.get("frame")
     if not f:
         s = doc.get("stream", {})
@@ -200,15 +296,30 @@ def show(doc, png=None, flipv=False, fliph=False, roi=None, log=None, cen=False)
     if len(px) != rows * cols:
         print(f"frame says {rows}x{cols} but carries {len(px)} values", file=sys.stderr)
         return 1
+    # Same guard scan_repeat.py enforces, and for the same reason: two
+    # 180-degree rotations are the identity, so a host flip over a board that
+    # already corrects itself produces a completely ordinary-looking frame of
+    # the wrong pixels. This is an AIMING tool — the box chosen here is the box
+    # the acceptance run is given — so it cannot be the one path that stays
+    # quiet about it.
+    clash = orientation_conflict(f.get("orientation", "wire"), flipv, fliph)
+    if clash:
+        print(f"\x1b[1;31m!! {clash}\x1b[0m")
+
     px = orient(px, rows, cols, flipv, fliph)
     lo, hi = min(px), max(px)
     print(render(px, rows, cols, lo, hi))
     warn = "" if f.get("checksum_ok", True) else "   [checksum UNVERIFIED]"
-    # WHERE the hot spot is, not just how hot. Aimed at a board, that is the
-    # whole diagnosis: which component is cooking is a coordinate, not a number.
-    k = px.index(hi)
+    # WHERE the extreme is, not just how extreme. Aimed at a board that is the
+    # whole diagnosis — which component is cooking is a coordinate, not a
+    # number — and aimed at a CHILLED registration target it is the difference
+    # between being pointed at the target and being pointed at the warmest
+    # unrelated object in the room, which is exactly what `hot @` did in cold
+    # mode while the centroid below was quietly correct.
+    k = px.index(lo if cold else hi)
+    label = "cold @" if cold else "hot @"
     print(f"seq {f['seq']}  {lo:.2f}..{hi:.2f} C   "
-          f"hot @ r{k // cols} c{k % cols}   Ta {f.get('ta_c')} C{warn}")
+          f"{label} r{k // cols} c{k % cols}   Ta {f.get('ta_c')} C{warn}")
 
     box = parse_roi(roi, rows, cols) if roi else None
     if box:
@@ -220,11 +331,11 @@ def show(doc, png=None, flipv=False, fliph=False, roi=None, log=None, cen=False)
         # A live sub-pixel aiming instrument: watch this number sit still with
         # the servos untouched and you are reading the noise floor with your
         # own eyes, before committing to a long run that assumes it is small.
-        cd = centroid(px, rows, cols, box)
+        cd = centroid(px, rows, cols, box, polarity="cold" if cold else "hot")
         if cd["ok"]:
             print(f"centroid r{cd['r']:.2f} c{cd['c']:.2f}   "
-                  f"{cd['n']}px over {cd['tth']:.2f} C   "
-                  f"contrast {cd['contrast']:.2f} C")
+                  f"{cd['n']}px {'under' if cold else 'over'} {cd['tth']:.2f} C   "
+                  f"contrast {cd['contrast']:.2f} C {'(cold)' if cold else ''}")
         else:
             print(f"centroid --  ({cd['reason']})")
     if log:
@@ -273,14 +384,15 @@ def main(argv):
     png, roi, log = opt("--png"), opt("--roi"), opt("--log")
     flipv, fliph = "--flipv" in argv, "--fliph" in argv
     cen = "--centroid" in argv
+    cold = "--cold" in argv
     if "--watch" not in argv:
-        return show(fetch(src), png, flipv, fliph, roi, log, cen)
+        return show(fetch(src), png, flipv, fliph, roi, log, cen, cold)
     import time
     try:
         while True:
             print("\x1b[H\x1b[J", end="")   # home + clear, so it redraws in place
             try:
-                show(fetch(src), png, flipv, fliph, roi, log, cen)
+                show(fetch(src), png, flipv, fliph, roi, log, cen, cold)
             except OSError as e:
                 # a dropped frame or a Wi-Fi hiccup must not end a watch that
                 # is meant to run while somebody moves things in front of the

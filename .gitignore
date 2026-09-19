@@ -42,3 +42,9 @@ broker/epochs.json.lock
 # Claude Code session state — settings plus whole worktree copies (11 MB)
 .claude/
 broker/fixtures/out/
+
+# Phase 3 scan recordings (~1 MB each: every frame's 768 floats, kept so a
+# threshold can be changed without re-running hardware). Local evidence by
+# default — the ONE run that a conclusion in docs/mlx90640/ rests on gets
+# committed deliberately, under docs/, where the claim can be checked.
+runs/
