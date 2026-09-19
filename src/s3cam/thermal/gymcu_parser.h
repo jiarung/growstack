@@ -42,7 +42,12 @@ constexpr uint8_t SYNC0 = 0x5A, SYNC1 = 0x5A;
 constexpr uint8_t TYPE = 0x02, SUBTYPE = 0x06;  // VERIFY-ON-HARDWARE (phase 2)
 
 struct ThermalFrame {
-    float pixels[ROWS][COLS]; // deg C; [row][col], row-major off the wire
+    // deg C; [row][col], row-major AS IT CAME OFF THE WIRE. thermal::take()
+    // applies the head's mounting rotation on the way out — see
+    // thermal_uart.h orientation(). The parser stays wire-order so its
+    // fixtures, whose expected values were derived by hand from the frame
+    // layout, keep meaning what they say.
+    float pixels[ROWS][COLS];
     float ambient_c;          // Ta, deg C
     uint32_t seq;             // parser-assigned: nth good frame since reset
     bool checksum_ok;         // false only under ChecksumPolicy::REPORT

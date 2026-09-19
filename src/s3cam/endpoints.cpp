@@ -87,6 +87,22 @@ static PairedRange pairRange(const Range& before, const Range& after) {
 static uint8_t* heldJpg = nullptr;
 static size_t heldLen = 0;
 static char heldId[40] = "";
+// The thermal frame that belongs to that JPEG. thermal::take() is CONSUMING and
+// the module runs at 4 Hz, so a capture landing between frames would otherwise
+// report null every other time while a perfectly good frame sat 100 ms in the
+// past. Holding the last one and reporting its true age is the honest version;
+// the consumer decides whether that age is tight enough for what it is doing.
+// File-scope for the same reason /thermal's frame is: 3 KB does not go on the
+// httpd task's stack.
+static gymcu::ThermalFrame heldTherm;
+static bool heldThermValid = false;
+static uint32_t heldThermAtMs = 0;   // millis() when the frame ARRIVED, not when taken
+// The capture this frame was actually taken for — NOT necessarily heldId. When
+// a capture lands between frames the previous matrix is carried forward, and
+// stamping it with the new id would make X-Capture-Id, whose only job is to
+// prove the two halves are one observation, assert something false. Carrying
+// the frame is fine; carrying its provenance with it is what makes it fine.
+static char heldThermId[40] = "";
 
 // ---- handlers ---------------------------------------------------------------
 // The endpoint list is constant text, so it lives in flash and is sent as its
@@ -100,6 +116,7 @@ static const char MENU[] =
     "GET /capture     full-res still (X-Capture-Id + X-Range-Mm headers)\n"
     "GET /observation still + observation JSON (pairs with /last.jpg)\n"
     "GET /last.jpg    the frame the last /observation held\n"
+    "GET /last.thermal the thermal matrix that /observation paired with it\n"
     "GET /range?n=20  raw rangefinder burst (no camera) — is it ranging?\n"
     "GET /health      die temp + PEAK since boot, thermal Ta, rssi, memory\n"
     "GET /power       cooling knobs; any change resets the peak\n"
@@ -479,6 +496,11 @@ static esp_err_t rangeHandler(httpd_req_t* req) {
 // frames means the wire is talking but the FRAME LAYOUT constants are wrong
 // (they are marked VERIFY-ON-HARDWARE), while zero bytes means TX/RX are
 // swapped or the module is unpowered — two very different next moves.
+// GET /thermal — what the module is producing RIGHT NOW, with the stream stats.
+// take() is consume-once and /observation takes frames too, so a /thermal issued
+// just after an /observation can legitimately answer "frame": null for up to a
+// frame period. That is not a fault: this endpoint reports the live stream, and
+// the frame paired with a capture is served by /last.thermal instead.
 static esp_err_t thermalHandler(httpd_req_t* req) {
     // A ThermalFrame is ~3 KB (24x32 floats). As a LOCAL it overflows the
     // httpd task's 4 KB stack — which it did, on the first request after this
@@ -512,9 +534,10 @@ static esp_err_t thermalHandler(httpd_req_t* req) {
     // stack (the lesson from the /range panic, applied before it bites)
     m = snprintf(line, sizeof(line),
                  "  \"frame\": {\"seq\": %lu, \"ta_c\": %.2f, "
-                 "\"checksum_ok\": %s, \"rows\": %u, \"cols\": %u, \"px\": [",
+                 "\"checksum_ok\": %s, \"orientation\": \"%s\", "
+                 "\"rows\": %u, \"cols\": %u, \"px\": [",
                  (unsigned long)f.seq, f.ambient_c,
-                 f.checksum_ok ? "true" : "false",
+                 f.checksum_ok ? "true" : "false", thermal::orientation(),
                  (unsigned)gymcu::ROWS, (unsigned)gymcu::COLS);
     httpd_resp_send_chunk(req, line, m);
     const float* px = &f.pixels[0][0];
@@ -696,6 +719,25 @@ static esp_err_t captureHandler(httpd_req_t* req) {
     return r;
 }
 
+// The camera's orientation as a tag in the SAME vocabulary thermal uses.
+//
+// Both sensors are corrected on the device now, but /cam/tune keeps the
+// camera's hmirror/vflip adjustable at runtime — deliberately, because which
+// way a head is mounted is settled empirically. The hazard that creates is
+// specific: turn one of them off while the thermal frame stays rot180 and the
+// two images are in different coordinate systems, so every registration
+// number and every overlay is wrong, and nothing anywhere says so.
+//
+// Reporting it is what keeps the knob and removes the silence. A host can
+// compare this with the thermal block's own tag and refuse the pair.
+static const char* rgbOrientation() {
+    CameraTune t = cameraTune();
+    if (t.hmirror && t.vflip) return "rot180";
+    if (t.hmirror) return "hmirror";
+    if (t.vflip) return "vflip";
+    return "none";
+}
+
 static esp_err_t observationHandler(httpd_req_t* req) {
     Range rgBefore = rangefinderRead();   // bracket the exposure — see pairRange
     camera_fb_t* fb = cameraCapture();
@@ -716,6 +758,16 @@ static esp_err_t observationHandler(httpd_req_t* req) {
     char id[40];
     bool synced = makeCaptureId(id, sizeof(id));
     PairedRange rg = pairRange(rgBefore, rangefinderRead());
+    // Co-time the thermal frame with the exposure, right where the range is
+    // paired. take() hands back the NEWEST COMPLETE frame, which at 4 Hz can be
+    // most of a frame period old — sinceLastFrameMs() is that frame's age at
+    // this instant, so recording its arrival lets age_ms below be a measurement
+    // rather than a zero we wish were true.
+    if (thermal::take(heldTherm)) {
+        heldThermValid = true;
+        heldThermAtMs = millis() - thermal::sinceLastFrameMs();
+        strlcpy(heldThermId, id, sizeof(heldThermId));
+    }
     memcpy(copy, fb->buf, fb->len);
     size_t w = fb->width, h = fb->height, len = fb->len;
     cameraRelease(fb);
@@ -753,8 +805,30 @@ static esp_err_t observationHandler(httpd_req_t* req) {
         snprintf(reasonField, sizeof(reasonField), "\"%s\"", rg.reason);
     }
 
-    // handoff §7 schema; pose/thermal/environment stay null in phase 1B
-    char body[576];
+    // §7's thermal object, with the matrix referenced by file exactly as rgb
+    // references the JPEG — 768 floats in this response would put the handler
+    // back on the stack that panicked twice already, and /last.thermal serves
+    // them under the same capture id.
+    //
+    // No emissivity field: §7 lists one, but nothing in this firmware sets or
+    // knows it, and a constant invented here would enter the dataset looking
+    // exactly like a measurement. It belongs to whoever configures the module.
+    char thermalField[192];
+    if (heldThermValid) {
+        snprintf(thermalField, sizeof(thermalField),
+                 "{\"file\": \"%s.thermal.json\", \"width\": %u, \"height\": %u,"
+                 " \"ta_c\": %.2f, \"seq\": %lu, \"checksum_ok\": %s,"
+                 " \"orientation\": \"%s\", \"age_ms\": %lu}",
+                 heldThermId, (unsigned)gymcu::COLS, (unsigned)gymcu::ROWS,
+                 heldTherm.ambient_c, (unsigned long)heldTherm.seq,
+                 heldTherm.checksum_ok ? "true" : "false", thermal::orientation(),
+                 (unsigned long)(millis() - heldThermAtMs));
+    } else {
+        strlcpy(thermalField, "null", sizeof(thermalField));
+    }
+
+    // handoff §7 schema; pose/environment stay null in phase 1B
+    char body[832];
     snprintf(body, sizeof(body),
              "{\n"
              "  \"capture_id\": \"%s\",\n"
@@ -765,14 +839,16 @@ static esp_err_t observationHandler(httpd_req_t* req) {
              "  \"pose\": null,\n"
              "  \"range_mm\": %s,\n"
              "  \"range_invalid_reason\": %s,\n"
-             "  \"rgb\": {\"file\": \"%s.jpg\", \"width\": %u, \"height\": %u, \"bytes\": %u},\n"
-             "  \"thermal\": null,\n"
+             "  \"rgb\": {\"file\": \"%s.jpg\", \"width\": %u, \"height\": %u, \"bytes\": %u,"
+             " \"orientation\": \"%s\"},\n"
+             "  \"thermal\": %s,\n"
              "  \"environment\": null\n"
              "}\n",
              heldId, tsField, synced ? "ntp" : "unsynced",
              (unsigned long)millis(),
              rangeField, reasonField,
-             heldId, (unsigned)w, (unsigned)h, (unsigned)len);
+             heldId, (unsigned)w, (unsigned)h, (unsigned)len, rgbOrientation(),
+             thermalField);
     httpd_resp_set_type(req, "application/json");
     esp_err_t r = httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
     Serial.printf("[http] /observation %s: %u bytes (%s)\n", heldId,
@@ -788,6 +864,42 @@ static esp_err_t lastJpgHandler(httpd_req_t* req) {
     httpd_resp_set_type(req, "image/jpeg");
     httpd_resp_set_hdr(req, "X-Capture-Id", heldId);
     return httpd_resp_send(req, (const char*)heldJpg, heldLen);
+}
+
+// The matrix behind /observation's thermal.file, under the SAME capture id.
+// Separate from /thermal on purpose: /thermal consumes whatever the module has
+// produced most recently and is the bring-up instrument, while this one serves
+// the frame that was paired with the held JPEG and never moves under a reader.
+// X-Capture-Id is how a consumer proves the two halves belong together — the
+// same guarantee /last.jpg gives, for the same reason.
+static esp_err_t lastThermalHandler(httpd_req_t* req) {
+    if (!heldThermValid) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND,
+                            "no thermal frame captured yet — call /observation");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "X-Capture-Id", heldThermId);
+    char line[224];
+    int m = snprintf(line, sizeof(line),
+                     "{\n  \"capture_id\": \"%s\", \"seq\": %lu, \"ta_c\": %.2f, "
+                     "\"checksum_ok\": %s, \"orientation\": \"%s\", "
+                     "\"rows\": %u, \"cols\": %u,\n  \"px\": [",
+                     heldThermId, (unsigned long)heldTherm.seq, heldTherm.ambient_c,
+                     heldTherm.checksum_ok ? "true" : "false", thermal::orientation(),
+                     (unsigned)gymcu::ROWS, (unsigned)gymcu::COLS);
+    if (httpd_resp_send_chunk(req, line, m) != ESP_OK) return ESP_FAIL;
+    // one value per chunk, byte for byte the loop /thermal uses: 768 floats do
+    // not belong on the httpd task's stack, and two copies of this that drift
+    // apart would be two JSON dialects for one sensor
+    const float* px = &heldTherm.pixels[0][0];
+    for (size_t i = 0; i < gymcu::PIXELS; i++) {
+        m = snprintf(line, sizeof(line), "%s%.2f", i ? "," : "", px[i]);
+        if (httpd_resp_send_chunk(req, line, m) != ESP_OK) return ESP_FAIL;
+    }
+    const char* tail = "]\n}\n";
+    httpd_resp_send_chunk(req, tail, strlen(tail));
+    return httpd_resp_send_chunk(req, nullptr, 0);
 }
 
 static esp_err_t streamHandler(httpd_req_t* req) {
@@ -1051,6 +1163,7 @@ bool endpointsStart() {
         {"/capture",     HTTP_GET, captureHandler,     nullptr, false, false, nullptr},
         {"/observation", HTTP_GET, observationHandler, nullptr, false, false, nullptr},
         {"/last.jpg",    HTTP_GET, lastJpgHandler,     nullptr, false, false, nullptr},
+        {"/last.thermal",HTTP_GET, lastThermalHandler, nullptr, false, false, nullptr},
         {"/range",       HTTP_GET, rangeHandler,       nullptr, false, false, nullptr},
         {"/health",      HTTP_GET, healthHandler,      nullptr, false, false, nullptr},
         {"/power",       HTTP_GET, powerHandler,       nullptr, false, false, nullptr},

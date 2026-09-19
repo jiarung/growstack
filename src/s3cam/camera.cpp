@@ -85,8 +85,20 @@ bool cameraInit() {
         // makes these adjustable at runtime — same reasoning as /power's
         // cooling knobs: which setting is right is an empirical question, and
         // baking in a guess is how you stop asking it.
-        s->set_vflip(s, 0);
-        s->set_hmirror(s, 0);
+        // Both on: the module is mounted upside down on the pan/tilt head, so
+        // the sensor's own frame arrives rotated 180 degrees. Correcting it
+        // HERE, in the sensor's registers, means every consumer — /capture,
+        // /stream, /observation, the viewer, the registration fit — sees one
+        // orientation and none of them needs a flag. The alternative, each
+        // tool flipping for itself, is the shape of bug this tooling has
+        // already been caught by twice.
+        //
+        // Runtime-adjustable through /cam/tune?hmirror=&vflip= while a
+        // mounting is still being decided; these are the values that survive a
+        // reboot. If the head is ever remounted the right way up, change them
+        // back rather than compensating downstream.
+        s->set_vflip(s, 1);
+        s->set_hmirror(s, 1);
         // Buffers are allocated; now drop to the resting size so the sensor is
         // not free-running at 5MP for the entire time nobody is asking.
         if (restSize != STILL_SIZE) s->set_framesize(s, restSize);

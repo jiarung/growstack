@@ -26,7 +26,31 @@ bool begin();          // opens Serial1, resets the parser; true if the port ope
 // are lost inside the UART driver, and lost bytes look exactly like a shorter
 // frame — a failure that reads as data rather than as an error.
 void poll();
-bool take(gymcu::ThermalFrame& out);   // NEWEST complete frame, once
+// NEWEST complete frame, once, IN HEAD ORIENTATION — see orientation() below.
+bool take(gymcu::ThermalFrame& out);
+
+// How the pixels in a frame from take() are arranged, as a short tag that goes
+// into every JSON a consumer sees ("rot180" or "wire").
+//
+// The head carries both sensors upside down, so the camera is corrected in the
+// OV5640's own hmirror/vflip registers (camera.cpp) and the thermal frame is
+// rotated here. Correcting both on the device means every consumer — /thermal,
+// /observation, the viewer, the registration fit — sees one orientation and
+// none of them needs a flag. Orientation is a property of how the head is
+// MOUNTED, which is a fact about this device, so it belongs on the device;
+// leaving half of it to the host is what left the viewer with two coordinate
+// systems that agreed only while both flips were off.
+//
+// The tag exists so a host can TELL. A recording made before this correction
+// carries its own flip flags, and a tool that applied both would rotate twice
+// — the second rotation being invisible, since a doubly-rotated frame is a
+// perfectly ordinary-looking frame of the wrong pixels.
+//
+// The rotation is applied in take(), NOT in the parser: gymcu::Parser is a
+// pure byte machine pinned by fixtures whose expected values were derived by
+// hand from the wire format, and re-ordering inside it would invalidate every
+// one of them to no purpose.
+const char* orientation();
 
 // True once a frame has ever been decoded — "the module is talking".
 bool everSawFrame();

@@ -132,6 +132,28 @@ void poll() {
     }
 }
 
+// The head is mounted upside down, measured the way the roadmap asked for it
+// to be: a known object placed in a known corner of the camera's view, and the
+// thermal blob came back in the opposite corner in BOTH axes. 180 degrees is
+// also the answer the camera needed, which is the cross-check — one head, two
+// sensors, one mounting.
+//
+// If the head is ever remounted the right way up, change this and camera.cpp
+// together. They describe the same physical fact.
+static const bool HEAD_ROTATED_180 = true;
+
+static void rotate180(gymcu::ThermalFrame& f) {
+    // Rotation, not two mirrors done in sequence: swapping the two ends of the
+    // pixel list in one pass is the whole operation, and it cannot half-apply.
+    const int n = gymcu::ROWS * gymcu::COLS;
+    float* p = &f.pixels[0][0];
+    for (int i = 0, j = n - 1; i < j; ++i, --j) {
+        float t = p[i];
+        p[i] = p[j];
+        p[j] = t;
+    }
+}
+
 bool take(gymcu::ThermalFrame& out) {
     portENTER_CRITICAL(&mux);
     bool have = slotFull;
@@ -140,8 +162,13 @@ bool take(gymcu::ThermalFrame& out) {
         slotFull = false;
     }
     portEXIT_CRITICAL(&mux);
+    // Outside the critical section on purpose: 768 floats is far too much work
+    // to do with interrupts masked, and `out` is the caller's own copy by now.
+    if (have && HEAD_ROTATED_180) rotate180(out);
     return have;
 }
+
+const char* orientation() { return HEAD_ROTATED_180 ? "rot180" : "wire"; }
 
 bool everSawFrame() { return sawFrame; }
 
