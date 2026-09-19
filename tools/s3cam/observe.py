@@ -32,6 +32,8 @@ import time
 import urllib.error
 import urllib.request
 
+from thermal_view import orientation_mismatch
+
 ROWS, COLS = 24, 32
 FRAME_PERIOD_MS = 250.0   # GY-MCU90640 at 4 Hz: the age of a "newest" frame
 # Beyond this the RGB and the thermal frame are not describing one moment in any
@@ -48,6 +50,21 @@ TIMEOUT_S = 10.0
 # in view must never be handed over looking like a mean over the plant.
 ThermalBox = collections.namedtuple(
     "ThermalBox", "r0 c0 r1 c1 coverage")
+
+
+def carried_frame(capture_id, thermal):
+    """True when the board handed back a frame from an EARLIER capture.
+
+    take() is consume-once and the module runs at 4 Hz, so a capture landing
+    between two frames is answered with the previous one. The board says so by
+    stamping the frame's own capture id in `thermal.file` rather than this
+    observation's; two ids that differ is the whole signal.
+
+    One definition, because two callers need it and this repo has a recorded
+    incident about a definition kept in two places drifting apart for six days.
+    """
+    tf = (thermal or {}).get("file") or ""
+    return bool(tf) and bool(capture_id) and tf.split(".")[0] != capture_id
 
 
 def _get(url, timeout=TIMEOUT_S):
@@ -72,28 +89,63 @@ def _get_for(url, capture_id, timeout=TIMEOUT_S):
 
 
 class Registration:
-    """Map an RGB box onto thermal pixels.
+    """Map an RGB box onto thermal pixels: per-axis scale plus translation.
 
-    Deliberately a plain affine with no distance term. The roadmap is explicit
-    that parallax makes a single homography wrong across distances, which is
-    why the rangefinder exists — but nothing has MEASURED a second distance
-    yet, and a table interpolating between one point is a table pretending.
-    The viewer produces these numbers; record them against `ref_mm` so the
-    interpolation has something real to be built from.
+    WHY THE TWO SCALES ARE INDEPENDENT
+    An earlier version had one isotropic `scale`, which quietly asserted that
+    the two sensors have the same aspect ratio. They do not. The MLX90640 sees
+    about 55 deg horizontally and 35 deg vertically on a 32x24 grid — roughly
+    1.7 deg per pixel across and 1.5 deg down — while the OV5640's field is set
+    by whatever lens is fitted and lands on a 4:3 sensor. One scale therefore
+    forces a residual that NO choice of dx and dy can absorb, and because the
+    alignment was done by eye that residual was simply split between the axes
+    until the overlay looked least bad. Two scales cost one parameter and
+    remove a structural error.
 
-    ponytail: per-distance interpolation lands when Phase 5 has >= 2 measured
-    distances. Until then `ref_mm` is provenance, not a parameter.
+    WHERE THIS MODEL STOPS — the boundary, stated so it can be recognised
+    Inside: independent scale per axis, and translation. Four parameters.
+    Outside, deliberately:
+
+      rotation      — the residuals circulate about the frame centre
+      mirror        — handedness is fixed ONCE, at the source: the camera's own
+                      hmirror/vflip registers and orient() for the thermal.
+                      Letting a negative scale represent it here would create a
+                      SECOND place where orientation lives, which is the bug
+                      this tooling has already been caught by twice.
+      lens distortion — the radial residual grows with radius
+      parallax across the frame — only absorbed into dx/dy while the subject
+                      is flat and at one distance
+
+    registration.diagnose() measures the first and third, so hitting the
+    boundary is something you read rather than something you suspect.
+
+    AND NO DISTANCE TERM. The roadmap is explicit that parallax makes a single
+    homography wrong across distances, which is why the rangefinder exists.
+    `ref_mm` is provenance, not a parameter: registration.Calibration holds the
+    per-distance entries and does the interpolation, in 1/Z.
     """
 
-    def __init__(self, scale=1.0, dx=0.0, dy=0.0, ref_mm=None):
+    def __init__(self, sx=1.0, sy=1.0, dx=0.0, dy=0.0, ref_mm=None):
         # a zero or negative scale has no inverse, and the overlay rectangle is
         # that inverse; rejecting it here keeps every caller from having to
-        # know that (the viewer's slider cannot produce one, a URL can)
-        if not (math.isfinite(scale) and scale > 0):
-            raise ValueError(f"scale must be finite and positive, got {scale!r}")
+        # know that (the viewer's slider cannot produce one, a URL can).
+        # Negative is refused for the second reason above, not just this one.
+        for name, v in (("sx", sx), ("sy", sy)):
+            if not (math.isfinite(v) and v > 0):
+                raise ValueError(f"{name} must be finite and positive, got {v!r}")
         if not (math.isfinite(dx) and math.isfinite(dy)):
             raise ValueError(f"dx/dy must be finite, got {dx!r}, {dy!r}")
-        self.scale, self.dx, self.dy, self.ref_mm = scale, dx, dy, ref_mm
+        self.sx, self.sy, self.dx, self.dy, self.ref_mm = sx, sy, dx, dy, ref_mm
+
+    @property
+    def anisotropy(self):
+        """sx/sy — 1.0 exactly when the two fields of view share an aspect ratio.
+
+        Worth printing: it was the assumption the single-scale model made
+        silently, and a number that sits far from 1 is the lens telling you
+        which way the two sensors actually differ.
+        """
+        return self.sx / self.sy
 
     def rgb_box_to_thermal(self, box, rgb_w, rgb_h):
         """(x0,y0,x1,y1) in RGB pixels -> ThermalBox, or None.
@@ -123,8 +175,8 @@ class Registration:
         return ThermalBox(r0i, c0i, r1i, c1i, cov)
 
     def _map(self, x, y, rgb_w, rgb_h):
-        c = (x / rgb_w * COLS - COLS / 2.0) * self.scale + COLS / 2.0 + self.dx
-        r = (y / rgb_h * ROWS - ROWS / 2.0) * self.scale + ROWS / 2.0 + self.dy
+        c = (x / rgb_w * COLS - COLS / 2.0) * self.sx + COLS / 2.0 + self.dx
+        r = (y / rgb_h * ROWS - ROWS / 2.0) * self.sy + ROWS / 2.0 + self.dy
         return r, c
 
     @staticmethod
@@ -145,10 +197,10 @@ class Registration:
         transform now, it lives here, and the browser asks for the rectangle
         rather than deriving it.
         """
-        x0 = rgb_w / COLS * ((-COLS / 2.0 - self.dx) / self.scale + COLS / 2.0)
-        y0 = rgb_h / ROWS * ((-ROWS / 2.0 - self.dy) / self.scale + ROWS / 2.0)
+        x0 = rgb_w / COLS * ((-COLS / 2.0 - self.dx) / self.sx + COLS / 2.0)
+        y0 = rgb_h / ROWS * ((-ROWS / 2.0 - self.dy) / self.sy + ROWS / 2.0)
         return {"x": x0, "y": y0,
-                "w": rgb_w / self.scale, "h": rgb_h / self.scale}
+                "w": rgb_w / self.sx, "h": rgb_h / self.sy}
 
 
 class Bundle:
@@ -167,8 +219,11 @@ class Bundle:
         self.uptime_ms = obs.get("uptime_ms")
         self.range_mm = obs.get("range_mm")
         self.range_invalid_reason = obs.get("range_invalid_reason")
-        tf = (thermal or {}).get("file") or ""
-        self.carried = bool(tf) and tf.split(".")[0] != self.capture_id
+        self.carried = carried_frame(self.capture_id, thermal)
+        # Both sensors' orientation tags, so a caller can tell they disagree.
+        # Each image on its own looks perfectly sensible when they do.
+        self.rgb_orientation = (obs.get("rgb") or {}).get("orientation")
+        self.thermal_orientation = (thermal or {}).get("orientation")
         rgb = obs.get("rgb") or {}
         self.rgb_w, self.rgb_h = rgb.get("width"), rgb.get("height")
         self.rgb_bytes = rgb.get("bytes")
@@ -242,6 +297,9 @@ class Bundle:
             th = (f"seq {self.thermal_seq} Ta {ta} "
                   f"{min(self.thermal):.1f}..{max(self.thermal):.1f}C"
                   + ("" if self.checksum_ok else " CHECKSUM BAD"))
+        mism = orientation_mismatch(self.rgb_orientation, self.thermal_orientation)
+        if mism:
+            th += f"\n  !! {mism}"
         return (f"{self.capture_id}  {self.timestamp or '(unsynced)'}\n"
                 f"  range   {rng}\n"
                 f"  rgb     {self.rgb_w}x{self.rgb_h}, {self.rgb_bytes} B\n"
@@ -258,8 +316,18 @@ def fetch(base, timeout=TIMEOUT_S):
     cid = obs.get("capture_id")
 
     th = obs.get("thermal")
-    co_timed = th is not None
-    if co_timed:
+    bundled = th is not None
+    # CO-TIMED IS NOT THE SAME AS BUNDLED. take() is consume-once, so a capture
+    # landing between two frames is answered with the PREVIOUS one, and the
+    # board says so by stamping that frame's own capture id rather than this
+    # observation's. Treating any non-null thermal as co-timed would hand a
+    # caller an RGB image and a matrix from a different moment under a flag
+    # whose entire job is to promise they are the same moment — and the
+    # per-plant temperature computed from it would be of whatever was there
+    # before. Carried is a legitimate result; claiming it is simultaneous is
+    # not.
+    co_timed = bundled and not carried_frame(cid, th)
+    if bundled:
         # the board measured the frame's real age against its own clock
         skew = float(th.get("age_ms", FRAME_PERIOD_MS))
         if "matrix" not in th and "px" not in th:
@@ -282,7 +350,7 @@ def fetch(base, timeout=TIMEOUT_S):
         skew = (time.monotonic() - t0) * 1000.0 + max(age, FRAME_PERIOD_MS)
 
     jpg = _get_for(f"{base}/last.jpg", cid, timeout)
-    if not co_timed:
+    if not bundled:
         skew = max(skew, elapsed_ms)
     return Bundle(obs, th, jpg, co_timed, skew)
 

@@ -107,11 +107,26 @@ min..max 並永遠印出範圍,室溫幾度的差異才看得見。`--flipv/--fl
 - **通過標準開跑前寫死**(P90 徑向 ≤ 1.0px、每軸 p2p ≤ 2.0px)。看到直方圖之後
   才挑的標準不是標準 —— `tasks/lessons.md` 記過「迎合性同意」。
 
-**目前進度**:Stage 1.1 已完成 —— `centroid()` 在 `thermal_view.py`,
-閘門測試 `test/thermal/test_centroid.py`。**缺口是 `tools/s3cam/scan_repeat.py`**
-(`--mode static|gain|repeat`),Stage 2 與 Stage 3 全部依賴它,且它是純 host 邏輯,
-不需要板子在場。Phase 4 的 `observe.py` / `viewer.py` **不涵蓋這件事**:那兩支做的是
-RGB+thermal 配對與取景,這裡要的是同一個目標重複拍 N 次的位移統計。
+**目前進度(2026-09-18)**:純軟體的部分做完了,**剩下的全部需要人在場**。
+
+- Stage 1.1 ✅ `centroid()` 在 `thermal_view.py`,閘門 `test/thermal/test_centroid.py`
+- 量測工具 ✅ `tools/s3cam/scan_repeat.py`(`--mode static|gain|repeat`)
+  + `tools/s3cam/scan_stats.py`(純分析)+ `test/s3cam/test_scan_stats.py`(32 case,
+  不需硬體)。判準寫死在 `scan_stats.py` 的常數裡,並**抄進每一份錄製檔**:
+  之後改常數不能回頭把舊的一場重新判成過或不過
+- 瞄準/檢驗介面 ✅ 併進 `tools/s3cam/viewer.py` 的 **live thermal (aim)** ——
+  RGB 靜態快照上疊即時熱像、次像素質心十字、滾動 σ 直接對 Stage 2.1 門檻上色、
+  pan/tilt jog。**不另開頁面**:兩個頁面都畫熱像都拉框,就是本 repo 反覆踩的
+  「同一份真相兩種拼法」
+- 缺口 ⏳ **Stage 1.2 裝機**(熱像模組必須裝在會動的那一端,否則實驗不成立)、
+  1.3 滿載行程表、1.4 軸向與 flip flags
+
+每一幀的 768 個浮點數都會整幀錄進 JSONL,`--summarize` 離線重算 —— 硬體實驗不可
+重現(目標會冷、房間會變),**改一個門檻不該需要重跑硬體**。錄製檔預設 gitignore,
+只有某個結論真的靠它時才刻意 commit 進 `docs/`。
+
+Phase 4 的 `observe.py` / `viewer.py` **不涵蓋這件事**:那兩支做的是 RGB+thermal
+配對與取景,這裡要的是同一個目標重複拍 N 次的位移統計。
 
 ## Phase 4 — observation 整合 🔧(RGB 側已由 1B 拉前)
 
@@ -156,6 +171,12 @@ skew 並標記 `co_timed=False`。沿用幀(`carried`)與過鬆的配對(`stale`
 **在 patch 上板之前,這兩個工具就已經可用** —— 走降級路徑,標 `co_timed=False`。
 `tools/s3cam/viewer.py` —— `./viewer.py http://<ip>` 之後開 `localhost:8723`:
 RGB 疊熱像、距離、逐幀 snapshot(不串流),在圖上拉一個框就回報框內溫度。
+勾 **live thermal (aim)** 則進入 Phase 3 的瞄準模式:熱像轉 4 Hz 即時、畫出次像素
+質心、滾動雜訊底線對門檻判定、pan/tilt jog,並組好要貼的 `scan_repeat.py` 指令。
+面板上每個數字都出自驗收run用的同一份 Python(`centroid()` / `block_stats()` /
+`CRITERION_DEFAULTS`),JS 只負責畫圖與拖框 —— 瞄準工具和驗收工具若對「目標在哪」
+有兩套說法,會等到一個下午花完才發現。**aim 模式下 RGB 仍是靜態快照**,pairing 欄
+會一直標明它和即時熱像不是一對。
 
 離線測試 `test/s3cam/test_observe.py`(假板子,不需硬體)。
 
@@ -165,6 +186,14 @@ RGB 疊熱像、距離、逐幀 snapshot(不串流),在圖上拉一個框就回�
 > 被找到的那個距離上有意義,頁面把距離和參數並排顯示就是為了這件事。
 > `Registration` 目前刻意是不帶距離項的仿射 —— 在量到第二個距離之前,一張只有
 > 一個點的內插表是在假裝。
+
+**對位的細節計畫:[registration-plan.md](./registration-plan.md)**(2026-09-19)。
+repo 裡一直只有「為什麼需要對位」(handoff §9)和「要得到什麼」,**方法欄是空的** ——
+目前唯一存在的方法是 viewer 肉眼拉滑桿。那份補上**對照點從哪來**,並記下一個讓
+事情簡單很多的性質:**每組對照點在同一次曝光裡自足,所以雲台重複性不是前置** ——
+熱源固定、轉頭讓它落在畫面不同位置,兩條線可以並行。標的是**一杯熱的**而不是
+熱源本身(熱像的質心是「熱」的質心,RGB 點的是「外觀」的質心,只有小而均勻的
+物體兩者才重合)。模型與判準已實作:`tools/s3cam/registration.py`。
 
 產出:三個量測報告 → X/Z 去留決策
 - repeatability(同 pose ×10:leaf temp mean/median/P10-P90、ROI 位移)

@@ -177,7 +177,7 @@ class T(unittest.TestCase):
     def test_a_box_outside_the_thermal_view_refuses_rather_than_clamps(self):
         # thermal sees less than the OV5640; a clamped box would report the
         # temperature of the frame edge as if it were the plant's
-        r = observe.Registration(scale=0.25)
+        r = observe.Registration(sx=0.25, sy=0.25)
         b = observe.fetch(self.url)
         far = (10000, 10000, 10400, 10400)
         self.assertIsNone(r.rgb_box_to_thermal(far, 640, 480))
@@ -201,7 +201,7 @@ class T(unittest.TestCase):
         # are not inverses you align by eye and read a different place
         W, H = 640, 480
         for sc, dx, dy in ((1.0, 0, 0), (1.7, 3.1, -2.4), (0.4, -9.0, 5.5)):
-            r = observe.Registration(sc, dx, dy)
+            r = observe.Registration(sc, sc, dx, dy)
             q = r.overlay_rect(W, H)
             for (want_r, want_c), (x, y) in (
                     ((0, 0), (q["x"], q["y"])),
@@ -223,7 +223,7 @@ class T(unittest.TestCase):
         # URL can, and a 500 is a worse answer than a 400
         for bad in (0, -1.0, float("inf"), float("nan")):
             with self.assertRaises(ValueError, msg=bad):
-                observe.Registration(scale=bad)
+                observe.Registration(sx=bad)
         with self.assertRaises(ValueError):
             observe.Registration(dx=float("nan"))
 
@@ -285,7 +285,7 @@ class V(unittest.TestCase):
         self.assertIn(b"s3cam observation", body)
 
     def test_stats_before_any_capture_says_so_instead_of_500(self):
-        st, body = self.get("/api/view?box=0,0,10,10&scale=1&dx=0&dy=0")
+        st, body = self.get("/api/view?box=0,0,10,10&sx=1&sy=1&dx=0&dy=0")
         d = json.loads(body)
         self.assertIsNone(d["stats"])
         self.assertIsNone(d["rect"])
@@ -298,7 +298,7 @@ class V(unittest.TestCase):
         self.assertEqual(len(b["thermal"]), ROWS * COLS)
         st, jpg = self.get("/api/last.jpg?id=" + b["capture_id"])
         self.assertEqual(jpg, JPG)
-        st, body = self.get("/api/view?box=0,0,640,480&scale=1&dx=0&dy=0")
+        st, body = self.get("/api/view?box=0,0,640,480&sx=1&sy=1&dx=0&dy=0")
         d = json.loads(body)
         self.assertIsNotNone(d["rect"])
         s = d["stats"]
@@ -325,12 +325,12 @@ class V(unittest.TestCase):
         import urllib.error
         self.get("/api/observe")
         with self.assertRaises(urllib.error.HTTPError) as e:
-            self.get("/api/view?scale=0&dx=0&dy=0")
+            self.get("/api/view?sx=0&sy=1&dx=0&dy=0")
         self.assertEqual(e.exception.code, 400)
 
     def test_box_outside_thermal_view_reports_the_reason(self):
         self.get("/api/observe")
-        st, body = self.get("/api/view?box=9000,9000,9100,9100&scale=0.25&dx=0&dy=0")
+        st, body = self.get("/api/view?box=9000,9000,9100,9100&sx=0.25&sy=0.25&dx=0&dy=0")
         d = json.loads(body)
         self.assertIsNone(d["stats"])
         self.assertIn("outside", d["reason"])
@@ -345,6 +345,41 @@ class V(unittest.TestCase):
             self.assertIn("error", json.loads(e.exception.read()))
         finally:
             self.viewer.Viewer.board = "http://127.0.0.1:%d" % self.board.server_address[1]
+
+
+class TestCarriedIsNotCoTimed(unittest.TestCase):
+    """The flag's whole job is to promise one moment. A carried frame is two.
+
+    take() is consume-once at 4 Hz, so a capture landing between frames gets
+    the PREVIOUS one, stamped with that frame's own capture id. Deriving
+    co_timed from "thermal is not null" marked those as synchronised, and a
+    caller doing what the docstring tells it to — check the flag, then trust
+    the pair — would compute a per-plant temperature from whatever was in
+    front of the camera a moment earlier.
+    """
+
+    def test_matching_ids_are_co_timed(self):
+        self.assertFalse(observe.carried_frame(
+            "cap-1", {"file": "cap-1.thermal.json"}))
+
+    def test_a_different_id_is_carried(self):
+        self.assertTrue(observe.carried_frame(
+            "cap-2", {"file": "cap-1.thermal.json"}))
+
+    def test_no_file_and_no_id_are_not_carried(self):
+        # Absence is not evidence of carrying; it is absence.
+        self.assertFalse(observe.carried_frame("cap-1", {}))
+        self.assertFalse(observe.carried_frame("cap-1", None))
+        self.assertFalse(observe.carried_frame(None, {"file": "x.thermal.json"}))
+
+    def test_bundle_and_fetch_agree_because_there_is_one_definition(self):
+        th = {"file": "cap-1.thermal.json", "age_ms": 240, "px": list(PX)}
+        obs = {"capture_id": "cap-2", "thermal": th,
+               "rgb": {"width": 1, "height": 1, "bytes": 0}}
+        b = observe.Bundle(obs, th, b"", co_timed=False, skew_bound_ms=240)
+        self.assertTrue(b.carried)
+        self.assertEqual(b.carried,
+                         observe.carried_frame(obs["capture_id"], obs["thermal"]))
 
 
 if __name__ == "__main__":
