@@ -48,11 +48,20 @@ def cold_blob(r0=12.0, c0=16.0, tbg=30.0, depth=30.0, sigma=1.5):
 class FakeBoard:
     """Serves the four endpoints observe.py and the aim path need."""
 
-    def __init__(self, orientation="wire", thermal_null=False):
+    I2C_REAL = ("I2C scan on SDA 5 / SCL 6\n\n"
+                "  0x29  VL53L0X rangefinder\n"
+                "  0x40  PCA9685 servo driver\n\n"
+                "2 device(s). Expected for the pan/tilt head: 0x29 + 0x40.\n")
+    I2C_NO_SERVO = ("I2C scan on SDA 5 / SCL 6\n\n"
+                    "  0x29  VL53L0X rangefinder\n\n"
+                    "1 device(s). Expected for the pan/tilt head: 0x29 + 0x40.\n")
+
+    def __init__(self, orientation="wire", thermal_null=False, i2c_text=None):
         self.cap = 0
         self.seq = 0
         self.orientation = orientation
         self.thermal_null = thermal_null
+        self.i2c_text = i2c_text if i2c_text is not None else FakeBoard.I2C_REAL
         self.px = cold_blob()
         self.servo_log = []
         board = self
@@ -106,7 +115,13 @@ class FakeBoard:
                         "ta_c": 28.0, "checksum_ok": False,
                         "orientation": board.orientation, "px": board.px}})
                 if u.path == "/i2c/scan":
-                    return self._send({"found": ["0x40"]})
+                    # PLAIN TEXT, byte for byte the shape the firmware emits.
+                    # The previous fake answered JSON — which is to say it
+                    # answered what the client happened to expect, so the
+                    # client's wrong assumption passed every test while
+                    # reporting "no PCA9685" against a real board that was
+                    # listing 0x40 the whole time.
+                    return self._send(board.i2c_text.encode(), "text/plain")
                 if u.path == "/servo":
                     board.servo_log.append((int(q["ch"][0]), int(q["us"][0])))
                     return self._send({"present": True, "set": "ok"})
@@ -302,6 +317,38 @@ class TestOrientationAgreement(unittest.TestCase):
             _, d = v.json("/api/observe")
         # the fake board reports no rgb orientation, so nothing to shout about
         self.assertEqual(d["orientation_mismatch"], "")
+
+
+class TestServoPresence(unittest.TestCase):
+    """Parsed from the real /i2c/scan, which is plain text meant for a human."""
+
+    def test_the_servo_driver_is_found_in_the_real_text_format(self):
+        with FakeBoard() as b, ViewerServer(b.url) as v:
+            _, d = v.json("/api/aim?box=8,12,16,20&cold=1")
+        self.assertTrue(d["servo"]["present"], d["servo"])
+        self.assertEqual(d["servo"]["pan"], 1500)
+        self.assertTrue(d["servo"]["assumed"])
+
+    def test_a_bus_without_the_driver_reports_absent(self):
+        with FakeBoard(i2c_text=FakeBoard.I2C_NO_SERVO) as b, ViewerServer(b.url) as v:
+            _, d = v.json("/api/aim?box=8,12,16,20&cold=1")
+        self.assertFalse(d["servo"]["present"])
+
+    def test_an_unreachable_scan_reports_absent_rather_than_raising(self):
+        viewer.Aim.pan = viewer.Aim.tilt = None
+        self.assertFalse(viewer.Aim.servo("http://127.0.0.1:9")["present"])
+
+    def test_the_footer_naming_expected_addresses_is_not_a_sighting(self):
+        """The scan signs off with "Expected ... 0x29 + 0x40."
+
+        A substring search over the response therefore finds the servo driver
+        on a bus that does not have one — reporting present exactly when the
+        thing is missing, which is the one answer worse than an error.
+        """
+        self.assertIn("0x40", FakeBoard.I2C_NO_SERVO)      # the trap is real
+        viewer.Aim.pan = viewer.Aim.tilt = None
+        with FakeBoard(i2c_text=FakeBoard.I2C_NO_SERVO) as b:
+            self.assertFalse(viewer.Aim.servo(b.url)["present"])
 
 
 class TestJog(unittest.TestCase):

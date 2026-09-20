@@ -464,12 +464,31 @@ class Aim:
         if cls.pan is not None:
             return {"present": True, "pan": cls.pan, "tilt": cls.tilt,
                     "assumed": cls.assumed}
+        # /i2c/scan answers in PLAIN TEXT — it is a bring-up tool meant to be
+        # read by a person over curl, and it lists one device per line:
+        #
+        #     0x29  VL53L0X rangefinder
+        #     0x40  PCA9685 servo driver
+        #
+        # An earlier version here called json.loads() on it, which raised, was
+        # swallowed, and reported "no PCA9685" against a board whose scan was
+        # showing 0x40 the whole time. The tests did not catch it because the
+        # fake board answered JSON: the fake encoded MY assumption instead of
+        # the endpoint's contract, which makes it a test of nothing.
+        #
+        # Matched against the DEVICE LINES only, never the whole body: the
+        # scan's closing line reads "Expected for the pan/tilt head: 0x29 +
+        # 0x40.", so a substring search over the response reports the driver
+        # present on a bus where it is precisely what is missing. A listed
+        # device is a line whose first token is its address.
         try:
             with urllib.request.urlopen(f"{board}/i2c/scan", timeout=5) as r:
-                found = json.loads(r.read()).get("found", [])
+                body = r.read().decode("utf-8", "replace")
         except Exception:                                            # noqa: BLE001
             return {"present": False, "pan": None, "tilt": None}
-        if not any(str(x).lower().endswith("40") for x in found):
+        listed = {ln.strip().split()[0].lower()
+                  for ln in body.splitlines() if ln.strip()}
+        if "0x40" not in listed:
             return {"present": False, "pan": None, "tilt": None}
         # Unknown until something commands it: servo.h deliberately drives
         # nothing at boot, so there is no width to read back. Say the number is
