@@ -6,6 +6,12 @@
 #   ./mark-weight.sh --from '2026-08-06 12:00' --to '2026-08-06 13:00' --plant cactus-01 suspect
 #   ./mark-weight.sh --from ... --to ... ok            # change your mind back
 #   ./mark-weight.sh --from ... --to ... --dry-run suspect
+#   ./mark-weight.sh --at '2026-09-21 08:03:24' --plant unknown --set-plant cactus-25 ok
+#
+# --set-plant re-assigns the plant, for a reading that landed on `unknown`
+# because its tag was not in tag-map.json yet. It REQUIRES --plant naming the id
+# the reading currently has: that value is the delete predicate, and without it
+# the delete would take every other plant weighed in the same window with it.
 #
 # Times are LOCAL (Asia/Taipei) and inclusive of --from, exclusive of --to.
 # `--at` targets a single reading: it is --from <t> --to <t+1s>. Add --plant if two
@@ -31,13 +37,14 @@ ORG="${ORG:-monitor-air}"
 BUCKET="${BUCKET:-sensors}"
 BACKUP_DIR="${BACKUP_DIR:-/data/influx-backups}"
 
-FROM=""; TO=""; AT=""; PLANT=""; DRY=0; QUALITY=""
+FROM=""; TO=""; AT=""; PLANT=""; DRY=0; QUALITY=""; SETPLANT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --at)      AT="$2";   shift 2 ;;
     --from)    FROM="$2"; shift 2 ;;
     --to)      TO="$2";   shift 2 ;;
     --plant)   PLANT="$2"; shift 2 ;;
+    --set-plant) SETPLANT="$2"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     -*) echo "unknown flag: $1" >&2; exit 1 ;;
     *)  QUALITY="$1"; shift ;;
@@ -51,6 +58,14 @@ fi
   echo "usage: $(basename "$0") (--at '<local time>' | --from '<t>' --to '<t>') [--plant <id>] [--dry-run] <quality>" >&2
   echo "       quality is a free label; panels show only 'ok'. Use 'deleted' to retire a bad reading." >&2; exit 1; }
 [[ "$QUALITY" =~ ^[a-z_]{1,20}$ ]] || { echo "quality must be [a-z_]{1,20}" >&2; exit 1; }
+if [ -n "$SETPLANT" ]; then
+  [[ "$SETPLANT" =~ ^[a-z0-9-]{1,40}$ ]] || { echo "--set-plant must be [a-z0-9-]{1,40}" >&2; exit 1; }
+  # Without --plant the predicate below is just _measurement=plant_weight, and
+  # the delete would remove every pot weighed in the same window — the new rows
+  # for THIS plant survive, everyone else's do not.
+  [ -n "$PLANT" ] || { echo "--set-plant requires --plant <current id> (it is the delete predicate)" >&2; exit 1; }
+  [ "$PLANT" != "$SETPLANT" ] || { echo "--plant and --set-plant are the same id — nothing to move" >&2; exit 1; }
+fi
 
 # GNU date traps, both hit here: `TZ=X date -d "..." -u` does NOT convert (the
 # prefix affects parsing, then -u prints the same wall-clock digits back, so a
@@ -79,10 +94,11 @@ EOF
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 docker exec -i "$CONTAINER" influx query --org "$ORG" --raw -f /dev/stdin <<<"$FLUX" > "$TMP/rows.csv"
 
-python3 - "$TMP" "$QUALITY" "$DRY" "$TZ_NAME" <<'PY'
+python3 - "$TMP" "$QUALITY" "$DRY" "$TZ_NAME" "$SETPLANT" <<'PY'
 import csv, sys, os, datetime as dt
 from zoneinfo import ZoneInfo
 tmp, quality, dry, tzname = sys.argv[1], sys.argv[2], sys.argv[3] == "1", sys.argv[4]
+setplant = sys.argv[5] if len(sys.argv) > 5 else ""
 tz = ZoneInfo(tzname)
 
 rows, hdr = [], None
@@ -100,11 +116,13 @@ def ns(ts):
     sec = int(dt.datetime.strptime(d, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp())
     return sec * 10**9 + int(frac.ljust(9, "0")[:9])
 
-print(f"{len(rows)} record(s) -> quality={quality}")
+what = f"quality={quality}" + (f", plant_id={setplant}" if setplant else "")
+print(f"{len(rows)} record(s) -> {what}")
 for r in sorted(rows, key=lambda r: r["_time"]):
     local = dt.datetime.fromisoformat(r["_time"].replace("Z", "+00:00")).astimezone(tz)
+    move = f"  {r.get('plant_id','')} -> {setplant}" if setplant else ""
     print(f"  {local:%m-%d %H:%M:%S}  {r.get('plant_id',''):<12} {float(r['weight_g']):>8.1f} g"
-          f"  {r.get('quality','(none)')} -> {quality}")
+          f"  {r.get('quality','(none)')} -> {quality}{move}")
 if dry:
     print("\n--dry-run: nothing written"); raise SystemExit
 
@@ -112,7 +130,8 @@ with open(os.path.join(tmp, "rewrite.lp"), "w") as f:
     for r in rows:
         uid = r.get("uid", "")
         fields = f'weight_g={float(r["weight_g"])}' + (f',uid="{uid}"' if uid else "")
-        f.write(f'plant_weight,device={r["device"]},plant_id={r["plant_id"]},quality={quality} '
+        f.write(f'plant_weight,device={r["device"]},'
+                f'plant_id={setplant or r["plant_id"]},quality={quality} '
                 f'{fields} {ns(r["_time"])}\n')
 PY
 
@@ -135,9 +154,19 @@ echo "rewritten with quality=$QUALITY"
 # The token is passed explicitly and errors are NOT swallowed: a silent delete
 # failure here is the one outcome that corrupts, leaving the old copy visible
 # beside the new one so the reading appears twice with contradictory labels.
-docker exec "$CONTAINER" influx delete --org "$ORG" --bucket "$BUCKET" --token "$TOKEN" \
-  --start "$START_UTC" --stop "$STOP_UTC" \
-  --predicate "$PRED AND quality!=\"$QUALITY\""
+# Moving a plant, the old copy is identified by its OLD plant_id ($PRED already
+# carries it, checked above) and NOT by its quality — a move that keeps quality
+# unchanged would match nothing here and leave the reading in the database
+# twice, under two different plants. Moving is therefore its own predicate.
+if [ -n "$SETPLANT" ]; then
+  docker exec "$CONTAINER" influx delete --org "$ORG" --bucket "$BUCKET" --token "$TOKEN" \
+    --start "$START_UTC" --stop "$STOP_UTC" --predicate "$PRED"
+  echo "moved to plant_id=$SETPLANT"
+else
+  docker exec "$CONTAINER" influx delete --org "$ORG" --bucket "$BUCKET" --token "$TOKEN" \
+    --start "$START_UTC" --stop "$STOP_UTC" \
+    --predicate "$PRED AND quality!=\"$QUALITY\""
+fi
 
 # Trust nothing: confirm the window now holds exactly one label. A silent delete
 # failure is the one outcome that corrupts — the old copy stays visible beside the
@@ -161,7 +190,31 @@ for r in csv.reader(sys.stdin):
     d=dict(zip(h,r)); q=d.get("quality","")
     if q: out.add(q)
 print(" ".join(sorted(out)))')"
-if [ "$LABELS" = "$QUALITY" ]; then
+if [ -n "$SETPLANT" ]; then
+  # A move empties the OLD plant's window, so the quality check above reads
+  # <none> and would call a clean move a failure. What must be verified instead
+  # is that nothing still carries the old id, and that the new id is there —
+  # the corrupting outcome is the reading existing under BOTH.
+  MOVED="$(docker exec -i "$CONTAINER" influx query --org "$ORG" --raw -f /dev/stdin <<EOF2 \
+    | awk -F, '/^,,/ {n = $NF + 0} END {print n + 0}'
+from(bucket: "$BUCKET")
+  |> range(start: $START_UTC, stop: $STOP_UTC)
+  |> filter(fn: (r) => r._measurement == "plant_weight" and r._field == "weight_g"
+                       and r.plant_id == "$SETPLANT")
+  |> count()
+  |> keep(columns: ["_value"])
+EOF2
+)"
+  MOVED="${MOVED:-0}"
+  if [ -z "$LABELS" ] && [ "$MOVED" -gt 0 ]; then
+    echo "old copies removed — window holds no plant_id=$PLANT, and $MOVED under $SETPLANT"
+  else
+    echo "WARNING: window still holds plant_id=$PLANT (quality: ${LABELS:-<none>})," >&2
+    echo "         $MOVED row(s) under $SETPLANT. The reading may now exist twice;" >&2
+    echo "         the backup above has the original rows." >&2
+    exit 1
+  fi
+elif [ "$LABELS" = "$QUALITY" ]; then
   echo "old copies removed — window now holds only quality=$QUALITY"
 else
   echo "WARNING: window holds quality: ${LABELS:-<none>} (expected only $QUALITY)" >&2
