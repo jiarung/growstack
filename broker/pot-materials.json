@@ -1,0 +1,35 @@
+{
+  "_": [
+    "Pot material, per plant_id. The ONLY thing here that cannot be derived:",
+    "lineage, retirement and weights all come from the data, materials do not —",
+    "they live in whoever looked at the shelf. Guessing them cost a full",
+    "re-analysis on 2026-09-19 (the guess was 'the two largest and two smallest',",
+    "which was wrong), so they are written down instead.",
+    "",
+    "Material is a property of the POT, not of the plant, so it is keyed by",
+    "plant_id and a repot ENDS one entry and starts another: cactus-05 and",
+    "cactus-05b are two different pots holding the same plant, and the material",
+    "does not carry across. Retired ids are kept for exactly that reason — their",
+    "historical readings still need the right material. cactus-05 is ceramic and",
+    "RETIRED (repotted into cactus-05b on 2026-08-30); cactus-05b is a different",
+    "pot and is plastic. Do not 'fix' that by moving the line to the live id.",
+    "",
+    "Unlisted = plastic. Most pots are, and a new plastic pot should need no",
+    "edit here; only the exceptions are worth maintaining.",
+    "",
+    "edit here; only the exceptions are worth maintaining.",
+    "",
+    "Terracotta that is unglazed evaporates through its walls and will read as a",
+    "fast-drying pot for reasons that have nothing to do with the plant. If you",
+    "know a ceramic pot is glazed, say so — the two behave nothing alike."
+  ],
+  "default": "plastic",
+  "materials": {
+    "cactus-05": "ceramic",
+    "cactus-08": "cement",
+    "cactus-11": "cement",
+    "cactus-12": "ceramic",
+    "cactus-22": "ceramic",
+    "cactus-24": "ceramic"
+  }
+}
