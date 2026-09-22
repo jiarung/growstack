@@ -178,13 +178,17 @@ for r in sorted(rows, key=lambda r: r["plant_id"]):
     # rounds to 5.0 on the wire and the firmware's own >5 g guard would then
     # reject the "full" payload outright — worse than provisional.
     basis = r.get("basis")
-    if basis not in ("循環", "暫用 p10"):
+    # "平台" is fit-plateau.py's A — the loss at which THIS pot stops losing,
+    # fitted from >=3 of its own cycles. It outranks 循環 (one cycle's largest
+    # drop, 1.7x too big on average) and is FULL for the same reason 循環 is:
+    # it was earned from completed dry-downs, not guessed from a short history.
+    if basis not in ("平台", "循環", "暫用 p10"):
         print(f"bad basis for {plant}: {basis!r} — panel schema changed?", file=sys.stderr)
         sys.exit(1)
     # `not first` is unreachable by construction (a completed cycle REQUIRES a >10 g
     # jump, which is exactly a watering anchor) — one token, and it makes the
     # invariant explicit instead of implied.
-    full = (not first) and basis == "循環" and math.isfinite(span) and round(span, 1) > 5.0
+    full = (not first) and basis in ("平台", "循環") and math.isfinite(span) and round(span, 1) > 5.0
     # anchor_ts is what the OLED uses: it recomputes the age live from
     # time(nullptr), so the displayed "3.6D" never goes stale between hourly runs.
     # It derives from the panel's `days` rather than a time column because that

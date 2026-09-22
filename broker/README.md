@@ -518,6 +518,101 @@ water figures but a proper plant name" IS the signal that a mapped pot has no
 usable weight history yet — while a raw hex UID on the OLED now means the tag
 is not mapped at all (or Node-RED/tag-map is broken).
 
+## Each pot's drying curve — the denominator the OLED divides by
+
+`fit-plateau.py` fits every live pot's drying runs to `L(t) = A(1 − e^(−t/τ))`
+and writes `A` (grams lost by the time the pot STOPS losing) and `τ` (how fast)
+to InfluxDB as `plant_plateau`. Panel 10 and `publish-weight-ref.sh` then divide
+by `A` (`basis = 平台`) instead of the pot's largest-ever drop — which was 1.7×
+too big, so a small pot sat at its plateau reading 47% and the 80/100% thresholds
+never fired. 100% now means "stopped". No firmware change.
+
+```bash
+./fit-plateau.py --dry-run     # the table, nothing written
+./fit-plateau.py               # refit and write; cron does this every Monday
+```
+
+Pots it cannot fit (fewer than 3 cycles, still drying at day 8, or a fit worse
+than half of A) keep the old span — a large denominator is a known error, a
+false A is not. `plateau-review-reminder.sh` (cron, Monday 01:30) refits and
+sends the pots currently past their plateau to Telegram, with the recall steps.
+
+## Evapotranspiration — is a planted pot drying differently from bare soil?
+
+`analyze-et.py` compares each pot against the **bare-soil control pot**
+(`cactus-nature-evapotranspiration`: a mapped tag on soil with nothing growing
+in it). Run it any time; it reads InfluxDB and needs no arguments.
+
+```bash
+./analyze-et.py                 # the report
+./analyze-et.py --band 260,320  # a different size cohort
+./analyze-et.py --csv out.csv   # the per-interval rows behind it
+```
+
+**Every number it prints is RELATIVE to the other pots weighed in the same
+session, and that is not a presentation choice.** Between sessions the scale's
+zero moves by a few grams — additive, and independent of what is sitting on it
+(`corr(gain, pot mass) = -0.03` over 152 cases). A day's evaporation is about
+the same size, so an absolute rate has a signal-to-noise ratio near 1. But 49
+of 59 sessions weighed 8+ pots at once and the offset is common to all of them,
+so subtracting the session's cohort median cancels it exactly — measured, 12x
+less scatter. The cost is that absolute g/day is gone; the benefit is that what
+remains is about the plants.
+
+**Bare soil is not one number.** It evaporates fastest about a day after
+watering and drops *below* the planted pots within three, so averaging across
+drying stages cancels two opposite signs and concludes "no difference" — which
+it did, three times, before the report started stratifying by days since the
+control was last watered.
+
+Two things it must not be allowed to forget, both of which produced a wrong
+answer before they were encoded:
+
+- **`quality == "ok"`.** The station labels a tag scanned with nothing on the
+  plate (`empty`) and anything struck out by hand (`deleted`). Read the raw
+  series instead and those come back as negative weights — and a median window
+  straddling them will invent a repot that never happened.
+- **A repot is an identity change, not a weight step.** `cactus-05` becomes
+  `cactus-05b`; the old id is retired and the two are never pooled. A detector
+  looking for steps *inside* one id finds nothing and reports that no pot was
+  ever repotted. Retirement is derived — a successor exists, or the pot is on
+  panel 10's `ended` list, which stays the single source of that truth.
+
+**`pot-materials.json`** holds the one fact none of this can derive: what each
+pot is made of. Unglazed terracotta evaporates through its walls and reads as a
+fast-drying pot for reasons that have nothing to do with the plant, so
+non-plastic pots are kept out of a cohort. Unlisted means plastic; only the
+exceptions need maintaining. Guessing these cost a full re-analysis on
+2026-09-19, which is why they are written down rather than remembered.
+
+`--index` answers a different question on the same data: **of the numbers we
+could put on the OLED, which one best says "this pot wants water"?** Scored
+against whether the pot was actually watered soon after each reading — a proxy
+for the gardener's judgement, not for the plant's need, so it ranks indicators
+against each other and nothing more.
+
+Two findings. The one worth acting on is free: **standardise each indicator
+inside its own pot.** Substrate mix, species, pot material, water-holding capacity are all
+per-pot constants and all unmeasured; comparing a pot to itself divides them out
+without ever knowing them. It is not cosmetic — pooled, deceleration scores
+0.374 and looks inverted, while inside a pot it is 0.64 and agrees in 16 of 17
+pots.
+
+The second is a negative result about the control pot: **subtracting its
+evaporation from a plant's depletion cannot work while it is watered and left
+to dry on its own schedule.** Its rate then encodes its own drying stage
+(r = −0.69 against days since it was last watered), and that stage is
+independent of every plant's (r = +0.04) — so the correction subtracts a
+clock nobody else is on. The report prints both numbers; the fix is a protocol
+change (weigh, refill to a fixed target, weigh), not a model change. The
+running record, including the ideas that failed and why, is
+[`WATERING-INDEX.md`](WATERING-INDEX.md).
+
+Offline tests (no InfluxDB, no docker): `../test/broker/test_analyze_et.py`.
+The load-bearing one adds a known offset to a whole synthetic session and
+requires every relative number to stay put — if that ever fails, the report is
+measuring the scale instead of the plants and would still look reasonable.
+
 ## Backups (to the HDD)
 
 Live data sits on the SSD (named volume `influxdb-data`); backups go to the HDD

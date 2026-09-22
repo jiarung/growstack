@@ -46,9 +46,10 @@ with open(os.path.join(d, "rows.csv"), "w", newline="") as f:
     w.writerow(["cactus-20", "432.04", "5.03", "2.0", "循環", "432.04", "0"])    # raw 5.03 rounds to 5.0 -> provisional
     w.writerow(["cactus-99", "500.0", "100.0", "2.0", "循環", "500.0", "0"])     # no tag -> informational note
     w.writerow(["cactus-25", "188.4", "31.0", "12.1", "循環", "188.4", "1"])     # FIRST-weighing anchor
+    w.writerow(["cactus-10", "271.0", "26.3", "3.5", "平台", "271.0", "0"])      # fitted plateau A -> FULL
 tagmap = os.path.join(d, "tag-map.json")
 json.dump({"AABBCCDD": "cactus-03b", "11223344": "cactus-15b",
-           "22334455": "cactus-16", "55667788": "cactus-20",
+           "22334455": "cactus-16", "55667788": "cactus-20", "DDEE0010": "cactus-10",
            "99AABBCC": "cactus-05b", "CCDDEEFF": "cactus-25"},
           open(tagmap, "w"))   # 05b: mapped, NO panel row; 25: first-weighing anchor
 
@@ -64,6 +65,11 @@ full = json.loads(lines["monitor-air/ref/weight/AABBCCDD"])
 # the follow-up half-landed, and the only symptom on the station would be a
 # silently larger message creeping back toward PAYLOAD_MAX.
 assert "provisional" not in full, full
+# basis "平台" — fit-plateau.py's per-pot A — ships as FULL with span_g = A. It is
+# the denominator that makes 100% mean "stopped losing"; if this ever demotes to
+# provisional the OLED silently drops the % on every fitted pot (2026-09-22).
+plat = json.loads(lines["monitor-air/ref/weight/DDEE0010"])
+assert plat.get("span_g") == 26.3 and "provisional" not in plat, plat
 for gone in ("sat_g", "dry_g", "anchor_day"):
     assert gone not in full, (gone, full)
 assert full["anchor_g"] == 432.0 and full["span_g"] == 187.0, full
@@ -116,8 +122,8 @@ r0 = subprocess.run(["python3", "-", d, tagmap, "monitor-air/ref/weight"],
 assert r0.returncode == 0, (r0.returncode, r0.stderr)
 assert "ZERO anchored plants" in r0.stderr
 lines0 = dict(l.split("	") for l in r0.stdout.strip().splitlines())
-assert len(lines0) == 6, lines0          # all six mapped uids
-for uid in ("AABBCCDD", "11223344", "22334455", "55667788", "99AABBCC", "CCDDEEFF"):
+assert len(lines0) == 7, lines0          # all seven mapped uids
+for uid in ("AABBCCDD", "11223344", "22334455", "55667788", "99AABBCC", "CCDDEEFF", "DDEE0010"):
     nn = json.loads(lines0[f"monitor-air/ref/weight/{uid}"])
     assert nn.get("name_only") is True and "anchor_g" not in nn, (uid, nn)
 

@@ -212,6 +212,7 @@ Editing the file is rarely enough.
 | `grafana/provisioning/alerting/rules.yaml.tmpl` | `bash start.sh` **then** `docker compose up -d --force-recreate grafana` | rendered to a gitignored file; alerting provisioning is read at startup only (§5) |
 | `control/light.py` | `docker compose build light && docker compose up -d --force-recreate light` | baked into the image (`build: ./control`) |
 | any `*.sh` / `*.py` in `broker/` | nothing | run from the host |
+| `fit-plateau.py`, `plateau-review-reminder.sh` | nothing — but test with `env -i PATH=/usr/bin:/bin` | cron runs Python **3.8**, the shell 3.11; `fromisoformat` on Influx's 9-digit timestamps crashed only under cron (2026-09-22, same trap as compute-k-models.py) |
 | `src/` (firmware) | flash from the dev host | not this machine |
 
 **The inode trap is the one that keeps recurring** — `FLOWS.md` gap 3 has the
@@ -344,6 +345,41 @@ is easy to believe is unnecessary.
    it.
 
 Ids are never reused, ended or not.
+
+**Step 5, whenever it happens: take the id back OFF `ended`.** The moment that
+uid goes onto another pot, the derivation works again on its own — the new owner
+holds the uid's most recent reading and the ended pot holds none. Verify before
+removing it, with the uid the pot used to carry:
+
+```bash
+docker exec -i monitor-air-influxdb influx query --org monitor-air --raw -f /dev/stdin <<'FLUX'
+from(bucket: "sensors") |> range(start: 0)
+  |> filter(fn: (r) => r._measurement == "plant_weight" and r._field == "uid"
+                       and r._value == "<the uid>")
+  |> sort(columns: ["_time"], desc: true) |> limit(n: 1)
+  |> keep(columns: ["_time", "plant_id"])
+FLUX
+```
+
+If that answers with the NEW plant, the entry can come out. Leave the mechanism
+(`ended = []` is valid Flux and `contains` accepts an empty set) — deleting the
+list itself means the next pot that rots needs it rebuilt, and 2026-09-17 was
+about forgetting this step, not about the list being too long.
+
+### Re-assigning a reading to a different plant
+
+A reading that landed on `unknown` because its tag was not in `tag-map.json` yet:
+
+```bash
+./mark-weight.sh --at '2026-09-21 08:05:28' --plant unknown --set-plant cactus-30 ok
+```
+
+`--plant` is **required** and names the id the reading has NOW: it becomes the
+delete predicate. Without it the predicate is just `_measurement="plant_weight"`
+and the delete takes every other pot weighed in the same window — the new rows
+for this plant survive, everyone else's do not. The script refuses rather than
+allowing that, and reports afterwards that the old id's window is empty and the
+new id holds the row.
 
 ### Capturing an AS7341 failure
 
