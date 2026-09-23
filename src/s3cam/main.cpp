@@ -40,6 +40,11 @@ void setup() {
                   ESP.getFlashChipSize() / (1024 * 1024), ESP.getPsramSize());
 
     WiFi.mode(WIFI_STA);
+    // Not a substitute for the supervisor in loop() — the driver's own retry
+    // gives up in cases the supervisor still recovers from — but it costs
+    // nothing and handles the easy half.
+    WiFi.setAutoReconnect(true);
+    WiFi.persistent(false);
     WiFi.begin(S3CAM_WIFI_SSID, S3CAM_WIFI_PASS);
     Serial.printf("[wifi] connecting to %s", S3CAM_WIFI_SSID);
     for (int i = 0; i < 60 && WiFi.status() != WL_CONNECTED; i++) {
@@ -125,7 +130,69 @@ void setup() {
     }
 }
 
+// --- staying reachable -------------------------------------------------------
+// An unattended board that loses Wi-Fi and does nothing about it is worse than
+// one that crashes: a crash reboots and comes back, while this keeps running,
+// keeps heating, and is indistinguishable from dead to everything that wants
+// to talk to it. Until now loop() printed "wifi=DOWN" every 30 s and that was
+// all — on a bench nobody is watching over serial, which is the situation this
+// board exists for.
+//
+// Two stages, because they fail differently. Re-associating fixes an AP that
+// rebooted or a roam that went wrong. A restart is for the states the radio
+// cannot talk itself out of — and it is safe here specifically: the PCA9685
+// keeps its own PWM registers across an ESP reset, so the head does not move,
+// and servo.h's invariant is that nothing is commanded at boot.
+static constexpr uint32_t WIFI_RETRY_AFTER_MS = 30000;    // down this long -> re-associate
+static constexpr uint32_t WIFI_REBOOT_AFTER_MS = 600000;  // still down -> restart
+static uint32_t wifiDownSinceMs = 0;
+static uint32_t wifiLastRetryMs = 0;
+uint32_t wifiReconnects = 0;   // reported by /health: a rising count is a flapping link
+
+static void wifiSupervise() {
+    if (WiFi.status() == WL_CONNECTED) {
+        if (wifiDownSinceMs) {
+            Serial.printf("[wifi] back after %lus, IP %s\n",
+                          (unsigned long)((millis() - wifiDownSinceMs) / 1000),
+                          WiFi.localIP().toString().c_str());
+            wifiReconnects++;
+            wifiDownSinceMs = 0;
+            // On EVERY recovery, not only the first connect in setup(). A board
+            // that boots before its AP does never runs setup()'s configTime, so
+            // without this it would come back on the network and stay on
+            // boot-millis capture ids for the rest of the session — every
+            // observation stamped "unsynced" while the link was fine. Calling
+            // it again on a link that already had time is harmless; not calling
+            // it on one that never did is a whole dataset with no wall clock.
+            configTime(0, 0, "pool.ntp.org", "time.google.com");
+        }
+        return;
+    }
+    const uint32_t now = millis();
+    if (!wifiDownSinceMs) {
+        wifiDownSinceMs = now;
+        wifiLastRetryMs = now;
+        Serial.println("[wifi] link DOWN — everything else keeps running; "
+                       "re-associating in 30s, restarting after 10min");
+        return;
+    }
+    if (now - wifiDownSinceMs >= WIFI_REBOOT_AFTER_MS) {
+        Serial.println("[wifi] still down after 10 min — restarting. The servo "
+                       "driver keeps its own PWM, so the head does not move.");
+        Serial.flush();
+        ESP.restart();
+    }
+    if (now - wifiLastRetryMs >= WIFI_RETRY_AFTER_MS) {
+        wifiLastRetryMs = now;
+        Serial.printf("[wifi] retry (down %lus)\n",
+                      (unsigned long)((now - wifiDownSinceMs) / 1000));
+        WiFi.disconnect();
+        WiFi.begin(S3CAM_WIFI_SSID, S3CAM_WIFI_PASS);
+    }
+}
+
 void loop() {
+    wifiSupervise();   // an unreachable board is a dead board; see above
     thermal::poll();   // drain Serial1 every pass; never blocks
     health::poll();    // self-pacing at 1 Hz; tracks the die-temperature peak
     cameraTickAutoIdle();   // back to standby when nobody has captured; see camera.h

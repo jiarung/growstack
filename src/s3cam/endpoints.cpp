@@ -172,6 +172,11 @@ static void fmtF(char* dst, size_t n, float v, int dp) {
 //
 // die_max_c is the reason this endpoint exists: degradation that happens while
 // nobody is watching the serial console leaves no other trace.
+// Defined in main.cpp's Wi-Fi supervisor. Reported here because a rising count
+// between two successful reads is the only way a flapping link shows up to a
+// host that, by definition, can only ask while the link is up.
+extern uint32_t wifiReconnects;
+
 static esp_err_t healthHandler(httpd_req_t* req) {
     float ta = 0.0f;
     const bool haveTa = thermal::lastAmbientC(ta);
@@ -187,12 +192,16 @@ static esp_err_t healthHandler(httpd_req_t* req) {
         "{\n  \"uptime_s\": %lu,\n"
         "  \"die_c\": %s,\n  \"die_max_c\": %s,\n  \"die_max_at_s\": %lu,\n"
         "  \"heap_free\": %u,\n  \"psram_free\": %u,\n"
-        "  \"rssi\": %d,\n  \"sensor\": \"%s\",\n"
+        "  \"rssi\": %d,\n  \"wifi_reconnects\": %lu,\n  \"sensor\": \"%s\",\n"
         "  \"thermal_ta_c\": %s,\n  \"thermal_frames_ok\": %lu\n}\n",
         (unsigned long)(millis() / 1000), dieS, dieMaxS,
         (unsigned long)health::dieMaxAtS(),
         ESP.getFreeHeap(), ESP.getFreePsram(),
         WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0,
+        // Only visible while the link is UP, which is the point: a count that
+        // keeps rising between two healthy reads is a flapping link, and that
+        // is invisible in rssi alone.
+        (unsigned long)wifiReconnects,
         cameraSensorName(), taS, (unsigned long)s.frames_ok);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, m);
