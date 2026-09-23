@@ -48,11 +48,14 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import scan_stats as S                                              # noqa: E402
+from head_datum import Datum                                        # noqa: E402
 from thermal_view import (centroid, fetch, orient,                   # noqa: E402
                           orientation_conflict, parse_roi)
 
 CH = {"pan": 5, "tilt": 6}      # must match servo.h CH_PAN / CH_TILT
 US_MIN, US_MAX = 600, 2400      # servo.h electrical span
+# The PROTOCOL's neutral, not this head's. Where "level" is meant, ask the
+# datum — see head_datum.py for why the two must not be the same constant.
 US_CENTER = 1500
 
 # The module runs at 4 Hz and the firmware's take() is consuming, so a null
@@ -222,7 +225,7 @@ def git_rev():
         return None
 
 
-def manifest_for(args, poses):
+def manifest_for(args, poses, datum):
     """Everything needed to read this run in a year, including the criterion.
 
     The criterion is copied in rather than referenced so that a recording
@@ -239,6 +242,7 @@ def manifest_for(args, poses):
         "axis": args.axis, "gain_from": args.gain_from, "gain_to": args.gain_to,
         "gain_steps": args.gain_steps, "poses": poses,
         "min_contrast_c": args.min_contrast,
+        "head_datum": datum.as_recorded(),
         "polarity": "cold" if args.cold else "hot",
         "bad_pixels": parse_bad_pixels(args.bad_pixels),
         "criterion": dict(S.CRITERION_DEFAULTS),
@@ -552,7 +556,7 @@ def parse_poses(items):
     return out
 
 
-def run(args, rec, head):
+def run(args, rec, head, datum):
     base, n = args.base_url, args.n
     if args.mode == "static":
         print("servos are NOT commanded in this mode — do not touch the bench")
@@ -563,14 +567,20 @@ def run(args, rec, head):
         step = (args.gain_to - args.gain_from) / max(1, args.gain_steps - 1)
         widths = [int(round(args.gain_from + i * step)) for i in range(args.gain_steps)]
         other = "tilt" if args.axis == "pan" else "pan"
-        print(f"sweeping {args.axis} across {widths}, holding {other} at {US_CENTER}")
+        hold, measured = datum.us(other)
+        # The axis being held still must be held where the head is LEVEL, not
+        # at the protocol's neutral: a tilt sitting 13 us off level points the
+        # whole gain sweep at a slightly different part of the scene, and the
+        # px/us it measures belongs to that part.
+        print(f"sweeping {args.axis} across {widths}, holding {other} at "
+              f"{hold} us" + ("" if measured else "  [DEFAULT, not measured]"))
         # Approach every width from the same side so the gain being measured is
         # the servo's and not the backlash's.
-        head.goto({other: US_CENTER}, approach=args.approach)
+        head.goto({other: hold}, approach=args.approach)
         for us in widths:
             head.goto({args.axis: us}, approach=args.approach)
             collect(rec, base, f"us={us}", n,
-                    extra={f"{args.axis}_us": us, f"{other}_us": US_CENTER},
+                    extra={f"{args.axis}_us": us, f"{other}_us": hold},
                     verbose=args.verbose)
         return
 
@@ -612,6 +622,11 @@ def main():
                     help="frames in each bracketing static block (repeat mode)")
     ap.add_argument("--min-contrast", type=float, default=5.0, dest="min_contrast",
                     help="deg C from background below which a frame is rejected")
+    ap.add_argument("--datum", metavar="pan=1513,tilt=1498",
+                    help="where THIS head sits level, per axis. Overrides "
+                         "docs/mlx90640/head-datum.json for this run. Not the "
+                         "same as the protocol's 1500 neutral — see "
+                         "head_datum.py.")
     ap.add_argument("--bad-pixels", dest="bad_pixels", metavar="i,j,k",
                     help="pixel indices CONFIRMED across several runs, to "
                          "exclude by neighbour median. One run's candidates "
@@ -708,17 +723,20 @@ def main():
     if args.mode == "gain" and args.gain_steps < 2:
         ap.error("--gain-steps must be at least 2 to fit a gain")
 
+    datum = Datum.from_cli(args.datum, Datum.load())
+    for axis in ("pan", "tilt"):
+        print(f"{axis} datum: {datum.describe(axis)}")
     poses = parse_poses(args.poses) if args.poses else []
     out = args.out or os.path.join(
         "runs", f"{args.mode}-{datetime.datetime.now():%Y%m%dT%H%M%S}.jsonl")
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     rec = Recorder(out)
-    rec.write(manifest_for(args, poses))
+    rec.write(manifest_for(args, poses, datum))
     head = Head(args.base_url, args.settle, args.approach_us, args.dry_run)
 
     print(f"recording to {out}")
     try:
-        run(args, rec, head)
+        run(args, rec, head, datum)
     except ServoAborted as e:
         print(f"\nSERVO ABORT: {e}")
         head.retreat("servo abort")

@@ -52,6 +52,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import observe
 import scan_stats as S
+from head_datum import Datum
 from thermal_view import (centroid, flip_box, orient,
                           orientation_conflict, orientation_mismatch)
 
@@ -453,6 +454,11 @@ class Aim:
     key = None                      # the box the window belongs to
     pan = tilt = None
     assumed = False                 # True while a width is a guess, not a command
+    # None means "read the recorded datum from disk". Injectable because a test
+    # that reads the repo's real head-datum.json is a test whose result depends
+    # on a file somebody edited for the bench — it would pass today, fail after
+    # the next horn remount, and the failure would say nothing about the code.
+    datum = None
 
     @classmethod
     def reset(cls, key):
@@ -493,9 +499,14 @@ class Aim:
         # Unknown until something commands it: servo.h deliberately drives
         # nothing at boot, so there is no width to read back. Say the number is
         # assumed rather than printing a position the head may not be at.
-        cls.pan = cls.tilt = 1500
+        # Assumed to be at THIS head's level position, not the protocol's
+        # neutral: if the horn sits 13 us off, the first jog is measured from
+        # a guess that is wrong by that much.
+        d = cls.datum or Datum.load()
+        cls.pan, cls.tilt = d.us("pan")[0], d.us("tilt")[0]
         cls.assumed = True
-        return {"present": True, "pan": 1500, "tilt": 1500, "assumed": True}
+        return {"present": True, "pan": cls.pan, "tilt": cls.tilt,
+                "assumed": True}
 
     @classmethod
     def jog(cls, board, axis, delta):

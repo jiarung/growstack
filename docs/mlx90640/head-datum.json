@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "axes": {
+    "pan": {
+      "us": 1513,
+      "note": "ch=5 measured level on the bench 2026-09-22",
+      "t": "2026-09-22T22:16:48+08:00"
+    }
+  }
+}

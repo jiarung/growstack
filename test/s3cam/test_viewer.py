@@ -32,6 +32,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "../../tools/s3cam"))
 import viewer                                                       # noqa: E402
+from head_datum import Datum                                        # noqa: E402
 from thermal_view import orient                                     # noqa: E402
 
 ROWS, COLS = 24, 32
@@ -151,6 +152,9 @@ class ViewerServer:
         viewer.Aim.key = None
         viewer.Aim.pan = viewer.Aim.tilt = None
         viewer.Aim.assumed = False
+        # A datum the test owns, so the repo's real head-datum.json cannot
+        # decide whether this suite passes.
+        viewer.Aim.datum = Datum().set("pan", 1500).set("tilt", 1500)
         self.httpd = HTTPServer(("127.0.0.1", 0), viewer.Viewer)
         self.url = f"http://127.0.0.1:{self.httpd.server_port}"
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -326,8 +330,21 @@ class TestServoPresence(unittest.TestCase):
         with FakeBoard() as b, ViewerServer(b.url) as v:
             _, d = v.json("/api/aim?box=8,12,16,20&cold=1")
         self.assertTrue(d["servo"]["present"], d["servo"])
-        self.assertEqual(d["servo"]["pan"], 1500)
+        self.assertEqual(d["servo"]["pan"], 1500)      # the injected datum
         self.assertTrue(d["servo"]["assumed"])
+
+    def test_the_assumed_width_is_the_datum_not_the_protocol_neutral(self):
+        """Where the head sits level, not what a neutral pulse means.
+
+        The first jog is measured from this number, so a head whose horn sits
+        13 us off level is nudged from a guess wrong by that much.
+        """
+        with FakeBoard() as b, ViewerServer(b.url) as v:
+            viewer.Aim.pan = viewer.Aim.tilt = None
+            viewer.Aim.datum = Datum().set("pan", 1513).set("tilt", 1487)
+            _, d = v.json("/api/aim?box=8,12,16,20&cold=1")
+        self.assertEqual(d["servo"]["pan"], 1513)
+        self.assertEqual(d["servo"]["tilt"], 1487)
 
     def test_a_bus_without_the_driver_reports_absent(self):
         with FakeBoard(i2c_text=FakeBoard.I2C_NO_SERVO) as b, ViewerServer(b.url) as v:

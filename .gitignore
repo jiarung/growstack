@@ -48,3 +48,8 @@ broker/fixtures/out/
 # default — the ONE run that a conclusion in docs/mlx90640/ rests on gets
 # committed deliberately, under docs/, where the claim can be checked.
 runs/
+
+# Editor scratch files
+*.swp
+*.swo
+*~

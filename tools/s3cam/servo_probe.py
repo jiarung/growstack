@@ -35,6 +35,9 @@ import signal
 import sys
 import urllib.error
 import urllib.request
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from head_datum import Datum
 
 CH = {"pan": 5, "tilt": 6}      # must match servo.h CH_PAN / CH_TILT
 US_MIN, US_MAX = 600, 2400      # servo.h electrical span; firmware rejects outside
@@ -83,14 +86,19 @@ def main():
     ap.add_argument("--axis", choices=sorted(CH), required=True)
     ap.add_argument("--dir", choices=["+", "-"], required=True,
                     help="which way to walk from --start")
-    ap.add_argument("--start", type=int, default=US_CENTER,
-                    help=f"first width (default {US_CENTER}, the centre)")
+    ap.add_argument("--start", type=int, default=None,
+                    help="first width (default: this head's measured datum, "
+                         "or the protocol neutral if nobody has measured it)")
     ap.add_argument("--step", type=int, default=50,
                     help="microseconds per step (default 50)")
     ap.add_argument("--margin", type=int, default=100,
                     help="how far inside the measured stop the WORKING limit "
                          "sits (default 100)")
     a = ap.parse_args()
+    if a.start is None:
+        us, measured = Datum.load().us(a.axis)
+        a.start = us
+        print(f"{a.axis} datum: {Datum.load().describe(a.axis)}")
 
     if not US_MIN <= a.start <= US_MAX:
         ap.error(f"--start must be within the electrical span {US_MIN}..{US_MAX}")

@@ -123,18 +123,20 @@ def args_for(base, mode, out, **kw):
              n=2, static_n=2, min_contrast=5.0, settle=0, approach="uni",
              approach_us=80, cycles=2, poses=None, axis="pan",
              gain_from=1400, gain_to=1600, gain_steps=3, dry_run=False,
-             verbose=False, summarize=None, cold=False, bad_pixels=None)
+             verbose=False, summarize=None, cold=False, bad_pixels=None,
+             datum=None)
     d.update(kw)
     return argparse.Namespace(**d)
 
 
-def run_to(board, mode, out, **kw):
+def run_to(board, mode, out, datum=None, **kw):
     a = args_for(board.url, mode, out, **kw)
+    d = datum or R.Datum()
     rec = R.Recorder(out)
-    rec.write(R.manifest_for(a, R.parse_poses(a.poses) if a.poses else []))
+    rec.write(R.manifest_for(a, R.parse_poses(a.poses) if a.poses else [], d))
     head = R.Head(a.base_url, a.settle, a.approach_us, a.dry_run)
     try:
-        R.run(a, rec, head)
+        R.run(a, rec, head, d)
     finally:
         rec.close()
     return a, head
@@ -335,6 +337,37 @@ class TestOrientationProbe(unittest.TestCase):
         with Board(orientation="rot180") as b:
             code, out = self._run_main(b, [])
         self.assertIn(code, (0, 1), out)
+
+
+class TestHeadDatum(unittest.TestCase):
+    """Gain mode holds the other axis where the head is LEVEL, not at 1500."""
+
+    def test_the_held_axis_goes_to_the_measured_datum(self):
+        d = R.Datum().set("tilt", 1513, note="test")
+        with tempfile.TemporaryDirectory() as t, Board() as b:
+            run_to(b, "gain", os.path.join(t, "g.jsonl"), datum=d, axis="pan",
+                   gain_from=1400, gain_to=1600, gain_steps=3, approach="none")
+        tilt = {us for ch, us in b.log if ch == 6}
+        self.assertEqual(tilt, {1513})
+
+    def test_without_a_measurement_it_falls_back_to_the_neutral(self):
+        with tempfile.TemporaryDirectory() as t, Board() as b:
+            run_to(b, "gain", os.path.join(t, "g.jsonl"), axis="pan",
+                   gain_from=1400, gain_to=1600, gain_steps=3, approach="none")
+        self.assertEqual({us for ch, us in b.log if ch == 6}, {R.US_CENTER})
+
+    def test_the_recording_says_which_widths_were_measured(self):
+        # A run held at 1500 because nobody measured is not the same run as
+        # one held at 1500 because somebody did, and the manifest has to be
+        # able to tell a reader which it was.
+        d = R.Datum().set("tilt", 1513)
+        with tempfile.TemporaryDirectory() as t, Board() as b:
+            out = os.path.join(t, "g.jsonl")
+            run_to(b, "gain", out, datum=d, axis="pan", gain_from=1400,
+                   gain_to=1600, gain_steps=3, approach="none")
+            m, _ = S.load(out)
+        self.assertEqual(m["head_datum"]["tilt"], {"us": 1513, "measured": True})
+        self.assertEqual(m["head_datum"]["pan"], {"us": 1500, "measured": False})
 
 
 class TestFreshness(unittest.TestCase):
