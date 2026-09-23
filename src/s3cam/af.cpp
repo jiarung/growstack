@@ -47,7 +47,7 @@ bool wr(uint16_t reg, uint8_t val) {
 // part they are very different claims — see load()'s `limit`.
 int32_t verifyUpload(size_t n) {
     for (size_t i = 0; i < n; i++) {
-        const int got = cameraRegRead((uint16_t)(OV5640_AF_LOAD_ADDR + i));
+        const int got = cameraRegReadLocked((uint16_t)(OV5640_AF_LOAD_ADDR + i));
         if (got != (int)OV5640_AF_CONFIG[i]) return (int32_t)(OV5640_AF_LOAD_ADDR + i);
         if ((i & 0x7F) == 0) delay(1);
     }
@@ -59,13 +59,24 @@ int32_t verifyUpload(size_t n) {
 size_t blobBytes() { return OV5640_AF_CONFIG_LEN; }
 
 Status status() {
+    // One lock for the WHOLE operation. This uploads 4 KB and reads every
+    // byte back; the auto-idle tick writes the standby register from the
+    // main loop, and landing between two of those reads would fail the
+    // verify for a reason that has nothing to do with the upload.
+    CameraSensorLock lk;
+
     Status st;
     st.loaded = loaded;
-    st.fw_state = cameraRegRead(REG_FW_STATE);
-    st.cmd_ack = cameraRegRead(REG_CMD_ACK);
-    st.sys_reset = cameraRegRead(REG_SYS_RESET);
-    st.clk_en0 = cameraRegRead(0x3004);
-    st.clk_en1 = cameraRegRead(0x3005);
+    st.fw_state = cameraRegReadLocked(REG_FW_STATE);
+    st.cmd_ack = cameraRegReadLocked(REG_CMD_ACK);
+    st.sys_reset = cameraRegReadLocked(REG_SYS_RESET);
+    st.clk_en0 = cameraRegReadLocked(0x3004);
+    st.clk_en1 = cameraRegReadLocked(0x3005);
+    // Deliberately does NOT wake. A status query that powered the sensor up
+    // would change the thing it was asked to observe — and would also reset
+    // the idle timer every time somebody looked. Instead it says so, because
+    // fw_state read from a sleeping part means nothing without that context.
+    st.sensor_idle = cameraIsIdle();
     st.load_ms = loadMs;
     st.write_fails = writeFails;
     st.verify_fail_at = verifyFailAt;
@@ -75,6 +86,21 @@ Status status() {
 }
 
 bool load(size_t limit) {
+    // EXCLUSIVE, not merely locked. This resets the sensor's MCU and rewrites
+    // its program memory; a capture already in flight would be corrupted, and
+    // cameraCapture() releases the plain mutex before acquiring its frame, so
+    // holding that alone would not have excluded it.
+    CameraExclusive lk;
+    if (!lk.ok()) {
+        note = "the camera was busy for 15 s — nothing loaded, nothing disturbed";
+        return false;
+    }
+    // In standby the 8051 is powered down: the upload cannot reach ready and
+    // a command cannot be consumed. Waking is part of using it, not an
+    // optimisation — auto-idle would otherwise make /cam/af?load=1, the
+    // documented recovery, the one thing that cannot recover anything.
+    cameraWakeLocked();
+
     loaded = false;
     writeFails = 0;
     verifyFailAt = -1;
@@ -82,7 +108,7 @@ bool load(size_t limit) {
                                                                   : limit;
     sentBytes = (uint16_t)n;
 
-    const int sys0 = cameraRegRead(REG_SYS_RESET);
+    const int sys0 = cameraRegReadLocked(REG_SYS_RESET);
     if (sys0 < 0) {
         note = "cannot read 0x3000 — sensor not answering on SCCB";
         return false;
@@ -142,7 +168,7 @@ bool load(size_t limit) {
     // 5 s at 5 ms, the reference driver's budget.
     int state = -1;
     for (int i = 0; i < 1000; i++) {
-        state = cameraRegRead(REG_FW_STATE);
+        state = cameraRegReadLocked(REG_FW_STATE);
         if (state == FW_READY) break;
         delay(5);
     }
@@ -161,28 +187,58 @@ bool load(size_t limit) {
     return true;
 }
 
-bool command(uint8_t cmd, uint32_t timeout_ms) {
+// Assumes CameraSensorLock is HELD. focus() issues two of these back to back
+// and the mutex is not recursive, so a guard here would deadlock against the
+// one focus() already holds — and it would deadlock on the main task, at boot,
+// with the watchdog as the only thing left to notice.
+static bool commandLocked(uint8_t cmd, uint32_t timeout_ms) {
+
     if (!wr(REG_CMD_ACK, 0x01)) return false;
     if (!wr(REG_CMD_MAIN, cmd)) return false;
     const uint32_t t0 = millis();
     while (millis() - t0 < timeout_ms) {
-        const int ack = cameraRegRead(REG_CMD_ACK);
+        const int ack = cameraRegReadLocked(REG_CMD_ACK);
         if (ack == 0x00) return true;      // firmware consumed it
         delay(5);
     }
     return false;
 }
 
+bool command(uint8_t cmd, uint32_t timeout_ms) {
+    // One lock for the WHOLE operation. This uploads 4 KB and reads every
+    // byte back; the auto-idle tick writes the standby register from the
+    // main loop, and landing between two of those reads would fail the
+    // verify for a reason that has nothing to do with the upload.
+    CameraSensorLock lk;
+    // In standby the 8051 is powered down: the upload cannot reach ready and
+    // a command cannot be consumed. Waking is part of using it, not an
+    // optimisation — auto-idle would otherwise make /cam/af?load=1, the
+    // documented recovery, the one thing that cannot recover anything.
+    cameraWakeLocked();
+    return commandLocked(cmd, timeout_ms);
+}
+
 bool focus() {
+    // One lock for the WHOLE operation. This uploads 4 KB and reads every
+    // byte back; the auto-idle tick writes the standby register from the
+    // main loop, and landing between two of those reads would fail the
+    // verify for a reason that has nothing to do with the upload.
+    CameraSensorLock lk;
+    // In standby the 8051 is powered down: the upload cannot reach ready and
+    // a command cannot be consumed. Waking is part of using it, not an
+    // optimisation — auto-idle would otherwise make /cam/af?load=1, the
+    // documented recovery, the one thing that cannot recover anything.
+    cameraWakeLocked();
+
     if (!loaded) {
         note = "focus requested before the firmware was loaded";
         return false;
     }
-    if (!command(0x08)) {
+    if (!commandLocked(0x08, 5000)) {
         note = "command 0x08 not acknowledged";
         return false;
     }
-    if (!command(0x04)) {
+    if (!commandLocked(0x04, 5000)) {
         note = "command 0x04 not acknowledged";
         return false;
     }

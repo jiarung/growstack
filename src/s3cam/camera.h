@@ -27,6 +27,21 @@ bool cameraSetStreaming(bool on);     // VGA for stream, QSXGA for stills
 // /capture raises to QSXGA for the shot and drops back when the frame is
 // released. Kept switchable so the delta can be measured, not assumed.
 bool cameraSetRestSize(const char* name);
+
+// --- automatic standby -------------------------------------------------------
+// Measured on the bench: in software standby the module is not hot to the
+// touch; awake it is. The heat is the OV5640's own duty cycle, so staying
+// awake is not a neutral default — it is a decision to run full-resolution
+// readout plus in-sensor JPEG compression indefinitely for frames nobody
+// reads. cameraTickAutoIdle() must therefore be called from loop().
+//
+// Waking remains automatic: /capture and /stream pay the settle honestly, so
+// no caller can end up talking to a sleeping sensor.
+void cameraTickAutoIdle();          // call every loop pass; cheap, non-blocking
+void cameraNoteActivity();          // "somebody used the camera just now"
+bool cameraSetAutoIdleMs(uint32_t ms);   // 0 disables; under 2000 is refused
+uint32_t cameraAutoIdleMs();
+uint32_t cameraIdleInMs();          // ms until standby, 0 when not counting
 const char* cameraRestSizeName();
 
 // The sensor's master clock. OV5640 power scales with it, and the DVP/DMA rate
@@ -45,6 +60,59 @@ int cameraXclkHz();
 // a capture taken right after a wake is badly exposed. Automatic idling would
 // trade heat for silently bad data; that trade is the operator's to make.
 bool cameraSetIdle(bool idle);
+
+// --- sharing the sensor with code outside camera.cpp -------------------------
+// Everything that touches the OV5640 over SCCB shares one mutex, because the
+// auto-idle tick writes the standby register from the main loop while HTTP
+// handlers run on another task. af.cpp uploads 4 KB and then reads every byte
+// back; a standby landing in the middle of that verify would fail it for a
+// reason having nothing to do with the upload.
+//
+// Hold this for the WHOLE operation, not per register: a guard taken and
+// released 4077 times leaves 4077 gaps.
+class CameraSensorLock {
+public:
+    CameraSensorLock();
+    ~CameraSensorLock();
+    CameraSensorLock(const CameraSensorLock&) = delete;
+    CameraSensorLock& operator=(const CameraSensorLock&) = delete;
+};
+
+// Register read for callers already holding CameraSensorLock. The public
+// cameraRegRead() takes the lock itself, and this mutex is not recursive.
+int cameraRegReadLocked(int reg);
+
+// Clear software standby, paying the AE/AWB settle if it really was asleep.
+// Caller must already hold CameraSensorLock or CameraExclusive.
+//
+// Anything talking to the sensor's embedded MCU has to call this first: in
+// standby that core is powered down, so a firmware upload cannot reach ready
+// and a focus command cannot be consumed. Holding the mutex is not enough —
+// it excludes other callers, it does not turn the sensor on.
+void cameraWakeLocked();
+
+// EXCLUSIVE use of the sensor: waits until no capture is outstanding and no
+// stream is running, then holds the same mutex until it goes out of scope.
+//
+// The plain lock is not enough for whole-sensor operations. cameraCapture()
+// deliberately releases it before captureFresh() — otherwise every /power
+// would block for the length of a 5 MP exposure — so a frame can be in flight
+// while nothing holds the mutex. Uploading firmware into the sensor's MCU
+// underneath that acquisition corrupts the frame, the upload, or both.
+//
+// ok() false means the wait timed out; the caller must not touch the sensor.
+// Nothing is ever forced: a busy camera is a reason to give up and say so,
+// not a reason to interrupt somebody's capture.
+class CameraExclusive {
+public:
+    explicit CameraExclusive(uint32_t timeout_ms = 15000);
+    ~CameraExclusive();
+    bool ok() const { return held_; }
+    CameraExclusive(const CameraExclusive&) = delete;
+    CameraExclusive& operator=(const CameraExclusive&) = delete;
+private:
+    bool held_ = false;
+};
 bool cameraIsIdle();
 
 // ---- raw register access (the instrument, not a knob) -----------------------

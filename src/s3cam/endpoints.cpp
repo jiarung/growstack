@@ -123,6 +123,7 @@ static const char MENU[] =
     "                 ?cpu=80|160|240  ?xclk=6..20 (MHz)\n"
     "                 ?tx=19|15|11|8   ?cam=idle|active\n"
     "                 ?rest=vga|svga|qsxga  resting framesize (biggest lever)\n"
+    "                 ?autoidle=<sec>  standby after this long idle (0=never)\n"
     "GET /cam/reg     dump OV5640 0x3000-0x3040 (hex + binary + notes)\n"
     "                 ?a=0x300e            one register\n"
     "                 ?a=..&v=..[&m=0xff]  masked write (volatile)\n"
@@ -378,6 +379,7 @@ static esp_err_t powerHandler(httpd_req_t* req) {
     // "" = not asked for; distinguishes "worked" from "never attempted", which
     // a plain bool cannot.
     const char *rCpu = "", *rXclk = "", *rTx = "", *rCam = "", *rRest = "";
+    const char *rAuto = "";
 
     int n = 0;
     switch (qArg(q, haveQ, "cpu", n)) {
@@ -403,6 +405,26 @@ static esp_err_t powerHandler(httpd_req_t* req) {
         rCam = ok ? "ok" : "rejected";
         applied += ok;
     }
+    switch (qArg(q, haveQ, "autoidle", n)) {
+        case 1: {
+            // Seconds on the wire, milliseconds inside: nobody wants to type
+            // 120000, and nobody wants a timeout expressed in a unit the
+            // firmware does not use internally.
+            //
+            // The range check happens BEFORE the multiply. `autoidle=4294970`
+            // wraps uint32 to 2704 ms and would have been accepted as a
+            // perfectly reasonable-looking two-and-a-bit second timeout — a
+            // number nobody asked for, arrived at by arithmetic nobody saw.
+            // A day is the cap because anything longer is indistinguishable
+            // from never, and never already has a spelling: 0.
+            const long MAX_S = 86400;
+            bool ok = n >= 0 && n <= MAX_S && cameraSetAutoIdleMs((uint32_t)n * 1000);
+            rAuto = ok ? "ok" : "rejected";
+            applied += ok;
+            break;
+        }
+        case -1: rAuto = "rejected (not a number)"; break;
+    }
     if (applied) health::resetPeak();
 
     char dieS[16], dieMaxS[16];
@@ -413,13 +435,18 @@ static esp_err_t powerHandler(httpd_req_t* req) {
     int m = snprintf(body, sizeof(body),
         "{\n  \"cpu_mhz\": %d,\n  \"xclk_hz\": %d,\n  \"wifi_tx_dbm\": %d,\n"
         "  \"rest_size\": \"%s\",\n  \"cam_idle\": %s,\n"
+        "  \"auto_idle_s\": %lu,\n  \"idle_in_s\": %lu,\n"
         "  \"applied\": %d,\n  \"peak_reset\": %s,\n"
         "  \"set\": {\"cpu\": \"%s\", \"xclk\": \"%s\", \"tx\": \"%s\", "
-        "\"rest\": \"%s\", \"cam\": \"%s\"},\n"
+        "\"rest\": \"%s\", \"cam\": \"%s\", \"autoidle\": \"%s\"},\n"
         "  \"die_c\": %s,\n  \"die_max_c\": %s\n}\n",
         power::cpuMhz(), cameraXclkHz(), power::wifiTxDbm(),
-        cameraRestSizeName(), cameraIsIdle() ? "true" : "false", applied,
-        applied ? "true" : "false", rCpu, rXclk, rTx, rRest, rCam, dieS, dieMaxS);
+        cameraRestSizeName(), cameraIsIdle() ? "true" : "false",
+        (unsigned long)(cameraAutoIdleMs() / 1000),
+        (unsigned long)((cameraIdleInMs() + 999) / 1000),
+        applied,
+        applied ? "true" : "false", rCpu, rXclk, rTx, rRest, rCam, rAuto,
+        dieS, dieMaxS);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, m);
 }
@@ -1082,12 +1109,16 @@ static esp_err_t camAfHandler(httpd_req_t* req) {
         "  \"fw_state_0x3029\": %d,   \"_ready_is\": 112,\n"
         "  \"cmd_ack_0x3023\": %d,    \"_idle_is\": 0,\n"
         "  \"sys_reset_0x3000\": %d,  \"_bit5_mcu_bit6_pgm\": true,\n"
-        "  \"clk_en_0x3004\": %d,\n  \"clk_en_0x3005\": %d\n}\n",
+        "  \"clk_en_0x3004\": %d,\n  \"clk_en_0x3005\": %d,\n"
+        "  \"sensor_idle\": %s\n}\n",
         st.loaded ? "true" : "false", did, st.note,
         (unsigned)af::blobBytes(), (unsigned)st.sent, (unsigned long)st.load_ms,
         (unsigned)st.write_fails, (long)st.verify_fail_at,
         st.fw_state, st.cmd_ack, st.sys_reset,
-        st.clk_en0, st.clk_en1);
+        st.clk_en0, st.clk_en1,
+        // Without this a reader cannot tell "the firmware is gone" from "the
+        // part it runs on is asleep", and only one of those is a problem.
+        st.sensor_idle ? "true" : "false");
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, m);
 }

@@ -34,7 +34,91 @@ static bool camInitOk = false;   // see cameraPresent()
 static bool camIdle = false;
 static bool raisedForCapture = false;
 
+// --- automatic standby -------------------------------------------------------
+// The bench settled the question manual idling only hinted at: with the sensor
+// in software standby the module is not hot to the touch, and with it awake it
+// is. The heat is duty cycle, on the OV5640 itself — which also strikes the
+// regulator and the S3 off the candidate list.
+//
+// So the default is now to go back to standby on its own. Leaving it awake is
+// not a neutral choice: it is a decision to run full-resolution readout plus
+// in-sensor JPEG compression forever, for frames nobody reads, and it is the
+// one that cooks the part.
+//
+// 120 s is a STARTING VALUE, not a measurement. It has to be longer than the
+// gaps inside a working session — the viewer captures every few seconds, a
+// person adjusting a target takes tens of seconds between shots — so that
+// ordinary use never pays the 1.2 s wake twice in a row; and short enough that
+// a bench left alone cools within a few minutes. Tune it against actual use
+// via /power?autoidle=, which is why it is not a compile-time constant.
+//
+// Waking stays automatic and honest (wakeIfIdle pays the settle), so nothing a
+// caller does can end up talking to a sleeping sensor.
+static uint32_t autoIdleMs = 120000;
+static uint32_t lastActivityMs = 0;
+static bool streaming = false;
+
+// loop() runs on the main task and every HTTP handler runs on the httpd task,
+// so a flag read on one and written on the other is not a guard — it is a
+// window. Without this lock the tick could pass its checks, the httpd task
+// could begin a capture, and the standby write would still land: the sensor
+// asleep underneath a caller holding a framebuffer.
+//
+// A mutex rather than portENTER_CRITICAL because what it protects includes an
+// SCCB write and, on the wake path, a 1.2 s settle. Spinning with interrupts
+// masked for that long would be worse than the race.
+//
+// `inUse` counts callers holding the sensor — from cameraCapture() until the
+// matching cameraRelease(). It is NOT the same as raisedForCapture: when the
+// resting size already equals STILL_SIZE nothing is raised, so that flag stays
+// false while a framebuffer is very much outstanding.
+static SemaphoreHandle_t camLock = nullptr;
+static int inUse = 0;
+
+static inline void camLockTake() {
+    if (camLock) xSemaphoreTake(camLock, portMAX_DELAY);
+}
+static inline bool camLockTry() {
+    return camLock ? xSemaphoreTake(camLock, 0) == pdTRUE : true;
+}
+static inline void camLockGive() {
+    if (camLock) xSemaphoreGive(camLock);
+}
+
+// Scoped, because most of the sensor-mutating functions below have several
+// early returns and a hand-placed give on each is one edit away from being
+// forgotten on the one path that matters.
+struct CamLock {
+    CamLock() { camLockTake(); }
+    ~CamLock() { camLockGive(); }
+    CamLock(const CamLock&) = delete;
+    CamLock& operator=(const CamLock&) = delete;
+};
+
+void cameraNoteActivity() { lastActivityMs = millis(); }
+
+bool cameraSetAutoIdleMs(uint32_t ms) {
+    // 0 disables. Anything under the wake settle would spend more time waking
+    // than sleeping, so it is refused rather than quietly clamped. (The
+    // seconds-to-milliseconds overflow guard lives at the endpoint, where the
+    // conversion happens.)
+    if (ms != 0 && ms < 2000) return false;
+    // Under the lock, and the two writes together. Racing the tick, a new
+    // timeout could be recorded a moment after the tick had already read the
+    // OLD one and decided to sleep — so setting a longer timeout would be
+    // followed immediately by the standby it was meant to postpone.
+    camLockTake();
+    autoIdleMs = ms;
+    lastActivityMs = millis();
+    camLockGive();
+    return true;
+}
+
+uint32_t cameraAutoIdleMs() { return autoIdleMs; }
+
 bool cameraInit() {
+    // Before anything can be captured, and before the HTTP server exists.
+    if (!camLock) camLock = xSemaphoreCreateMutex();
     if (!psramFound()) {
         Serial.println("[cam] NO PSRAM — cannot hold 5MP framebuffers, aborting init");
         return false;
@@ -118,12 +202,20 @@ bool cameraPresent() { return camInitOk; }
 // the optics that is not there.
 
 bool cameraSetAeLevel(int level) {
+    // Same mutex as the auto-idle tick: it writes the standby register, and a
+    // standby landing partway through another SCCB transaction leaves the
+    // sensor half-configured with nothing reporting it.
+    CamLock lk;
     sensor_t* s = esp_camera_sensor_get();
     if (!s || !s->set_ae_level || level < -2 || level > 2) return false;
     return s->set_ae_level(s, level) >= 0;
 }
 
 bool cameraSetGainCeiling(int x) {
+    // Same mutex as the auto-idle tick: it writes the standby register, and a
+    // standby landing partway through another SCCB transaction leaves the
+    // sensor half-configured with nothing reporting it.
+    CamLock lk;
     // Accepts the multiplier the datasheet talks in (2..128), not the enum
     // index, so the query string says what it means.
     int n = -1;
@@ -134,24 +226,40 @@ bool cameraSetGainCeiling(int x) {
 }
 
 bool cameraSetBrightness(int level) {
+    // Same mutex as the auto-idle tick: it writes the standby register, and a
+    // standby landing partway through another SCCB transaction leaves the
+    // sensor half-configured with nothing reporting it.
+    CamLock lk;
     sensor_t* s = esp_camera_sensor_get();
     if (!s || !s->set_brightness || level < -2 || level > 2) return false;
     return s->set_brightness(s, level) >= 0;
 }
 
 bool cameraSetMirror(int on) {
+    // Same mutex as the auto-idle tick: it writes the standby register, and a
+    // standby landing partway through another SCCB transaction leaves the
+    // sensor half-configured with nothing reporting it.
+    CamLock lk;
     sensor_t* s = esp_camera_sensor_get();
     if (!s || !s->set_hmirror || (on != 0 && on != 1)) return false;
     return s->set_hmirror(s, on) >= 0;
 }
 
 bool cameraSetFlip(int on) {
+    // Same mutex as the auto-idle tick: it writes the standby register, and a
+    // standby landing partway through another SCCB transaction leaves the
+    // sensor half-configured with nothing reporting it.
+    CamLock lk;
     sensor_t* s = esp_camera_sensor_get();
     if (!s || !s->set_vflip || (on != 0 && on != 1)) return false;
     return s->set_vflip(s, on) >= 0;
 }
 
 CameraTune cameraTune() {
+    // Same mutex as the auto-idle tick: it writes the standby register, and a
+    // standby landing partway through another SCCB transaction leaves the
+    // sensor half-configured with nothing reporting it.
+    CamLock lk;
     CameraTune t;
     sensor_t* s = esp_camera_sensor_get();
     if (!s) return t;
@@ -192,9 +300,12 @@ const char* cameraSensorName() {
 // settle honestly instead of returning a fast, badly exposed frame.
 static constexpr uint32_t WAKE_SETTLE_MS = 1200;
 
+static bool setIdleLocked(bool idle);   // defined below; camLock must be held
+
+// Called only with camLock held — see setIdleLocked().
 static void wakeIfIdle() {
     if (!camIdle) return;
-    if (!cameraSetIdle(false)) {
+    if (!setIdleLocked(false)) {
         Serial.println("[cam] wake FAILED — sensor may not answer this capture");
         return;
     }
@@ -225,14 +336,29 @@ static void dropToRest() {
 static camera_fb_t* captureFresh();
 
 camera_fb_t* cameraCapture() {
-    wakeIfIdle();
+    // Claim the sensor BEFORE waking or raising it. The auto-idle tick takes
+    // the same lock, so from here until cameraRelease() it cannot put the
+    // sensor to sleep underneath this capture.
+    camLockTake();
+    inUse++;
+    cameraNoteActivity();
+    wakeIfIdle();                       // may delay; the tick simply skips
     raisedForCapture = raiseToStill();
+    camLockGive();
+
     camera_fb_t* fb = captureFresh();
-    if (!fb && raisedForCapture) {
-        // Nothing is held, so it is safe to drop right now. On the success path
-        // the restore waits for cameraRelease — see the note there.
-        dropToRest();
-        raisedForCapture = false;
+
+    if (!fb) {
+        // No buffer went out, so the claim ends here rather than at a
+        // cameraRelease() the caller has no reason to make.
+        camLockTake();
+        if (raisedForCapture) {
+            dropToRest();
+            raisedForCapture = false;
+        }
+        inUse--;
+        cameraNoteActivity();
+        camLockGive();
     }
     return fb;
 }
@@ -262,6 +388,7 @@ static camera_fb_t* captureFresh() {
 
 void cameraRelease(camera_fb_t* fb) {
     if (fb) esp_camera_fb_return(fb);
+    camLockTake();
     // ONLY after the buffer is back with the driver. set_framesize stops and
     // restarts the capture engine, which can free and reallocate the PSRAM
     // framebuffers — doing it while the caller still holds an fb would turn
@@ -272,18 +399,42 @@ void cameraRelease(camera_fb_t* fb) {
         dropToRest();
         raisedForCapture = false;
     }
+    // The clock starts when the capture is FINISHED, not when it began: a slow
+    // 5 MP shot must not spend its own duration counting towards the idle
+    // timeout it is trying not to trip.
+    cameraNoteActivity();
+    if (inUse > 0) inUse--;
+    camLockGive();
 }
 
 bool cameraSetStreaming(bool on) {
+    camLockTake();
     if (on) wakeIfIdle();   // a stream into a standby sensor is a blank page
+    cameraNoteActivity();
+    // STOPPING is recorded before the reconfiguration, and unconditionally: if
+    // set_framesize fails on the way down we still are not streaming, and
+    // leaving the flag set would block auto-idle for the rest of the boot.
+    if (!on) streaming = false;
     sensor_t* s = esp_camera_sensor_get();
-    if (!s) return false;
+    if (!s) { camLockGive(); return false; }
     // ending a stream returns to REST, not to full resolution — going back to
     // QSXGA here is exactly the accident that made idle the hottest state
-    return s->set_framesize(s, on ? STREAM_SIZE : restSize) == 0;
+    const bool ok = s->set_framesize(s, on ? STREAM_SIZE : restSize) == 0;
+    // STARTING is recorded only once the sensor is actually reconfigured. Set
+    // before the attempt, a failed start left `streaming` true with no handler
+    // left alive to clear it — and cameraTickAutoIdle() skips on that flag, so
+    // one failed /stream would have kept the sensor awake until reboot. The
+    // failure mode of the cooling feature must not be "silently off forever".
+    if (on) streaming = ok;
+    camLockGive();
+    return ok;
 }
 
 bool cameraSetRestSize(const char* name) {
+    // Same mutex as the auto-idle tick: it writes the standby register, and a
+    // standby landing partway through another SCCB transaction leaves the
+    // sensor half-configured with nothing reporting it.
+    CamLock lk;
     framesize_t want;
     if      (!strcmp(name, "vga"))   want = FRAMESIZE_VGA;
     else if (!strcmp(name, "svga"))  want = FRAMESIZE_SVGA;
@@ -314,6 +465,10 @@ const char* cameraRestSizeName() {
 // ---- cooling knobs ---------------------------------------------------------
 
 bool cameraSetXclkMhz(int mhz) {
+    // Same mutex as the auto-idle tick: it writes the standby register, and a
+    // standby landing partway through another SCCB transaction leaves the
+    // sensor half-configured with nothing reporting it.
+    CamLock lk;
     // Below ~6 MHz the OV5640's internal PLL cannot reach a usable pixel clock;
     // above the init value there is no thermal reason to go. Refuse rather than
     // let a typo brick the stream until the next reboot.
@@ -328,11 +483,20 @@ bool cameraSetXclkMhz(int mhz) {
 }
 
 int cameraXclkHz() {
+    // Same mutex as the auto-idle tick: it writes the standby register, and a
+    // standby landing partway through another SCCB transaction leaves the
+    // sensor half-configured with nothing reporting it.
+    CamLock lk;
     sensor_t* s = esp_camera_sensor_get();
     return s ? s->xclk_freq_hz : 0;
 }
 
-bool cameraSetIdle(bool idle) {
+// Assumes camLock is HELD. Two callers already hold it — wakeIfIdle() inside a
+// capture, and the auto-idle tick — and the mutex is not recursive, so taking
+// it here would deadlock them. The public entry point below is the one that
+// locks; keeping them separate is what stops /power?cam=active from being
+// undone by a tick that read the timestamp a moment too early.
+static bool setIdleLocked(bool idle) {
     sensor_t* s = esp_camera_sensor_get();
     if (!s || !s->set_reg) return false;
     // 0x3008 is an OV5640 register. Writing it on another sensor would poke
@@ -347,12 +511,107 @@ bool cameraSetIdle(bool idle) {
     // We do not, so we mask.
     if (s->set_reg(s, 0x3008, 0x40, idle ? 0x40 : 0x00) < 0) return false;
     camIdle = idle;
+    // Waking IS activity. Without this, /power?cam=active after the timeout
+    // has elapsed wakes the sensor and the very next loop pass puts it
+    // straight back to sleep — the documented control would appear to do
+    // nothing at all.
+    if (!idle) lastActivityMs = millis();
     return true;
+}
+
+void cameraWakeLocked() {
+    wakeIfIdle();
+    cameraNoteActivity();
+}
+
+bool cameraSetIdle(bool idle) {
+    camLockTake();
+    const bool ok = setIdleLocked(idle);
+    camLockGive();
+    return ok;
 }
 
 bool cameraIsIdle() { return camIdle; }
 
+void cameraTickAutoIdle() {
+    // Non-blocking: the lock being held means somebody is mid-capture, which
+    // is itself the answer. Waiting for it on the main loop would stall
+    // thermal::poll(), and a stalled poll loses UART bytes.
+    if (!camLockTry()) return;
+    // Every check and the standby write happen while holding it, so a capture
+    // starting on the httpd task blocks at cameraCapture()'s own take() until
+    // this has finished deciding.
+    if (autoIdleMs == 0 || camIdle || streaming || inUse > 0 ||
+        raisedForCapture || millis() - lastActivityMs < autoIdleMs) {
+        // Unsigned subtraction above, so the 49-day millis() wrap is a
+        // non-event rather than a day the camera never sleeps again.
+        camLockGive();
+        return;
+    }
+    if (setIdleLocked(true)) {
+        Serial.printf("[cam] auto-idle after %lus of no capture\n",
+                      (unsigned long)(autoIdleMs / 1000));
+    } else {
+        // Refusing forever would retry every loop pass and fill the log. One
+        // line, then behave as though it had worked: the next capture wakes
+        // anyway, and a sensor that will not enter standby is not a fault that
+        // stops anything else working.
+        Serial.println("[cam] auto-idle refused by the sensor; not retrying");
+        autoIdleMs = 0;
+    }
+    camLockGive();
+}
+
+uint32_t cameraIdleInMs() {
+    // The same conditions the tick refuses on, INCLUDING inUse. Leaving that
+    // one out let /power print a countdown that could not elapse: a slow
+    // response still holding a framebuffer blocks standby until
+    // cameraRelease(), and a status line that says "3 s" while the answer is
+    // "not until this finishes" is a status line that has to be second-guessed.
+    if (autoIdleMs == 0 || camIdle || streaming || raisedForCapture ||
+        inUse > 0) {
+        return 0;
+    }
+    const uint32_t since = millis() - lastActivityMs;
+    return since >= autoIdleMs ? 0 : autoIdleMs - since;
+}
+
+CameraSensorLock::CameraSensorLock() { camLockTake(); }
+CameraSensorLock::~CameraSensorLock() { camLockGive(); }
+
+CameraExclusive::CameraExclusive(uint32_t timeout_ms) {
+    const uint32_t deadline = millis() + timeout_ms;
+    for (;;) {
+        camLockTake();
+        if (inUse == 0 && !streaming) {
+            held_ = true;              // keep the lock; ~CameraExclusive gives it
+            cameraNoteActivity();      // this IS use, so do not idle out from under it
+            return;
+        }
+        camLockGive();
+        // Signed compare against the deadline so the millis() wrap is a
+        // non-event rather than an instant timeout every 49 days.
+        if ((int32_t)(millis() - deadline) >= 0) return;
+        delay(20);
+    }
+}
+
+CameraExclusive::~CameraExclusive() {
+    if (held_) {
+        cameraNoteActivity();
+        camLockGive();
+    }
+}
+
 int cameraRegRead(int reg) {
+    // Same mutex as the auto-idle tick: it writes the standby register, and a
+    // standby landing partway through another SCCB transaction leaves the
+    // sensor half-configured with nothing reporting it.
+    CamLock lk;
+    return cameraRegReadLocked(reg);
+}
+
+int cameraRegReadLocked(int reg) {
     sensor_t* s = esp_camera_sensor_get();
     if (!s || !s->get_reg) return -1;
     // mask 0xFF: we want the byte as it stands, not a field of it
@@ -361,6 +620,10 @@ int cameraRegRead(int reg) {
 }
 
 bool cameraRegWrite(int reg, int mask, int value) {
+    // Same mutex as the auto-idle tick: it writes the standby register, and a
+    // standby landing partway through another SCCB transaction leaves the
+    // sensor half-configured with nothing reporting it.
+    CamLock lk;
     sensor_t* s = esp_camera_sensor_get();
     if (!s || !s->set_reg) return false;
     if (sensorPid != OV5640_PID) return false;   // addresses are part-specific

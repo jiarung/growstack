@@ -7,6 +7,7 @@
 #include <WiFi.h>
 
 #include "../secrets.h"
+#include "af.h"
 #include "camera.h"
 #include "endpoints.h"
 #include "health.h"
@@ -86,6 +87,39 @@ void setup() {
                       camOk ? "ok" : "ABSENT",
                       rangefinderPresent() ? "ok" : "absent",
                       servo::present() ? "ok" : "absent");
+        // AUTOFOCUS, after the server is up on purpose. The upload is 4 KB over
+        // SCCB and the verify reads every byte back, so this blocks for seconds
+        // — done before endpointsStart() the board would simply be unreachable
+        // for that time, with no way to ask it why.
+        //
+        // af.h used to say nothing was loaded at boot, because whether it
+        // worked was the open question and doing it automatically would bury
+        // the answer in the boot log. That question is answered: the firmware
+        // loads and runs on this board. What remains is a lens that only moves
+        // once it has been loaded, so loading it is now part of being ready.
+        //
+        // Failure is not fatal. Every other subsystem, and the camera itself,
+        // work without autofocus; a fixed lens is worse than a focused one and
+        // far better than a board that refuses to boot.
+        if (camOk) {
+            if (!af::load()) {
+                const af::Status st = af::status();
+                Serial.printf("[af] load FAILED (%s) — capture still works, the "
+                              "lens just will not move; retry with /cam/af?load=1\n",
+                              st.note);
+            } else if (!af::focus()) {
+                Serial.println("[af] loaded, but the focus command was not "
+                               "acknowledged — see /cam/af");
+            } else {
+                Serial.println("[af] loaded and focused");
+            }
+            // OPEN QUESTION, deliberately not guessed at: /power's auto-idle
+            // puts the sensor into software standby (0x3008 bit6) after two
+            // minutes, and whether that resets the 8051 holding this firmware
+            // has not been measured. If focus stops working after the board has
+            // been left alone, that is the first thing to check — /cam/af reads
+            // fw_state live, so it will say so, and ?load=1 restores it.
+        }
     } else {
         Serial.println("[s3cam] httpd start FAILED — nothing is reachable");
     }
@@ -94,6 +128,7 @@ void setup() {
 void loop() {
     thermal::poll();   // drain Serial1 every pass; never blocks
     health::poll();    // self-pacing at 1 Hz; tracks the die-temperature peak
+    cameraTickAutoIdle();   // back to standby when nobody has captured; see camera.h
 
     static uint32_t last = 0;
     if (millis() - last > 30000) {

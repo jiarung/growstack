@@ -12,9 +12,19 @@
 // addressable, nobody would ship a 4 KB blob to move it.
 //
 // Loading is VOLATILE — a power cycle takes the sensor back to no-firmware,
-// which is also the recovery if a load goes wrong. Nothing here is done at
-// boot: whether it worked is exactly the question being asked, and doing it
-// automatically would bury the answer in the boot log.
+// which is also the recovery if a load goes wrong.
+//
+// This IS done at boot now (main.cpp, after the server is up so the seconds it
+// blocks do not make the board unreachable). The earlier note here said it was
+// not, because whether the upload worked was the open question and doing it
+// automatically would have buried the answer in the boot log. That question is
+// settled: it loads and runs. What is left is a lens that cannot move until it
+// has, so loading it is part of being ready rather than an experiment.
+//
+// STILL OPEN: /power's auto-idle puts the sensor into software standby
+// (0x3008 bit6), and whether that resets the 8051 this firmware runs on has
+// not been measured. status() reads fw_state live, so /cam/af answers it
+// honestly at any moment; ?load=1 restores it. Nothing here pretends to know.
 //
 // The command handshake (attested by a shipping driver, not remembered):
 // write 0x01 to 0x3023, write the command to 0x3022, then poll 0x3023 until it
@@ -35,6 +45,9 @@ struct Status {
     // acknowledged while the last 237 bytes went into a single aliased cell.
     int32_t verify_fail_at = -1;
     uint16_t sent = 0;            // bytes actually uploaded this attempt
+    bool     sensor_idle = false; // the sensor is in software standby, so the
+                                  // 8051 is powered down and every field above
+                                  // describes a part that is not running
     const char* note = "";
 };
 
