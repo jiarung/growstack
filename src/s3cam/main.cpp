@@ -8,6 +8,7 @@
 
 #include "../secrets.h"
 #include "af.h"
+#include "beat.h"
 #include "camera.h"
 #include "endpoints.h"
 #include "health.h"
@@ -80,6 +81,13 @@ void setup() {
     // subsystems that share nothing with the camera except a PCB. The symptom
     // was a bare "Connection refused" with no way to ask the board why, which is
     // the worst possible failure for a board whose job is now to be diagnosable.
+    // OUTSIDE the endpointsStart() branch, deliberately. If the HTTP server
+    // fails to start there is no way left to ask the board anything — which is
+    // precisely the failure the heartbeat should be reporting, and gating it on
+    // that success would make the one class of outage it cannot describe the
+    // one it was added for.
+    beat::begin();
+
     camOk = cameraInit();
     if (!camOk) {
         Serial.println("[s3cam] camera init FAILED — /capture /stream /observation "
