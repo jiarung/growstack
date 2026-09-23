@@ -126,12 +126,9 @@ void setup() {
             } else {
                 Serial.println("[af] loaded and focused");
             }
-            // OPEN QUESTION, deliberately not guessed at: /power's auto-idle
-            // puts the sensor into software standby (0x3008 bit6) after two
-            // minutes, and whether that resets the 8051 holding this firmware
-            // has not been measured. If focus stops working after the board has
-            // been left alone, that is the first thing to check — /cam/af reads
-            // fw_state live, so it will say so, and ?load=1 restores it.
+            // Standby does NOT cost this firmware — measured 2026-09-24, see
+            // af.h. Loading once at boot is therefore enough for the life of
+            // the boot, however many times auto-idle cycles the sensor.
         }
     } else {
         Serial.println("[s3cam] httpd start FAILED — nothing is reachable");

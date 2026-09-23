@@ -21,10 +21,14 @@
 // settled: it loads and runs. What is left is a lens that cannot move until it
 // has, so loading it is part of being ready rather than an experiment.
 //
-// STILL OPEN: /power's auto-idle puts the sensor into software standby
-// (0x3008 bit6), and whether that resets the 8051 this firmware runs on has
-// not been measured. status() reads fw_state live, so /cam/af answers it
-// honestly at any moment; ?load=1 restores it. Nothing here pretends to know.
+// ANSWERED 2026-09-24: software standby (0x3008 bit6) does NOT lose this
+// firmware. Asleep, fw_state reads 0x20; after a /capture wakes the sensor it
+// reads 0x70 (ready) with cmd_ack 0, on the same boot, with no reload. The
+// 0x20 is simply what that register returns on a powered-down core.
+//
+// Which is exactly why status() reports sensor_idle instead of waking to look:
+// read without that context, the 0x20 says "the firmware is gone" and invites
+// a reload-on-wake mechanism for a problem that does not exist.
 //
 // The command handshake (attested by a shipping driver, not remembered):
 // write 0x01 to 0x3023, write the command to 0x3022, then poll 0x3023 until it
