@@ -8,6 +8,7 @@ neutral RC pulse means; the datum is which spline tooth somebody pressed the
 horn onto. A test suite that let the two be the same number would be testing
 the bug.
 """
+import io
 import json
 import os
 import sys
@@ -16,6 +17,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "../../tools/s3cam"))
+import head_datum as G                                             # noqa: E402
 from head_datum import Datum, DEFAULT_US, AXES                     # noqa: E402
 
 
@@ -118,6 +120,66 @@ class TestPersistence(unittest.TestCase):
                 json.dump({"version": 99, "axes": {}}, fh)
             with self.assertRaises(SystemExit):
                 Datum.load(p)
+
+
+class TestCli(unittest.TestCase):
+    """The bench-side entry point: one hand, one line, no Python."""
+
+    def _run(self, argv, path):
+        import contextlib
+        import head_datum
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = head_datum.main(argv + ["--path", path])
+        return code, buf.getvalue()
+
+    def test_showing_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, "h.json")
+            G.Datum().set("pan", 1643).save(p)
+            before = open(p).read()
+            code, out = self._run([], p)
+            self.assertEqual(code, 0)
+            self.assertIn("1643", out)
+            self.assertEqual(open(p).read(), before)
+
+    def test_recording_reaches_the_file(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, "h.json")
+            self._run(["pan=1643", "--note", "remounted"], p)
+            d = G.Datum.load(p)
+        self.assertEqual(d.us("pan"), (1643, True))
+        self.assertIn("remounted", d.axes["pan"]["note"])
+
+    def test_an_entry_always_carries_some_provenance(self):
+        # A record whose only provenance is a timestamp cannot tell a later
+        # reader whether it came from careful levelling or a midnight guess.
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, "h.json")
+            self._run(["pan=1643"], p)
+            self.assertTrue(G.Datum.load(p).axes["pan"]["note"])
+
+    def test_clear_returns_an_axis_to_default(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, "h.json")
+            self._run(["pan=1643", "tilt=1498"], p)
+            self._run(["--clear", "tilt"], p)
+            d = G.Datum.load(p)
+        self.assertEqual(d.us("pan"), (1643, True))
+        self.assertEqual(d.us("tilt"), (DEFAULT_US, False))
+
+    def test_a_refused_value_leaves_the_file_untouched(self):
+        # Rejecting halfway through must not leave a half-written record: the
+        # file is what three tools read, and a partial write reaches all of
+        # them.
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, "h.json")
+            G.Datum().set("pan", 1643).save(p)
+            before = open(p).read()
+            for bad in (["pan=9000"], ["yaw=1500"], ["pan"], ["--clear", "yaw"]):
+                with self.assertRaises(SystemExit):
+                    self._run(bad, p)
+                self.assertEqual(open(p).read(), before, bad)
 
 
 if __name__ == "__main__":

@@ -17,9 +17,20 @@ measurement, for the same reason the viewer labels an un-commanded servo width
 "assumed": a number whose provenance is unstated is a number somebody will
 later treat as evidence.
 
+    tools/s3cam/head_datum.py                 # show what is recorded
+    tools/s3cam/head_datum.py pan=1643        # record a new one
+    tools/s3cam/head_datum.py pan=1643 tilt=1498 --note "after remount"
+    tools/s3cam/head_datum.py --clear tilt    # back to "not measured"
+
     from head_datum import Datum
     d = Datum.load()                       # docs/mlx90640/head-datum.json
-    us, measured = d.us("pan")             # (1513, True) or (1500, False)
+    us, measured = d.us("pan")             # (1643, True) or (1500, False)
+
+THE FILE IS THE ONE PLACE. scan_repeat, servo_probe and the viewer all read
+it, so recording a new datum here reaches every tool at once — which is the
+whole point, because this number changes whenever the horn comes off the
+spline, and a value copied into three places is a value that will disagree
+with itself the first time somebody remounts the head in a hurry.
 """
 import datetime
 import json
@@ -98,6 +109,9 @@ class Datum:
                              f"writes {cls.VERSION} — migrate it deliberately")
         return cls(d.get("axes"))
 
+    def describe_all(self):
+        return "\n".join(f"  {a:<5} {self.describe(a)}" for a in AXES)
+
     @classmethod
     def from_cli(cls, text, base=None):
         """'pan=1513,tilt=1498' -> a Datum layered over `base`.
@@ -119,3 +133,51 @@ class Datum:
                 raise SystemExit(f"--datum wants axis=us pairs (got {part!r})")
             out = out.set(axis.strip(), us, note="--datum")
         return out
+
+
+def main(argv):
+    """Show or record. Deliberately tiny: this runs at a bench, one-handed."""
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Where this head sits level, per axis.",
+        epilog="With no arguments it prints what is recorded and changes nothing.")
+    ap.add_argument("pairs", nargs="*", metavar="AXIS=US",
+                    help="e.g. pan=1643 tilt=1498")
+    ap.add_argument("--note", default="", help="why this value, for the record")
+    ap.add_argument("--clear", metavar="AXIS", action="append", default=[],
+                    help="forget an axis — it goes back to reporting DEFAULT")
+    ap.add_argument("--path", default=DEFAULT_PATH)
+    a = ap.parse_args(argv)
+
+    d = Datum.load(a.path)
+    if not a.pairs and not a.clear:
+        print(f"{a.path}\n{d.describe_all()}")
+        return 0
+
+    for axis in a.clear:
+        if axis not in AXES:
+            raise SystemExit(f"unknown axis {axis!r}; expected one of {AXES}")
+        # A new object: the loaded record is not mutated until save().
+        d = Datum({k: v for k, v in d.axes.items() if k != axis})
+    for pair in a.pairs:
+        try:
+            axis, us = pair.split("=", 1)
+            us = int(us)
+        except ValueError:
+            raise SystemExit(f"want AXIS=US (got {pair!r})")
+        # The note defaults to something rather than nothing: an entry whose
+        # only provenance is a timestamp cannot tell a later reader whether it
+        # came from a careful levelling or a guess typed at midnight.
+        d = d.set(axis.strip(), us,
+                  a.note or "set with head_datum.py; no note given")
+
+    d.save(a.path)
+    print(f"{a.path}\n{d.describe_all()}")
+    print("\nscan_repeat, servo_probe and the viewer read this file directly — "
+          "nothing else to update.")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main(sys.argv[1:]))
