@@ -305,20 +305,26 @@ class V(unittest.TestCase):
         self.assertEqual(s["n"], ROWS * COLS)
         self.assertAlmostEqual(s["min"], min(PX))
 
-    def test_a_page_holding_an_older_capture_is_refused_not_quietly_updated(self):
-        # the tautology this replaces compared the served JPEG against whatever
-        # the server currently held, so it could not fail. This asks for a
-        # capture the server no longer has — with auto-capture or a second tab
-        # that is a real request — and requires an error rather than a swap.
+    def test_a_capture_the_server_does_not_hold_is_refused_not_quietly_updated(self):
+        # The tautology this replaced compared the served JPEG against whatever
+        # the server currently held, so it could not fail. The guarantee being
+        # pinned is that asking for a capture the server does not have is an
+        # ERROR rather than a swap — never that you silently receive some other
+        # capture's image.
+        #
+        # The simulation changed in 2026-09-25 when the viewer went threaded.
+        # It used to rename Viewer.last.capture_id in place, which no longer
+        # models anything: a second capture now creates a new bundle under a
+        # new key, and a handful of recent ones stay fetchable so two
+        # overlapping tabs can each be served their OWN image. So the request
+        # here names an id the server has genuinely never held.
         import urllib.error
         self.get("/api/observe")
-        stale_id = self.viewer.Viewer.last.capture_id
-        Board.thermal_capture = Board.jpg_capture = OBS_ID
-        self.viewer.Viewer.last.capture_id = "cap-newer"   # the board moved on
+        held = self.viewer.Viewer.last.capture_id
         with self.assertRaises(urllib.error.HTTPError) as e:
-            self.get("/api/last.jpg?id=" + stale_id)
+            self.get("/api/last.jpg?id=cap-never-existed")
         self.assertEqual(e.exception.code, 409)
-        st, jpg = self.get("/api/last.jpg?id=cap-newer")
+        st, jpg = self.get("/api/last.jpg?id=" + held)
         self.assertEqual(jpg, JPG)
 
     def test_a_scale_with_no_inverse_is_a_400_not_a_500(self):
