@@ -1,0 +1,98 @@
+diff --git a/src/measure.cpp b/src/measure.cpp
+index 1056952..a5675a6 100644
+--- a/src/measure.cpp
++++ b/src/measure.cpp
+@@ -132,7 +132,14 @@ void oledRefLine(float w, bool calibrated) {
+         float pct = (r.anchor_g - w) / r.span_g * 100.0f;
+         if (pct >  999.0f) pct =  999.0f;       // makes the 21-char budget a proof,
+         if (pct < -999.0f) pct = -999.0f;       // not a hope
+-        snprintf(line + n, sizeof(line) - n, " %.0f%%", (double)pct);
++        // Two denominators reach here as span_g. A fitted plateau loss makes
++        // 100% mean "this pot has stopped losing water" — the number worth
++        // waiting for. The legacy largest-ever drop is ~1.7x too big, so its
++        // 100% rarely comes and its 60% may already be the plateau; it gets a
++        // "~" so the two are never read as the same scale. Budget: the worst
++        // line is "123.4D -1234g ~-999%", 20 of 21 columns.
++        snprintf(line + n, sizeof(line) - n, r.plateau ? " %.0f%%" : " ~%.0f%%",
++                 (double)pct);
+     } else if (r.first_anchor) {
+         // The anchor is this pot's FIRST weighing, not a watering: it was not
+         // necessarily saturated, so a percentage against it would be fiction.
+diff --git a/src/weight_ref.cpp b/src/weight_ref.cpp
+index c3bae75..059cf86 100644
+--- a/src/weight_ref.cpp
++++ b/src/weight_ref.cpp
+@@ -27,6 +27,7 @@ struct Entry {
+     bool     has_span;              // false = provisional or name-only
+     bool     has_ts;
+     bool     first_anchor;
++    bool     plateau;
+     bool     used;
+ };
+ Entry cache[CAP] = {};
+@@ -128,6 +129,9 @@ void weightRefOnMessage(const char* uid, const uint8_t* payload, unsigned int le
+     bool hasTs = doc["anchor_ts"].is<uint32_t>();
+     uint32_t ts = hasTs ? (uint32_t)doc["anchor_ts"] : 0;
+     bool firstAnchor = doc["first_anchor"] | false;
++    // Absent on legacy full payloads by design (keeps them byte-identical), so
++    // `| false` is the contract, not a fallback.
++    bool plateau     = doc["plateau"] | false;
+     // the name is best-effort display data, never an ingest gate (see
+     // sanitizePlant) — a name-only ref with an unusable name still ingests,
+     // because its real job may be DEMOTING a stale full/provisional entry
+@@ -147,6 +151,7 @@ void weightRefOnMessage(const char* uid, const uint8_t* payload, unsigned int le
+     cache[i].has_span = hasSpan;
+     cache[i].has_ts = hasTs;
+     cache[i].first_anchor = firstAnchor;
++    cache[i].plateau = plateau;
+     strncpy(cache[i].plant, plant, sizeof(cache[i].plant) - 1);
+     cache[i].plant[sizeof(cache[i].plant) - 1] = '\0';
+     cache[i].used  = true;
+@@ -169,6 +174,7 @@ bool weightRefGet(const char* uid, WeightRef* out) {
+     out->has_ts       = cache[i].has_ts;
+     out->has_span     = cache[i].has_span;
+     out->first_anchor = cache[i].first_anchor;
++    out->plateau = cache[i].plateau;
+     return true;
+ }
+ 
+diff --git a/src/weight_ref.h b/src/weight_ref.h
+index 6e66bb6..dde1a64 100644
+--- a/src/weight_ref.h
++++ b/src/weight_ref.h
+@@ -25,6 +25,8 @@ struct WeightRef {
+     bool     has_ts;        // false = broker had no timestamp; omit the age
+     bool     has_span;      // false = provisional; absolute drawdown, NO percentage
+     bool     first_anchor;  // the anchor IS the pot's first weighing, not a watering
++    bool     plateau;       // span_g is a fitted plateau loss: 100% = stopped losing.
++                            // false = legacy largest-ever drop, ~1.7x too big; shown "~"
+ };
+ 
+ // Ingest one ref message for a tag UID (the topic's last segment). Called from the
+diff --git a/test/weight_ref/test_main.cpp b/test/weight_ref/test_main.cpp
+index 8853073..7175750 100644
+--- a/test/weight_ref/test_main.cpp
++++ b/test/weight_ref/test_main.cpp
+@@ -52,9 +52,22 @@ int main() {
+     CHECK(weightRefGet(UID, &r));
+     CHECK(near(r.anchor_g, 432.0f) && near(r.span_g, 187.0f));
+     CHECK(r.has_span && r.has_ts && !r.first_anchor);
++    CHECK(!r.plateau);                          // legacy span: the OLED shows "~62%"
+     CHECK(r.anchor_ts == 1788094790u);
+     CHECK(weightRefPlant(UID) && !strcmp(weightRefPlant(UID), "cactus-03b"));
+ 
++    // ---- FULL with a fitted plateau denominator: the same tier, but 100% now
++    // means "stopped losing", and the % is shown without the "~".
++    ingest(UID, "{\"plant_id\":\"cactus-10\",\"anchor_g\":272.8,\"span_g\":26.3,"
++                "\"plateau\":true,\"anchor_ts\":1790062875}");
++    CHECK(weightRefGet(UID, &r));
++    CHECK(r.has_span && r.plateau && near(r.span_g, 26.3f));
++    // and a legacy payload after it clears the flag — no stale "plateau" on a
++    // pot whose fit was dropped (fit-plateau.py refuses tau on the grid edge)
++    ingest(UID, "{\"plant_id\":\"cactus-10\",\"anchor_g\":272.8,\"span_g\":87.0,"
++                "\"anchor_ts\":1790062875}");
++    CHECK(weightRefGet(UID, &r) && r.has_span && !r.plateau);
++
+     // ---- malformed payloads must PRESERVE the cached full ref, not demote it
+     ingest(UID, "{\"plant_id\":\"x\",\"anchor_g\":400.0,\"span_g\":\"oops\"}");
+     ingest(UID, "{\"plant_id\":\"x\",\"anchor_g\":400.0,\"span_g\":null}");

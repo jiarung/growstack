@@ -134,20 +134,9 @@ Phase 4 的 `observe.py` / `viewer.py` **不涵蓋這件事**:那兩支做的是
 - environment 欄位接既有 monitor-air pipeline,不重造
 - 驗收:完整 observation 落地可回讀;1B 的 proto flow 升級為正式路徑
 
-**thermal 側:patch 寫好了,還沒上板(2026-09-17)**。改動**不在** working tree ——
-server host 編不了也燒不了韌體,一個沒編譯過的 .cpp 留在樹上只會讓人以為它是活的。
-它在 `docs/mlx90640/thermal-bundle.patch`,在 dev host 上:
+**thermal 側已上板**（patch 於 2026-09-22 前後由 dev host 套用，patch 檔已移除）。
 
-```bash
-git apply docs/mlx90640/thermal-bundle.patch
-pio run -e s3cam -t upload
-```
-
-經 codex 以「當作直接上板」的角度審過(buffer 大小、printf arity、millis 溢位、
-未初始化讀取、httpd stack),但**沒有編譯過** —— 第一次 build 出錯是預期內的事,
-不是意外。
-
-套上之後,`/observation` 不再回 `"thermal": null`:它在同一次曝光旁邊 take 一幀,
+`/observation` 不再回 `"thermal": null`:它在同一次曝光旁邊 take 一幀,
 矩陣比照 `rgb` 以檔名引用,由新的 `/last.thermal` 供應。三件事刻意寫進 schema
 而不是藏起來:
 

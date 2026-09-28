@@ -214,6 +214,14 @@ for r in sorted(rows, key=lambda r: r["plant_id"]):
     elif full:
         d = {"plant_id": plant, "anchor_g": round(anchor_g, 1),
              "span_g": round(span, 1)}
+        # Two denominators ship as span_g and mean different things at 80%:
+        # a fitted plateau A (100% = the pot has stopped losing) or the
+        # legacy largest-ever drop (1.7x too big on average, so 100% rarely
+        # comes). The OLED marks the legacy one with "~" so the gardener never
+        # reads a rough % as a plateau %. Present only when true, to keep the
+        # payload inside PAYLOAD_MAX and the legacy payload byte-identical.
+        if basis == "平台":
+            d["plateau"] = True
     else:
         # No span_g: the firmware can then never compute a % from an unearned one.
         d = {"plant_id": plant, "provisional": True, "anchor_g": round(anchor_g, 1)}

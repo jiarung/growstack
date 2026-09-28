@@ -525,7 +525,14 @@ and writes `A` (grams lost by the time the pot STOPS losing) and `τ` (how fast)
 to InfluxDB as `plant_plateau`. Panel 10 and `publish-weight-ref.sh` then divide
 by `A` (`basis = 平台`) instead of the pot's largest-ever drop — which was 1.7×
 too big, so a small pot sat at its plateau reading 47% and the 80/100% thresholds
-never fired. 100% now means "stopped". No firmware change.
+never fired. 100% now means "stopped".
+
+Pots the fitter refuses keep the old span, so two denominators ship as
+`span_g` and 80% means different things on each. The payload therefore carries
+`"plateau": true` on a fitted one, and the firmware (once flashed with
+`docs/station/oled-plateau-marker.patch`) shows the legacy % as `~62%` — rough,
+not a plateau. Until it is flashed, the % looks the same on both; the flag is
+ignored.
 
 ```bash
 ./fit-plateau.py --dry-run     # the table, nothing written

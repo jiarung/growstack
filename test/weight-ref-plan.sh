@@ -70,6 +70,11 @@ assert "provisional" not in full, full
 # provisional the OLED silently drops the % on every fitted pot (2026-09-22).
 plat = json.loads(lines["monitor-air/ref/weight/DDEE0010"])
 assert plat.get("span_g") == 26.3 and "provisional" not in plat, plat
+# ...and it says so: `plateau` marks a fitted-A denominator so the OLED can tell
+# a plateau % from a legacy one. Legacy payloads must NOT carry the key at all —
+# that keeps them byte-identical to before and inside PAYLOAD_MAX.
+assert plat.get("plateau") is True, plat
+assert "plateau" not in full, full
 for gone in ("sat_g", "dry_g", "anchor_day"):
     assert gone not in full, (gone, full)
 assert full["anchor_g"] == 432.0 and full["span_g"] == 187.0, full
