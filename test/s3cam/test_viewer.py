@@ -437,8 +437,31 @@ class TestOrientationAgreement(unittest.TestCase):
         from thermal_view import orientation_mismatch
         self.assertIsNone(orientation_mismatch("rot180", "rot180"))
         self.assertIsNone(orientation_mismatch("none", "none"))
+        self.assertIsNone(orientation_mismatch("vflip", "vflip"))
+
+    def test_a_recording_from_before_the_shared_tag_still_reads(self):
+        """"wire" and "none" are the same state, one firmware apart.
+
+        Both sensors derive their tag from head_mount.h now, so a live board
+        never mixes the two. The alias is for recordings made before that
+        change — and it is an alias, not a translation table between two
+        live vocabularies, which is what this used to be and was a fix at the
+        wrong end.
+        """
+        from thermal_view import orientation_mismatch
+        self.assertIsNone(orientation_mismatch("none", "wire"))
+        self.assertIsNone(orientation_mismatch("wire", "none"))
+
+    def test_uncorrected_against_corrected_still_warns(self):
+        from thermal_view import orientation_mismatch
+        self.assertIsNotNone(orientation_mismatch("none", "vflip"))
+        self.assertIsNotNone(orientation_mismatch("vflip", "wire"))
 
     def test_a_disagreement_is_reported(self):
+        # The real one, live from 2026-09-24 to 2026-09-28: the camera
+        # corrected with a vflip while the thermal still rotated, leaving one
+        # horizontal mirror between them — and a mirror is the one transform
+        # the four-parameter registration cannot absorb.
         from thermal_view import orientation_mismatch
         w = orientation_mismatch("vflip", "rot180")
         self.assertIsNotNone(w)

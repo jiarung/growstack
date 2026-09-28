@@ -30,26 +30,23 @@ void poll();
 bool take(gymcu::ThermalFrame& out);
 
 // How the pixels in a frame from take() are arranged, as a short tag that goes
-// into every JSON a consumer sees ("rot180" or "wire").
+// into every JSON a consumer sees. It comes from head::tag() in head_mount.h,
+// which is also where the camera's correction is declared — one bracket, one
+// fact, and the two tags are therefore the same words on both sides.
 //
-// The head carries both sensors upside down, so the camera is corrected in the
-// OV5640's own hmirror/vflip registers (camera.cpp) and the thermal frame is
-// rotated here. Correcting both on the device means every consumer — /thermal,
-// /observation, the viewer, the registration fit — sees one orientation and
-// none of them needs a flag. Orientation is a property of how the head is
-// MOUNTED, which is a fact about this device, so it belongs on the device;
-// leaving half of it to the host is what left the viewer with two coordinate
-// systems that agreed only while both flips were off.
+// Orientation is a property of how the head is MOUNTED, so it belongs on the
+// device. Leaving half of it to the host is what left the viewer with two
+// coordinate systems that agreed only while both flips happened to be off.
 //
 // The tag exists so a host can TELL. A recording made before this correction
-// carries its own flip flags, and a tool that applied both would rotate twice
-// — the second rotation being invisible, since a doubly-rotated frame is a
-// perfectly ordinary-looking frame of the wrong pixels.
+// carries its own flip flags, and a tool that applied both would transform
+// twice — the second transform being invisible, since a doubly-flipped frame
+// is a perfectly ordinary-looking frame of the wrong pixels.
 //
-// The rotation is applied in take(), NOT in the parser: gymcu::Parser is a
-// pure byte machine pinned by fixtures whose expected values were derived by
-// hand from the wire format, and re-ordering inside it would invalidate every
-// one of them to no purpose.
+// The flip is applied in take(), NOT in the parser: gymcu::Parser is a pure
+// byte machine pinned by fixtures whose expected values were derived by hand
+// from the wire format, and re-ordering inside it would invalidate every one
+// of them to no purpose.
 const char* orientation();
 
 // True once a frame has ever been decoded — "the module is talking".

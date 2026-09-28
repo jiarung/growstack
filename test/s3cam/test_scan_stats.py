@@ -19,6 +19,7 @@ import io
 import json
 import math
 import os
+import re
 import statistics
 import sys
 import tempfile
@@ -414,58 +415,129 @@ class TestColdPolarity(unittest.TestCase):
             centroid(blob(12, 16), ROWS, COLS, polarity="tepid")
 
 
-class TestFirmwareRotationMatchesTheHost(unittest.TestCase):
+class TestFirmwareFlipMatchesTheHost(unittest.TestCase):
     """Two spellings of one operation, pinned against each other.
 
-    thermal_uart.cpp rotates a frame by reversing the 768-element pixel array
-    in place; thermal_view.orient(flipv=True, fliph=True) does it by reversing
-    the rows and then each row. They must agree, because the whole
-    double-rotation guard rests on "the board already did what the flags would
-    have done" — if they ever diverged, the guard would be refusing a
-    correction that was never actually applied.
+    thermal_uart.cpp flips a frame by swapping opposite rows in place;
+    thermal_view.orient(flipv=True) does it by slicing into rows, reversing
+    the list and flattening. They must agree, because the double-transform
+    guard rests on "the board already did what the flags would have done" — if
+    they ever diverged, the guard would refuse a correction that was never
+    applied.
 
     This cannot execute the C++, so it pins the CLAIM: whoever changes either
     side has to come here and say why the two are no longer the same thing.
     """
 
     @staticmethod
-    def _firmware_rotate180(px):
-        """What thermal_uart.cpp does: swap the two ends inward, one pass."""
+    def _firmware_flip_vertical(px):
+        """thermal_uart.cpp's loop, transliterated — NOT orient()'s.
+
+        It walks two row cursors toward each other and swaps element by
+        element in place, which is a different algorithm from orient()'s
+        slice-reverse-flatten. That difference is the entire value of the
+        comparison: written the other way — rows = [...]; rows.reverse() —
+        this helper becomes orient()'s flipv branch copied out, and the
+        equality tests below assert that a function equals itself. They pass
+        for every possible input and pin nothing.
+
+        The previous version of this file had exactly that shape for one
+        afternoon.
+        """
         out = list(px)
-        i, j = 0, len(out) - 1
-        while i < j:
-            out[i], out[j] = out[j], out[i]
-            i, j = i + 1, j - 1
+        top, bot = 0, ROWS - 1
+        while top < bot:
+            for c in range(COLS):
+                i, j = top * COLS + c, bot * COLS + c
+                out[i], out[j] = out[j], out[i]
+            top, bot = top + 1, bot - 1
         return out
 
-    def test_reversing_the_array_equals_flipv_plus_fliph(self):
+    def test_the_two_implementations_agree(self):
         from thermal_view import orient
-        px = [float(i) for i in range(ROWS * COLS)]      # every value distinct
-        self.assertEqual(self._firmware_rotate180(px),
-                         orient(px, ROWS, COLS, True, True))
+        frames = {
+            "distinct values": [float(i) for i in range(ROWS * COLS)],
+            "off-centre blob": blob(7.5, 23.5),
+        }
+        for name, px in frames.items():
+            with self.subTest(frame=name):
+                self.assertEqual(self._firmware_flip_vertical(px),
+                                 orient(px, ROWS, COLS, True, False))
 
-    def test_on_a_real_looking_frame_too(self):
-        from thermal_view import orient
-        px = blob(7.5, 23.5)                             # off-centre, asymmetric
-        self.assertEqual(self._firmware_rotate180(px),
-                         orient(px, ROWS, COLS, True, True))
+    def test_it_is_NOT_a_rotation(self):
+        """The bug this replaced, pinned so it cannot come back quietly.
 
-    def test_it_is_NOT_the_same_as_either_flip_alone(self):
-        # The thing that would go unnoticed: a 180 rotation and a single mirror
-        # both "look flipped" on a roughly symmetric scene, and only one of
-        # them preserves handedness.
+        A 180 rotation and a vertical flip both "look upside down" on a
+        roughly symmetric scene. Only the rotation also mirrors, and a mirror
+        is the one transform the four-parameter registration cannot absorb.
+        """
         from thermal_view import orient
         px = [float(i) for i in range(ROWS * COLS)]
-        self.assertNotEqual(self._firmware_rotate180(px),
-                            orient(px, ROWS, COLS, True, False))
-        self.assertNotEqual(self._firmware_rotate180(px),
-                            orient(px, ROWS, COLS, False, True))
+        rot180 = orient(px, ROWS, COLS, True, True)
+        self.assertNotEqual(self._firmware_flip_vertical(px), rot180)
+        # and they differ by exactly one horizontal mirror
+        self.assertEqual(orient(self._firmware_flip_vertical(px),
+                                ROWS, COLS, False, True), rot180)
 
     def test_applying_it_twice_is_the_identity(self):
         # Which is exactly why a host flip on top of a corrected frame is
         # invisible rather than obviously wrong.
         px = blob(9.25, 11.75)
-        self.assertEqual(self._firmware_rotate180(self._firmware_rotate180(px)), px)
+        self.assertEqual(
+            self._firmware_flip_vertical(self._firmware_flip_vertical(px)), px)
+
+
+class TestOneMountingOneDeclaration(unittest.TestCase):
+    """Both sensors must derive from head_mount.h, not restate it.
+
+    The correction used to be written out three times in three vocabularies,
+    kept in step only by a comment asking whoever edited one to remember the
+    other. That instruction failed twice, and the second failure left the two
+    images one horizontal mirror apart for four days.
+
+    Reads the firmware as text because it cannot run it — which makes this a
+    pin on the SHAPE, and the one thing that would quietly undo the fix is
+    somebody hardcoding a flip back into either file.
+    """
+
+    ROOT = os.path.join(HERE, "../../src/s3cam")
+
+    def _src(self, rel):
+        """Source with comments stripped.
+
+        The prose in these files deliberately quotes the literals it replaced —
+        explaining that "wire" and "rot180" are gone is the whole point of the
+        comment — so a scan that reads comments finds the history and calls it
+        the code.
+        """
+        with open(os.path.join(self.ROOT, rel)) as fh:
+            src = fh.read()
+        src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+        return re.sub(r"//[^\n]*", "", src)
+
+    def test_the_mounting_is_declared_once(self):
+        h = self._src("head_mount.h")
+        self.assertIn("MIRRORED_V", h)
+        self.assertIn("MIRRORED_H", h)
+        self.assertIn("tag()", h)
+
+    def test_the_camera_derives_its_flips(self):
+        c = self._src("camera.cpp")
+        self.assertIn("head::MIRRORED_V", c)
+        self.assertIn("head::MIRRORED_H", c)
+        # the literals this replaced, which is how the drift happened
+        self.assertNotIn("set_vflip(s, 1)", c)
+        self.assertNotIn("set_hmirror(s, 1)", c)
+
+    def test_the_thermal_derives_its_flips_and_its_tag(self):
+        t = self._src("thermal/thermal_uart.cpp")
+        self.assertIn("head::MIRRORED_V", t)
+        self.assertIn("head::MIRRORED_H", t)
+        self.assertIn("head::tag()", t)
+        # no second spelling of the tag anywhere in the thermal path
+        self.assertNotIn('"vflip"', t)
+        self.assertNotIn('"rot180"', t)
+        self.assertNotIn('"wire"', t)
 
 
 class TestOrientationConflict(unittest.TestCase):
@@ -483,6 +555,27 @@ class TestOrientationConflict(unittest.TestCase):
         self.assertIsNotNone(w)
         self.assertIn("drop the host flips", w)
 
+    def test_it_guards_any_correction_not_just_the_one_it_was_written_for(self):
+        """The first version tested `!= "rot180"` literally.
+
+        Four days later the firmware's correction became a vflip and that
+        guard would have gone silent — still present, still passing its own
+        tests, guarding nothing. Matching on "the board corrected something"
+        is what survives the next change of shape.
+        """
+        from thermal_view import orientation_conflict
+        for tag in ("vflip", "rot180", "hmirror", "something-new"):
+            for fv, fh in ((True, False), (False, True), (True, True)):
+                with self.subTest(tag=tag, flipv=fv, fliph=fh):
+                    self.assertIsNotNone(orientation_conflict(tag, fv, fh))
+
+    def test_the_warning_names_the_flags_that_were_asked_for(self):
+        from thermal_view import orientation_conflict
+        self.assertIn("--flipv", orientation_conflict("vflip", True, False))
+        self.assertNotIn("--fliph", orientation_conflict("vflip", True, False))
+        w = orientation_conflict("vflip", True, True)
+        self.assertIn("--flipv --fliph", w)
+
     def test_one_host_flip_over_a_corrected_frame_is_also_wrong(self):
         # Not a rotation but a MIRROR, which the registration model has no term
         # for at all — it would fail to converge with no visible reason.
@@ -493,6 +586,13 @@ class TestOrientationConflict(unittest.TestCase):
     def test_a_corrected_frame_with_no_host_flips_is_fine(self):
         from thermal_view import orientation_conflict
         self.assertIsNone(orientation_conflict("rot180", False, False))
+
+    def test_every_spelling_of_wire_order_stays_quiet(self):
+        # A recording predating the correction carries no tag, and an empty
+        # string is what a JSON default can produce. Neither is a correction.
+        from thermal_view import orientation_conflict
+        for tag in ("wire", "", None):
+            self.assertIsNone(orientation_conflict(tag, True, True), repr(tag))
 
     def test_an_old_recording_keeps_its_flags(self):
         # Frames predating the firmware change carry no orientation field and

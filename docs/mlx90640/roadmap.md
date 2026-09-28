@@ -85,8 +85,12 @@ tools/s3cam/thermal_checksum.py raw.txt
 
 **工具**:`tools/s3cam/thermal_view.py` —— 抓 `/thermal` 畫成終端機熱圖
 (半格字元,零依賴)或 PNG(最近鄰放大,不插值造假細節)。色階映射該幀自身
-min..max 並永遠印出範圍,室溫幾度的差異才看得見。`--flipv/--fliph` 留給
-掃描方向:模組送出的 row order 沒有文件,拿手掌對準已知角落實測才填韌體。
+min..max 並永遠印出範圍,室溫幾度的差異才看得見。
+
+**`--flipv/--fliph` 現在只給舊錄製檔用。** row order 已在韌體定案
+(`src/s3cam/head_mount.h`,2026-09-28,對照已驗證的 RGB 量出來),所以板子送出的
+就是正確方向;對一個已修正的幀再套主機旗標會**轉兩次**,`orientation_conflict()`
+會直接拒絕。
 
 ## Phase 3 — pan/tilt + scan workflow 🔧
 

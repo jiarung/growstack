@@ -755,17 +755,19 @@ static esp_err_t captureHandler(httpd_req_t* req) {
     return r;
 }
 
-// The camera's orientation as a tag in the SAME vocabulary thermal uses.
+// The camera's LIVE orientation, in head_mount.h's vocabulary.
 //
-// Both sensors are corrected on the device now, but /cam/tune keeps the
-// camera's hmirror/vflip adjustable at runtime — deliberately, because which
-// way a head is mounted is settled empirically. The hazard that creates is
-// specific: turn one of them off while the thermal frame stays rot180 and the
-// two images are in different coordinate systems, so every registration
-// number and every overlay is wrong, and nothing anywhere says so.
+// Live, not head::tag(): both sensors start from the same declaration, but
+// /cam/tune keeps the camera's registers adjustable at runtime — deliberately,
+// because which way a head is mounted is settled empirically. So this reads
+// what the sensor is actually doing, which is the only thing worth reporting.
+// The hazard that knob creates is specific: turn one flip off and the two
+// images are in different coordinate systems, so every registration number
+// and every overlay is wrong, and nothing anywhere says so.
 //
-// Reporting it is what keeps the knob and removes the silence. A host can
-// compare this with the thermal block's own tag and refuse the pair.
+// Reporting it is what keeps the knob and removes the silence. A host compares
+// this with the thermal block's tag — the same words on both sides — and
+// refuses the pair when they differ.
 static const char* rgbOrientation() {
     CameraTune t = cameraTune();
     if (t.hmirror && t.vflip) return "rot180";

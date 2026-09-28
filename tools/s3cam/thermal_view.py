@@ -91,28 +91,50 @@ def orient(px, rows, cols, flipv, fliph):
     return [v for row in grid for v in row]
 
 
+# Every spelling of "the board corrected nothing". Anything else means the
+# device applied a correction, whatever its shape.
+#
+# Two words because the firmware used two: "wire" until 2026-09-28, "none"
+# after both sensors started deriving their tag from head_mount.h. Keeping the
+# old one is what lets a recording from before that change still be read
+# correctly — which is the only reason the alias survives. It is NOT a
+# translation table for two live vocabularies; that was the earlier shape of
+# this, and it was a fix at the wrong end. The device knows what it did and
+# now says it the same way twice.
+UNCORRECTED = frozenset({"wire", "none", "", None})
+
+
+def corrected(tag):
+    """True when the board reports having transformed the frame itself."""
+    return tag not in UNCORRECTED
+
+
 def orientation_conflict(frame_orientation, flipv, fliph):
     """-> a warning string when host flips would undo the board's own, else None.
 
-    Firmware from 2026-09-19 rotates the thermal frame on the device, because
-    orientation is a property of how the head is MOUNTED and that is a fact
-    about the device. A host that then applies --flipv --fliph rotates a second
-    time, and two 180-degree rotations are the identity: the frame comes back
-    looking completely ordinary, every number is computable, and every one of
-    them is about the wrong pixels. Nothing downstream can notice.
+    Firmware corrects the thermal frame on the device, because orientation is a
+    property of how the head is MOUNTED and that is a fact about the device. A
+    host that flips on top of that applies the correction twice: with two
+    180-degree rotations the result is the identity, and the frame comes back
+    looking completely ordinary while every number in it is about the wrong
+    pixels. Nothing downstream can notice.
 
-    A frame with no `orientation` field predates the change and is wire order,
-    so the flags are still how it gets corrected — that case stays silent.
+    Matched against "has the board corrected anything", NOT against a
+    particular tag. The first version tested `!= "rot180"` and would have gone
+    silent the day the correction became a vflip — which happened, four days
+    later. A guard that recognises only the shape it was written for is a guard
+    that stops guarding without saying so.
+
+    A frame with no tag predates the correction and is wire order, so the flags
+    are still how it gets corrected; that case stays quiet.
     """
-    if frame_orientation != "rot180":
+    if not corrected(frame_orientation):
         return None
     if not (flipv or fliph):
         return None
-    both = flipv and fliph
-    return ("the board already reports orientation=rot180 and "
-            + ("--flipv --fliph would rotate it back to wire order"
-               if both else "a host flip would mirror it")
-            + " — drop the host flips")
+    asked = " ".join(f"--{n}" for n, v in (("flipv", flipv), ("fliph", fliph)) if v)
+    return (f"the board already reports orientation={frame_orientation}, so "
+            f"{asked} would transform it a second time — drop the host flips")
 
 
 def orientation_mismatch(rgb_orientation, thermal_orientation):
@@ -128,7 +150,13 @@ def orientation_mismatch(rgb_orientation, thermal_orientation):
     An older board reports no RGB tag; that predates the correction and is not
     something to shout about, so it stays quiet.
     """
-    if not rgb_orientation or not thermal_orientation:
+    if rgb_orientation is None or thermal_orientation is None:
+        return None
+    # Both uncorrected counts as agreement even when the words differ, which
+    # only happens across the 2026-09-28 firmware change. A warning that fires
+    # when nothing is wrong teaches people to ignore the one that fires when
+    # something is.
+    if not corrected(rgb_orientation) and not corrected(thermal_orientation):
         return None
     if rgb_orientation == thermal_orientation:
         return None

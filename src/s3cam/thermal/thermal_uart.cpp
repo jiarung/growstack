@@ -1,6 +1,8 @@
 #include "thermal_uart.h"
+#include "../head_mount.h"
 
 #include <Arduino.h>
+#include <algorithm>
 #include <string.h>
 
 #include "../cam_pins.h"
@@ -132,26 +134,33 @@ void poll() {
     }
 }
 
-// The head is mounted upside down, measured the way the roadmap asked for it
-// to be: a known object placed in a known corner of the camera's view, and the
-// thermal blob came back in the opposite corner in BOTH axes. 180 degrees is
-// also the answer the camera needed, which is the cross-check — one head, two
-// sensors, one mounting.
+// The mounting correction, from head_mount.h — the same declaration
+// camera.cpp reads. One bracket, one fact, one place to change it.
 //
-// If the head is ever remounted the right way up, change this and camera.cpp
-// together. They describe the same physical fact.
-static const bool HEAD_ROTATED_180 = true;
+// This was a 180-degree rotation until 2026-09-28, calibrated against an RGB
+// image that was itself mirrored. See head_mount.h for how both halves were
+// measured and why a mirror, unlike a rotation, is something no downstream
+// stage can absorb.
+//
+// Applied in take(), NOT in the parser: gymcu::Parser is a pure byte machine
+// pinned by fixtures whose expected values were derived by hand from the wire
+// format, and re-ordering inside it would invalidate every one of them to no
+// purpose.
+// Row order reversed; each row's own order untouched. That last part is the
+// whole difference from the rotation this replaced — reversing the flat pixel
+// list would mirror horizontally as well.
+static void flipVertical(gymcu::ThermalFrame& f) {
+    for (size_t top = 0, bot = gymcu::ROWS - 1; top < bot; ++top, --bot)
+        for (size_t c = 0; c < gymcu::COLS; ++c)
+            std::swap(f.pixels[top][c], f.pixels[bot][c]);
+}
 
-static void rotate180(gymcu::ThermalFrame& f) {
-    // Rotation, not two mirrors done in sequence: swapping the two ends of the
-    // pixel list in one pass is the whole operation, and it cannot half-apply.
-    const int n = gymcu::ROWS * gymcu::COLS;
-    float* p = &f.pixels[0][0];
-    for (int i = 0, j = n - 1; i < j; ++i, --j) {
-        float t = p[i];
-        p[i] = p[j];
-        p[j] = t;
-    }
+// Columns reversed within each row. Not reachable from the current mounting,
+// and present so that a remount only ever edits head_mount.h.
+static void flipHorizontal(gymcu::ThermalFrame& f) {
+    for (size_t r = 0; r < gymcu::ROWS; ++r)
+        for (size_t a = 0, b = gymcu::COLS - 1; a < b; ++a, --b)
+            std::swap(f.pixels[r][a], f.pixels[r][b]);
 }
 
 bool take(gymcu::ThermalFrame& out) {
@@ -164,11 +173,18 @@ bool take(gymcu::ThermalFrame& out) {
     portEXIT_CRITICAL(&mux);
     // Outside the critical section on purpose: 768 floats is far too much work
     // to do with interrupts masked, and `out` is the caller's own copy by now.
-    if (have && HEAD_ROTATED_180) rotate180(out);
+    if (have) {
+        if (head::MIRRORED_V) flipVertical(out);
+        if (head::MIRRORED_H) flipHorizontal(out);
+    }
     return have;
 }
 
-const char* orientation() { return HEAD_ROTATED_180 ? "rot180" : "wire"; }
+// head::tag(), not a second spelling of it. The camera's tag comes from the
+// same function, so a host comparing the two is comparing like with like —
+// and the translation table the host used to need for "wire" against "none"
+// is gone with it.
+const char* orientation() { return head::tag(); }
 
 bool everSawFrame() { return sawFrame; }
 

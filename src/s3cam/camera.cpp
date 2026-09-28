@@ -1,4 +1,5 @@
 #include "camera.h"
+#include "head_mount.h"
 
 #include <Arduino.h>
 
@@ -169,28 +170,16 @@ bool cameraInit() {
         // makes these adjustable at runtime — same reasoning as /power's
         // cooling knobs: which setting is right is an empirical question, and
         // baking in a guess is how you stop asking it.
-        // vflip only. MEASURED 2026-09-24 by pointing the camera at a screen
-        // showing text: with hmirror also on, "INSERT" came back as "TЯƎƧИI" —
-        // upright but left-right reversed. Un-mirroring it made every word
-        // read. So the module is flipped, not rotated, and one flip corrects
-        // it.
+        // From head_mount.h, which the thermal path reads too — one bracket,
+        // one fact, one place to change it. Correcting HERE, in the sensor's
+        // own registers, means every consumer (/capture, /stream,
+        // /observation, the viewer, the registration fit) sees one
+        // orientation and none of them needs a flag.
         //
-        // The previous value (both on) came from three rounds of reasoning
-        // about verbal descriptions of what looked wrong, and never once from
-        // something whose handedness can be checked. Rotation preserves
-        // handedness and a mirror destroys it; furniture shows neither, which
-        // is why every one of those rounds could sound right and still be
-        // wrong. Text settles it in ten seconds and nothing else does.
-        //
-        // Correcting HERE, in the sensor's registers, means every consumer —
-        // /capture, /stream, /observation, the viewer, the registration fit —
-        // sees one orientation and none of them needs a flag. Runtime
-        // adjustable through /cam/tune?hmirror=&vflip= while a mounting is
-        // being decided; these are the values that survive a reboot. Change
-        // them if the module is ever remounted — and check with text, not with
-        // the room.
-        s->set_vflip(s, 1);
-        s->set_hmirror(s, 0);
+        // /cam/tune still overrides these at runtime while a mounting is being
+        // decided; these are the values that survive a reboot.
+        s->set_vflip(s, head::MIRRORED_V ? 1 : 0);
+        s->set_hmirror(s, head::MIRRORED_H ? 1 : 0);
         // Buffers are allocated; now drop to the resting size so the sensor is
         // not free-running at 5MP for the entire time nobody is asking.
         if (restSize != STILL_SIZE) s->set_framesize(s, restSize);
