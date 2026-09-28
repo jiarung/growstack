@@ -1096,6 +1096,34 @@ class TestPage(unittest.TestCase):
                       "id=sx", "id=sy", "id=owarn", "id=est", "id=nf", "id=cmd"):
             self.assertIn(ident, html, ident)
 
+    def test_an_ipv6_host_is_actually_bindable(self):
+        # The banner treats ::1 as a local address; ThreadingHTTPServer is
+        # AF_INET, so accepting the value while being unable to bind it is a
+        # promise the code cannot keep.
+        import inspect
+        src = inspect.getsource(viewer.main)
+        self.assertIn("AF_INET6", src)
+        self.assertLess(src.index("AF_INET6"), src.index("server_cls((host"))
+
+    def test_the_page_works_on_a_phone(self):
+        """Three things, and missing any one of them means it does not.
+
+        Without the viewport meta a phone lays the page out at 980 px and
+        scales it down, so every number is unreadable. Without
+        touch-action:none a drag scrolls the page instead of drawing a box —
+        and drawing the box is the one thing the page is for. Without the
+        narrow-screen rule the image keeps 64vw of a screen that has little to
+        spare.
+        """
+        html = self._html()
+        self.assertIn("name=viewport", html)
+        self.assertIn("width=device-width", html)
+        self.assertIn("touch-action:none", html)
+        self.assertIn("@media (max-width:760px)", html)
+        # pointer events, not mouse events: the same handlers must serve both
+        self.assertIn("pointerdown", html)
+        self.assertNotIn("addEventListener('mousedown'", html)
+
     def test_the_recovery_control_is_on_the_page(self):
         """The backend refuses relative steps after a lost reply; the page has
         to offer the way out, or a transient timeout ends the session.

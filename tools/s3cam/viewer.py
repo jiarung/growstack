@@ -3,6 +3,7 @@
 
     ./viewer.py http://<ip>              # then open http://localhost:8723
     ./viewer.py http://<ip> --port 9000
+    ./viewer.py http://<ip> --lan          # reachable from a phone on the same wifi
 
 Snapshots, not a stream. The roadmap's own line is that streaming is a tool and
 not the data; the thermal sensor runs at 4 Hz; and the two httpd panics this
@@ -42,6 +43,7 @@ paired with it. The page says so rather than letting a live overlay on an old
 photograph look like an observation.
 """
 import json
+import socket
 import sys
 import threading
 import urllib.error
@@ -61,6 +63,7 @@ US_MIN, US_MAX = 600, 2400          # servo.h electrical span
 AIM_WINDOW = 200                    # rolling centroid samples; --n 100 is the run
 
 PAGE = r"""<!doctype html><meta charset=utf-8><title>s3cam observation</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
 <style>
 :root{--bg:#14161a;--fg:#e8e6e1;--dim:#8d9099;--line:#2b2f36;--hot:#ff9d5c}
 *{box-sizing:border-box}
@@ -70,7 +73,11 @@ h1{font-size:13px;font-weight:600;margin:0;letter-spacing:.08em;text-transform:u
 button{font:inherit;background:#222730;color:var(--fg);border:1px solid var(--line);padding:5px 12px;cursor:pointer}
 button:hover{border-color:var(--hot)}
 main{display:flex;gap:14px;padding:14px;align-items:flex-start;flex-wrap:wrap}
-#wrap{position:relative;line-height:0;cursor:crosshair;max-width:var(--imgw,64vw)}
+/* touch-action:none — a drag on a touchscreen scrolls the page by default, so
+   without this the box can never be drawn on a phone, which is the one thing
+   the page is for. Pointer events already cover mouse and touch alike. */
+#wrap{position:relative;line-height:0;cursor:crosshair;max-width:var(--imgw,64vw);
+      touch-action:none}
 canvas{width:100%;height:auto;border:1px solid var(--line)}
 #sel{position:absolute;border:1px solid var(--hot);background:rgba(255,157,92,.12);pointer-events:none;display:none}
 aside{min-width:290px;flex:1}
@@ -83,6 +90,13 @@ b{color:var(--hot);font-weight:600}
 .warn{color:#ffd166}
 h2{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:16px 0 6px;border-top:1px solid var(--line);padding-top:10px}
 #note{white-space:pre-wrap;color:var(--dim);font-size:12px}
+/* On a phone the aside wraps underneath, so the image may as well have the
+   width. The zoom slider still applies on top of this. */
+@media (max-width:760px){
+  #wrap{max-width:100%}
+  aside{min-width:0}
+  main{padding:8px;gap:8px}
+}
 .ok{color:#7bd88f}.bad{color:#ff6b6b}
 .jog{display:flex;gap:6px;align-items:center;margin:4px 0}
 .jog span{color:var(--dim);width:3.2em}
@@ -1034,6 +1048,11 @@ def main(argv):
     port = 8723
     if "--port" in argv:
         port = int(argv[argv.index("--port") + 1])
+    host = "127.0.0.1"
+    if "--host" in argv:
+        host = argv[argv.index("--host") + 1]
+    if "--lan" in argv:
+        host = "0.0.0.0"
     # THREADING, because a capture is slow and the aim poll is not optional.
     # /api/observe makes the board wake the sensor, raise to 5 MP, expose and
     # ship 650 kB — measured at 2.5 s, longer from standby. On a
@@ -1043,8 +1062,59 @@ def main(argv):
     #
     # Aim's state is shared across those threads and is locked. Viewer.last
     # already was.
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Viewer)
-    print(f"board {Viewer.board}  ->  http://localhost:{port}")
+    # LOOPBACK BY DEFAULT. Binding wider is opt-in because this page can drive
+    # the servos: anything that reaches it can move the head, and there is no
+    # authentication. On a home network that is usually fine and sometimes not,
+    # which is exactly the kind of decision that should be typed rather than
+    # inherited.
+    # The address family follows the host. ThreadingHTTPServer is AF_INET, so
+    # `--host ::1` would fail at construction — while the banner below treats
+    # ::1 as a local address, which is a promise the binding could not keep.
+    server_cls = ThreadingHTTPServer
+    if ":" in host:
+        class _V6(ThreadingHTTPServer):
+            address_family = socket.AF_INET6
+
+            def server_bind(self):
+                # DUAL STACK. Without this, `--host ::` on a platform that
+                # defaults IPV6_V6ONLY to 1 listens on IPv6 only — while the
+                # banner below happily advertises the machine's IPv4 LAN
+                # address, which nothing is serving. A phone would time out on
+                # a URL the tool itself printed.
+                try:
+                    self.socket.setsockopt(socket.IPPROTO_IPV6,
+                                           socket.IPV6_V6ONLY, 0)
+                except OSError:
+                    pass          # some platforms refuse; the banner still holds
+                super().server_bind()
+        server_cls = _V6
+    srv = server_cls((host, port), Viewer)
+    # The URL has to name the socket that was actually bound. "localhost" is
+    # not a synonym for whatever --host said: bound to ::1 alone it may resolve
+    # to 127.0.0.1 and refuse, and bound to one LAN interface it is simply a
+    # different address. A banner that sends somebody somewhere the server is
+    # not is how a working feature gets reported broken.
+    wildcard = host in ("0.0.0.0", "::", "")
+    local = host in ("127.0.0.1", "localhost", "::1")
+    # ::1 gets its own literal, not "localhost": on a machine where that name
+    # resolves to 127.0.0.1 first, the printed URL would reach nothing.
+    shown = ("localhost" if wildcard or host in ("127.0.0.1", "localhost")
+             else f"[{host}]" if ":" in host else host)
+    print(f"board {Viewer.board}  ->  http://{shown}:{port}")
+    if wildcard:
+        # Bound everywhere, so name the address a phone can type. "0.0.0.0" is
+        # what to bind, never what to open.
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            probe.connect(("8.8.8.8", 80))          # no packet is sent
+            lan = probe.getsockname()[0]
+            probe.close()
+            print(f"  on this network:  http://{lan}:{port}")
+        except OSError:
+            print(f"  on this network:  http://<this machine's LAN IP>:{port}")
+    if not local:
+        print("  NO AUTHENTICATION — anything that can reach this page can "
+              "move the head.")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
