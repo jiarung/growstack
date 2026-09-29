@@ -230,11 +230,15 @@ void loop() {
                       (unsigned long)thermal::rxBufferBytes());
         // psram_free ALONE is the number that says everything is fine while
         // fragmentation kills /observation, so the largest block rides beside it.
+        // One walk for both numbers, same reason as /health: sampled
+        // separately they can straddle an allocation.
+        multi_heap_info_t psram;
+        heap_caps_get_info(&psram, MALLOC_CAP_SPIRAM);
         Serial.printf("[s3cam] up %lus  heap=%u psram=%u/%u die=%.1fC "
                       "(peak %.1fC @%lus) wifi=%s rssi=%d\n",
                       (unsigned long)(millis() / 1000), ESP.getFreeHeap(),
-                      ESP.getFreePsram(),
-                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                      (unsigned)psram.total_free_bytes,
+                      (unsigned)psram.largest_free_block,
                       health::dieC(), health::dieMaxC(),
                       (unsigned long)health::dieMaxAtS(),
                       WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str()

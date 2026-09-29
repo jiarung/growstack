@@ -73,9 +73,7 @@ uint32_t ringPeak = 0;
 bool firstPoll = true;
 uint32_t bootDiscarded = 0;
 uint32_t bootRxErrors = 0;
-// Bytes the UART DRIVER reports losing: ring full, or hardware FIFO overrun.
-// This is the definitive signal, straight from the layer that dropped them —
-// every other counter here is downstream inference about the wreckage.
+// Bytes the UART driver reports losing — see rxErrorCount() in the header.
 volatile uint32_t rxErrors = 0;
 uint32_t lastFrameMs = 0;
 uint32_t totalBytes = 0;
@@ -106,12 +104,9 @@ bool begin() {
     // allocated the ring and the call is ignored.
     Serial1.setRxBufferSize(RX_BUFFER);
     Serial1.begin(BAUD, SERIAL_8N1, THERMAL_PIN_RX, THERMAL_PIN_TX);
-    // The driver telling us, definitively, that bytes were lost. Everything
-    // else in this file infers loss from the wreckage downstream of it; this
-    // is the only counter that cannot be fooled by a corrupt frame that
-    // happens to decode. Counting only — deciding to DISTRUST a frame on the
-    // strength of it is a policy change, and belongs with the ChecksumPolicy
-    // work rather than riding along here (tasks/todo.md).
+    // See rxErrorCount() in the header. Counting only — deciding to DISTRUST
+    // a frame on the strength of it is a policy change, and belongs with the
+    // ChecksumPolicy work rather than riding along here (tasks/todo.md).
     Serial1.onReceiveError([](hardwareSerial_error_t e) {
         if (e == UART_BUFFER_FULL_ERROR || e == UART_FIFO_OVF_ERROR) rxErrors++;
     });
@@ -122,7 +117,7 @@ bool begin() {
     // an unknown convention — see checksumPolicyName() for what that costs.
     parser.setChecksumPolicy(POLICY);
     lastByteMs = millis();
-    lastPollMs = 0;              // 0 = "no previous pass", so the first gap is not counted
+    lastPollMs = 0;              // set by the first poll(), which is not measured
     pollGapMax = 0;
     ringPeak = 0;
     rxErrors = 0;
@@ -147,15 +142,10 @@ bool begin() {
 void poll() {
     if (!started) return;
     uint8_t buf[256];
-    const uint32_t now = millis();
-    // Measured BEFORE draining: `avail` after the loop is zero by construction,
-    // so the high-water mark only means anything sampled here.
-    const uint32_t gap = now - lastPollMs;
-    if (lastPollMs && gap > pollGapMax) pollGapMax = gap;
-    lastPollMs = now;
-    const uint32_t standing = (uint32_t)Serial1.available();
-    if (standing > ringPeak) ringPeak = standing;
 
+    // Before any measurement: this pass drains the boot backlog, so neither
+    // its gap nor its standing bytes describe runtime margin. begin() has
+    // already zeroed the peaks, so they start counting from the next pass.
     if (firstPoll) {
         firstPoll = false;
         while (int avail = Serial1.available()) {
@@ -164,16 +154,22 @@ void poll() {
             if (!got) break;
             bootDiscarded += got;
         }
-        parser.discardPartial();     // no-op; the parser has been fed nothing yet
         bootRxErrors = rxErrors;
         rxErrors = 0;
-        ringPeak = 0;
-        pollGapMax = 0;
         lastPollMs = millis();       // the drain itself is not a gap
         return;
     }
 
-    while (int avail = Serial1.available()) {
+    const uint32_t now = millis();
+    // Measured BEFORE draining: `avail` after the loop is zero by construction,
+    // so the high-water mark only means anything sampled here.
+    const uint32_t gap = now - lastPollMs;
+    if (gap > pollGapMax) pollGapMax = gap;
+    lastPollMs = now;
+    int avail = Serial1.available();
+    if ((uint32_t)avail > ringPeak) ringPeak = (uint32_t)avail;
+
+    for (; avail > 0; avail = Serial1.available()) {
         size_t want = (size_t)avail < sizeof(buf) ? (size_t)avail : sizeof(buf);
         size_t got = Serial1.readBytes(buf, want);
         if (!got) break;
