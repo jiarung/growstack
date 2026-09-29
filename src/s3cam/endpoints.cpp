@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <Wire.h>
 #include <errno.h>
+#include <esp_heap_caps.h>
 #include <esp_http_server.h>
 #include <stdlib.h>
 #include <math.h>
@@ -177,6 +178,20 @@ static void fmtF(char* dst, size_t n, float v, int dp) {
 // host that, by definition, can only ask while the link is up.
 extern uint32_t wifiReconnects;
 
+// snprintf returns the length it WANTED, not what it wrote, so a truncated
+// body hands httpd_resp_send a count that reads past the end of the buffer.
+// Clamp instead: the JSON becomes visibly malformed, which is a bug report,
+// where leaking stack is a bug report nobody receives.
+//
+// Only the two handlers below use this so far. The same pair — snprintf into a
+// fixed buffer, then send `m` — appears ~30 more times in this file with no
+// clamp at all; see tasks/todo.md. One helper beats thirty-odd inline copies,
+// which is why it is a function and not two more lines.
+static int clampLen(int m, size_t cap) {
+    if (m < 0) return -1;
+    return (size_t)m >= cap ? (int)cap - 1 : m;
+}
+
 static esp_err_t healthHandler(httpd_req_t* req) {
     float ta = 0.0f;
     const bool haveTa = thermal::lastAmbientC(ta);
@@ -187,22 +202,41 @@ static esp_err_t healthHandler(httpd_req_t* req) {
     fmtF(dieMaxS, sizeof(dieMaxS), health::dieMaxC(), 1);
     fmtF(taS, sizeof(taS), haveTa ? ta : NAN, 2);
 
-    char body[416];
+    // FREE and LARGEST are two different questions and only the second one
+    // detects fragmentation. A long-lived board can report megabytes free while
+    // the biggest contiguous block no longer fits one QSXGA JPEG — at which
+    // point /observation's ps_malloc fails and /capture starts burning its full
+    // 3s freshness timeout, and `psram_free` alone says everything is fine.
+    // Watch the GAP between the two, not either number on its own.
+    //
+    // heap_caps_get_info() rather than getFreeHeap() + get_largest_free_block():
+    // one walk of the free list under one lock yields both numbers, so the pair
+    // describes a single instant. Sampled separately they can straddle an
+    // allocation, and a gap is exactly what these fields exist to show.
+    multi_heap_info_t heapInfo, psramInfo;
+    heap_caps_get_info(&heapInfo, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    heap_caps_get_info(&psramInfo, MALLOC_CAP_SPIRAM);
+
+    char body[512];
     int m = snprintf(body, sizeof(body),
         "{\n  \"uptime_s\": %lu,\n"
         "  \"die_c\": %s,\n  \"die_max_c\": %s,\n  \"die_max_at_s\": %lu,\n"
-        "  \"heap_free\": %u,\n  \"psram_free\": %u,\n"
+        "  \"heap_free\": %u,\n  \"heap_largest\": %u,\n"
+        "  \"psram_free\": %u,\n  \"psram_largest\": %u,\n"
         "  \"rssi\": %d,\n  \"wifi_reconnects\": %lu,\n  \"sensor\": \"%s\",\n"
         "  \"thermal_ta_c\": %s,\n  \"thermal_frames_ok\": %lu\n}\n",
         (unsigned long)(millis() / 1000), dieS, dieMaxS,
         (unsigned long)health::dieMaxAtS(),
-        ESP.getFreeHeap(), ESP.getFreePsram(),
+        (unsigned)heapInfo.total_free_bytes, (unsigned)heapInfo.largest_free_block,
+        (unsigned)psramInfo.total_free_bytes, (unsigned)psramInfo.largest_free_block,
         WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0,
         // Only visible while the link is UP, which is the point: a count that
         // keeps rising between two healthy reads is a flapping link, and that
         // is invisible in rssi alone.
         (unsigned long)wifiReconnects,
         cameraSensorName(), taS, (unsigned long)s.frames_ok);
+    m = clampLen(m, sizeof(body));
+    if (m < 0) return ESP_FAIL;
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, m);
 }

@@ -5,6 +5,7 @@
 // numbers (PSRAM, sensor, GPIO budget) that feed the phase-0 board decision.
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 
 #include "../secrets.h"
 #include "af.h"
@@ -216,10 +217,14 @@ void loop() {
                       (unsigned long)ts.bad_checksum, (unsigned long)ts.bad_header,
                       (unsigned long)ts.resyncs, (unsigned long)ts.bytes_dropped,
                       (unsigned long)ts.timeouts);
-        Serial.printf("[s3cam] up %lus  heap=%u psram_free=%u die=%.1fC "
+        // psram_free ALONE is the number that says everything is fine while
+        // fragmentation kills /observation, so the largest block rides beside it.
+        Serial.printf("[s3cam] up %lus  heap=%u psram=%u/%u die=%.1fC "
                       "(peak %.1fC @%lus) wifi=%s rssi=%d\n",
                       (unsigned long)(millis() / 1000), ESP.getFreeHeap(),
-                      ESP.getFreePsram(), health::dieC(), health::dieMaxC(),
+                      ESP.getFreePsram(),
+                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                      health::dieC(), health::dieMaxC(),
                       (unsigned long)health::dieMaxAtS(),
                       WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str()
                                                     : "DOWN",
