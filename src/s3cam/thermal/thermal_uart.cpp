@@ -29,8 +29,54 @@ constexpr size_t RX_BUFFER = 4096;
 // into the next frame's bytes.
 constexpr uint32_t IDLE_TIMEOUT_MS = 3 * 1000 / REFRESH_HZ;
 
+// ONE definition, so the policy and the word reported for it cannot drift.
+// Flip this the day the convention is identified; see checksumPolicyName() in
+// the header for what it means downstream.
+constexpr gymcu::ChecksumPolicy POLICY = gymcu::ChecksumPolicy::REPORT;
+
 gymcu::Parser parser;
 uint32_t lastByteMs = 0;      // last time ANY byte arrived (drives the timeout)
+
+// The invariant this module actually depends on is "poll() runs often enough
+// that the driver's RX ring never fills" — and nothing measured it. The
+// parser's `overwritten` was the closest proxy, but it only moves once two
+// whole frames have completed inside one pass, i.e. after the gap already ate
+// ~70% of the slack, and it says nothing at all about bytes lost INSIDE the
+// driver, which the parser never sees.
+//
+// These two are the margin itself: the worst gap between passes, and the most
+// bytes ever found standing in the ring. Peaks rather than instantaneous
+// values, for the reason health::dieMaxC() keeps a peak — nobody is watching
+// the console at the moment it happens.
+uint32_t lastPollMs = 0;
+uint32_t pollGapMax = 0;
+uint32_t ringPeak = 0;
+
+// EVERYTHING BEFORE THE FIRST poll() IS QUARANTINED.
+//
+// begin() opens the port in setup(), and the module starts streaming at once —
+// but loop() does not run until setup() has also brought up the camera (which
+// pushes 4077 bytes of AF firmware over SCCB), WiFi and NTP. That is seconds,
+// and the ring holds 356 ms. So the ring overflows before anyone has ever
+// drained it, every single boot.
+//
+// Measured on hardware 2026-09-29: ringpk pinned at 4072/4096 with rxerr=285
+// and dropped=1164 — all four frozen thereafter, while gap sat at 7 ms. The
+// peaks were reporting a boot artefact and could never report runtime margin
+// again, which is the one job they were added for.
+//
+// So the first pass discards what accumulated instead of feeding it (those
+// bytes are a fragment by construction — the ring dropped the middle of them),
+// and the runtime counters start from zero at the moment draining actually
+// begins. The boot figures are kept, not hidden: they are their own two
+// fields, and a boot that loses bytes is still worth seeing.
+bool firstPoll = true;
+uint32_t bootDiscarded = 0;
+uint32_t bootRxErrors = 0;
+// Bytes the UART DRIVER reports losing: ring full, or hardware FIFO overrun.
+// This is the definitive signal, straight from the layer that dropped them —
+// every other counter here is downstream inference about the wreckage.
+volatile uint32_t rxErrors = 0;
 uint32_t lastFrameMs = 0;
 uint32_t totalBytes = 0;
 bool sawFrame = false;
@@ -60,15 +106,29 @@ bool begin() {
     // allocated the ring and the call is ignored.
     Serial1.setRxBufferSize(RX_BUFFER);
     Serial1.begin(BAUD, SERIAL_8N1, THERMAL_PIN_RX, THERMAL_PIN_TX);
+    // The driver telling us, definitively, that bytes were lost. Everything
+    // else in this file infers loss from the wreckage downstream of it; this
+    // is the only counter that cannot be fooled by a corrupt frame that
+    // happens to decode. Counting only — deciding to DISTRUST a frame on the
+    // strength of it is a policy change, and belongs with the ChecksumPolicy
+    // work rather than riding along here (tasks/todo.md).
+    Serial1.onReceiveError([](hardwareSerial_error_t e) {
+        if (e == UART_BUFFER_FULL_ERROR || e == UART_FIFO_OVF_ERROR) rxErrors++;
+    });
     parser.reset();
     // BRING-UP: this module's payload verifies by inspection (768 plausible
     // temperatures, a sane Ta) but its trailing two bytes match none of the
     // obvious sum conventions, so STRICT would discard every good frame over
-    // an unknown convention. REPORT keeps the frames AND the bad_checksum
-    // count, and each frame carries checksum_ok=false — revert to STRICT the
-    // moment the real algorithm is known.
-    parser.setChecksumPolicy(gymcu::ChecksumPolicy::REPORT);
+    // an unknown convention — see checksumPolicyName() for what that costs.
+    parser.setChecksumPolicy(POLICY);
     lastByteMs = millis();
+    lastPollMs = 0;              // 0 = "no previous pass", so the first gap is not counted
+    pollGapMax = 0;
+    ringPeak = 0;
+    rxErrors = 0;
+    firstPoll = true;
+    bootDiscarded = 0;
+    bootRxErrors = 0;
     lastFrameMs = 0;
     totalBytes = 0;
     sawFrame = false;
@@ -88,6 +148,31 @@ void poll() {
     if (!started) return;
     uint8_t buf[256];
     const uint32_t now = millis();
+    // Measured BEFORE draining: `avail` after the loop is zero by construction,
+    // so the high-water mark only means anything sampled here.
+    const uint32_t gap = now - lastPollMs;
+    if (lastPollMs && gap > pollGapMax) pollGapMax = gap;
+    lastPollMs = now;
+    const uint32_t standing = (uint32_t)Serial1.available();
+    if (standing > ringPeak) ringPeak = standing;
+
+    if (firstPoll) {
+        firstPoll = false;
+        while (int avail = Serial1.available()) {
+            size_t want = (size_t)avail < sizeof(buf) ? (size_t)avail : sizeof(buf);
+            size_t got = Serial1.readBytes(buf, want);
+            if (!got) break;
+            bootDiscarded += got;
+        }
+        parser.discardPartial();     // no-op; the parser has been fed nothing yet
+        bootRxErrors = rxErrors;
+        rxErrors = 0;
+        ringPeak = 0;
+        pollGapMax = 0;
+        lastPollMs = millis();       // the drain itself is not a gap
+        return;
+    }
+
     while (int avail = Serial1.available()) {
         size_t want = (size_t)avail < sizeof(buf) ? (size_t)avail : sizeof(buf);
         size_t got = Serial1.readBytes(buf, want);
@@ -190,6 +275,17 @@ bool everSawFrame() { return sawFrame; }
 
 uint32_t sinceLastFrameMs() {
     return sawFrame ? millis() - lastFrameMs : UINT32_MAX;
+}
+
+uint32_t pollGapMaxMs() { return pollGapMax; }
+uint32_t ringPeakBytes() { return ringPeak; }
+uint32_t rxBufferBytes() { return RX_BUFFER; }
+uint32_t rxErrorCount() { return rxErrors; }
+uint32_t bootDiscardedBytes() { return bootDiscarded; }
+uint32_t bootRxErrorCount() { return bootRxErrors; }
+
+const char* checksumPolicyName() {
+    return POLICY == gymcu::ChecksumPolicy::STRICT ? "strict" : "report";
 }
 
 uint32_t bytesSeen() { return totalBytes; }

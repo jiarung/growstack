@@ -211,12 +211,23 @@ void loop() {
         // hypothesis with a number instead of a fingertip, and the PEAK is what
         // survives the hours when no console is attached (also on /health).
         const gymcu::Parser::Stats ts = thermal::statsSnapshot();
+        // The zero-cost way to A/B a load change (live thermal alone vs live
+        // plus captures) without adding the HTTP traffic that would itself be
+        // the load under test. `gap` and `ringpk` are the ones to read: they
+        // report MARGIN against the ring, where every other counter here only
+        // moves once the margin is already gone. bad_cs moves on every frame
+        // and means nothing yet — thermal::checksumPolicyName().
         Serial.printf("[thermal] bytes=%lu frames=%lu bad_cs=%lu bad_hdr=%lu "
-                      "resync=%lu dropped=%lu timeouts=%lu\n",
+                      "resync=%lu dropped=%lu overwr=%lu timeouts=%lu "
+                      "rxerr=%lu gap=%lums ringpk=%lu/%lu\n",
                       (unsigned long)thermal::bytesSeen(), (unsigned long)ts.frames_ok,
                       (unsigned long)ts.bad_checksum, (unsigned long)ts.bad_header,
                       (unsigned long)ts.resyncs, (unsigned long)ts.bytes_dropped,
-                      (unsigned long)ts.timeouts);
+                      (unsigned long)ts.overwritten, (unsigned long)ts.timeouts,
+                      (unsigned long)thermal::rxErrorCount(),
+                      (unsigned long)thermal::pollGapMaxMs(),
+                      (unsigned long)thermal::ringPeakBytes(),
+                      (unsigned long)thermal::rxBufferBytes());
         // psram_free ALONE is the number that says everything is fine while
         // fragmentation kills /observation, so the largest block rides beside it.
         Serial.printf("[s3cam] up %lus  heap=%u psram=%u/%u die=%.1fC "

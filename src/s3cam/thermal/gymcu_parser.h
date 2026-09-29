@@ -83,7 +83,11 @@ public:
     void discardPartial();
 
     struct Stats {
-        uint32_t frames_ok;       // checksum-verified frames decoded
+        // DECODED frames, not verified ones: under ChecksumPolicy::REPORT a
+        // frame that failed its checksum is still decoded and still counted
+        // here. Read it together with bad_checksum and the policy the stream
+        // is running under — alone it looks like a guarantee it does not make.
+        uint32_t frames_ok;
         uint32_t bad_checksum;    // full frames rejected by checksum
         uint32_t bad_header;      // sync found but type/subtype mismatched
         uint32_t resyncs;         // recovery scans after a rejected frame

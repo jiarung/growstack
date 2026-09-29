@@ -561,16 +561,59 @@ static esp_err_t rangeHandler(httpd_req_t* req) {
     return httpd_resp_send_chunk(req, nullptr, 0);   // terminate the chunked body
 }
 
+// A pixel array out of ONE buffer, not one HTTP chunk per value.
+//
+// Chunked encoding wraps every chunk in its own size line and CRLF, each going
+// out as its own write on the socket, so a value-per-chunk loop cost ~2000
+// socket writes for 768 floats. The viewer polls live thermal at 4 Hz, and
+// with a capture running alongside it the httpd task (priority 5) was busy
+// enough to hold off loopTask (priority 1) — the task that runs
+// thermal::poll(), which is the only thing draining the UART ring. Starve it
+// past the ring's few hundred ms of slack and bytes are lost inside the
+// driver, and ChecksumPolicy::REPORT then publishes whatever the parser built
+// from the survivors as real temperatures.
+//
+// What is PROVEN is that chain down to "corrupt frames are published". The
+// whole-frame +8C on a room-temperature scene is the observation that led
+// here, not something these counters have yet been shown to track — see
+// thermal::pollGapMaxMs() for the number that would settle it.
+//
+// The buffer is function-static rather than a local for the reason stated at
+// thermalHandler: the httpd task runs one handler at a time, and this file
+// keeps big buffers off a 6 KB stack on purpose.
+static esp_err_t sendPixelArray(httpd_req_t* req, const float* px, size_t n) {
+    static char buf[1024];
+    // Longest ordinary value is "-1234.56," = 9 chars; 16 is slack. Reserving
+    // it before each append is what keeps a value from straddling two chunks —
+    // the JSON would survive that, but only by accident — and it doubles as
+    // the flush threshold, so there is one size constant here, not two.
+    constexpr size_t VALUE_MAX = 16;
+    size_t used = 0;
+    for (size_t p = 0; p < n; p++) {
+        if (sizeof(buf) - used < VALUE_MAX) {
+            if (httpd_resp_send_chunk(req, buf, used) != ESP_OK) return ESP_FAIL;
+            used = 0;
+        }
+        const int m = snprintf(buf + used, sizeof(buf) - used,
+                               "%s%.2f", p ? "," : "", px[p]);
+        if (m < 0 || (size_t)m >= sizeof(buf) - used) return ESP_FAIL;
+        used += (size_t)m;
+    }
+    if (used && httpd_resp_send_chunk(req, buf, used) != ESP_OK) return ESP_FAIL;
+    return ESP_OK;
+}
+
 // GET /thermal — the newest 32x24 frame as JSON, plus the parser's own view of
 // the stream. The stats are half the point during bring-up: bytes with no
 // frames means the wire is talking but the FRAME LAYOUT constants are wrong
 // (they are marked VERIFY-ON-HARDWARE), while zero bytes means TX/RX are
 // swapped or the module is unpowered — two very different next moves.
-// GET /thermal — what the module is producing RIGHT NOW, with the stream stats.
-// take() is consume-once and /observation takes frames too, so a /thermal issued
-// just after an /observation can legitimately answer "frame": null for up to a
-// frame period. That is not a fault: this endpoint reports the live stream, and
-// the frame paired with a capture is served by /last.thermal instead.
+//
+// take() is consume-once and /observation takes frames too, so a /thermal
+// issued just after an /observation can legitimately answer "frame": null for
+// up to a frame period. That is not a fault: this endpoint reports the live
+// stream, and the frame paired with a capture is served by /last.thermal.
+
 static esp_err_t thermalHandler(httpd_req_t* req) {
     // A ThermalFrame is ~3 KB (24x32 floats). As a LOCAL it overflows the
     // httpd task's 4 KB stack — which it did, on the first request after this
@@ -582,17 +625,43 @@ static esp_err_t thermalHandler(httpd_req_t* req) {
     bool have = thermal::take(f);
     const gymcu::Parser::Stats s = thermal::statsSnapshot();
 
-    char line[224];
+    // `checksum_policy` is what makes the rest of this block readable — see
+    // thermal::checksumPolicyName() for why `bad_checksum` tracking frames_ok
+    // one for one is the expected state and not an alarm.
+    //
+    // Which counters answer which question, which is local news:
+    //   rx_errors                 the driver LOST bytes at RUNTIME. Definitive.
+    //   boot_*                    the same, during setup() before loop() ran.
+    //                             Nonzero every boot by construction — see
+    //                             thermal::bootDiscardedBytes().
+    //   poll_gap_max_ms/ring_peak how much margin poll() had. The invariant.
+    //   overwritten               frames arriving faster than they are taken.
+    //   bytes_dropped/resyncs     the parser hunting for sync after damage.
+    //   bad_checksum              nothing, until the convention is known.
+    char line[560];
     httpd_resp_set_type(req, "application/json");
     int m = snprintf(line, sizeof(line),
         "{\n  \"stream\": {\"bytes_seen\": %lu, \"frames_ok\": %lu, "
-        "\"bad_checksum\": %lu, \"bad_header\": %lu, \"resyncs\": %lu, "
-        "\"bytes_dropped\": %lu, \"timeouts\": %lu, \"ms_since_frame\": %ld},\n",
+        "\"checksum_policy\": \"%s\", \"bad_checksum\": %lu, "
+        "\"bad_header\": %lu, \"resyncs\": %lu, \"bytes_dropped\": %lu, "
+        "\"overwritten\": %lu, \"timeouts\": %lu, \"rx_errors\": %lu, "
+        "\"poll_gap_max_ms\": %lu, \"ring_peak_bytes\": %lu, "
+        "\"rx_buffer_bytes\": %lu, \"boot_discarded\": %lu, "
+        "\"boot_rx_errors\": %lu, \"ms_since_frame\": %ld},\n",
         (unsigned long)thermal::bytesSeen(), (unsigned long)s.frames_ok,
+        thermal::checksumPolicyName(),
         (unsigned long)s.bad_checksum, (unsigned long)s.bad_header,
         (unsigned long)s.resyncs, (unsigned long)s.bytes_dropped,
-        (unsigned long)s.timeouts,
+        (unsigned long)s.overwritten, (unsigned long)s.timeouts,
+        (unsigned long)thermal::rxErrorCount(),
+        (unsigned long)thermal::pollGapMaxMs(),
+        (unsigned long)thermal::ringPeakBytes(),
+        (unsigned long)thermal::rxBufferBytes(),
+        (unsigned long)thermal::bootDiscardedBytes(),
+        (unsigned long)thermal::bootRxErrorCount(),
         thermal::everSawFrame() ? (long)thermal::sinceLastFrameMs() : -1L);
+    m = clampLen(m, sizeof(line));
+    if (m < 0) return ESP_FAIL;
     httpd_resp_send_chunk(req, line, m);
 
     if (!have) {
@@ -600,8 +669,6 @@ static esp_err_t thermalHandler(httpd_req_t* req) {
         httpd_resp_send_chunk(req, none, strlen(none));
         return httpd_resp_send_chunk(req, nullptr, 0);
     }
-    // row-major, one JSON row per chunk: 768 floats do not belong on a 4 KB
-    // stack (the lesson from the /range panic, applied before it bites)
     m = snprintf(line, sizeof(line),
                  "  \"frame\": {\"seq\": %lu, \"ta_c\": %.2f, "
                  "\"checksum_ok\": %s, \"orientation\": \"%s\", "
@@ -609,12 +676,10 @@ static esp_err_t thermalHandler(httpd_req_t* req) {
                  (unsigned long)f.seq, f.ambient_c,
                  f.checksum_ok ? "true" : "false", thermal::orientation(),
                  (unsigned)gymcu::ROWS, (unsigned)gymcu::COLS);
+    m = clampLen(m, sizeof(line));
+    if (m < 0) return ESP_FAIL;
     httpd_resp_send_chunk(req, line, m);
-    const float* px = &f.pixels[0][0];
-    for (size_t p = 0; p < gymcu::PIXELS; p++) {
-        m = snprintf(line, sizeof(line), "%s%.2f", p ? "," : "", px[p]);
-        if (httpd_resp_send_chunk(req, line, m) != ESP_OK) return ESP_FAIL;
-    }
+    if (sendPixelArray(req, &f.pixels[0][0], gymcu::PIXELS) != ESP_OK) return ESP_FAIL;
     const char* tail = "]}\n}\n";
     httpd_resp_send_chunk(req, tail, strlen(tail));
     return httpd_resp_send_chunk(req, nullptr, 0);
@@ -961,13 +1026,10 @@ static esp_err_t lastThermalHandler(httpd_req_t* req) {
                      heldTherm.checksum_ok ? "true" : "false", thermal::orientation(),
                      (unsigned)gymcu::ROWS, (unsigned)gymcu::COLS);
     if (httpd_resp_send_chunk(req, line, m) != ESP_OK) return ESP_FAIL;
-    // one value per chunk, byte for byte the loop /thermal uses: 768 floats do
-    // not belong on the httpd task's stack, and two copies of this that drift
-    // apart would be two JSON dialects for one sensor
-    const float* px = &heldTherm.pixels[0][0];
-    for (size_t i = 0; i < gymcu::PIXELS; i++) {
-        m = snprintf(line, sizeof(line), "%s%.2f", i ? "," : "", px[i]);
-        if (httpd_resp_send_chunk(req, line, m) != ESP_OK) return ESP_FAIL;
+    // Same writer as /thermal, deliberately: two copies of this that drifted
+    // apart would be two JSON dialects for one sensor.
+    if (sendPixelArray(req, &heldTherm.pixels[0][0], gymcu::PIXELS) != ESP_OK) {
+        return ESP_FAIL;
     }
     const char* tail = "]\n}\n";
     httpd_resp_send_chunk(req, tail, strlen(tail));
@@ -1261,6 +1323,22 @@ bool endpointsStart() {
     // discipline in endpoints.h still stands — this only stops a near-miss
     // from taking the whole board down with it.
     cfg.stack_size = 6144;
+    // Keep the server OFF loopTask's core. loopTask runs at priority 1; the
+    // httpd task runs at priority 5 and defaults to tskNO_AFFINITY, so it was
+    // free to land on the same core and preempt the only task that drains the
+    // thermal UART. The other core is where the LwIP task already lives, which
+    // is where this work ends up anyway — the socket writes do not get slower,
+    // they stop being able to starve thermal::poll().
+    //
+    // DERIVED, not the literal 0: endpointsStart() is called from setup(), so
+    // this runs on loopTask and xPortGetCoreID() is loopTask's own core. A
+    // literal would be a bet on CONFIG_ARDUINO_RUNNING_CORE=1 that nothing in
+    // this repo checks — and if that default ever changed, the literal would
+    // silently pin the server ONTO the core it is meant to avoid.
+    //
+    // This lowers the PROBABILITY of starving poll(); it does not establish
+    // the invariant. thermal::pollGapMaxMs() is what says whether it held.
+    cfg.core_id = 1 - xPortGetCoreID();
     if (httpd_start(&server, &cfg) != ESP_OK) return false;
 
     for (auto& u : routes) {

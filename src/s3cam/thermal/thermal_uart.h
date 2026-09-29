@@ -57,6 +57,48 @@ uint32_t sinceLastFrameMs();
 // separates "nothing is connected" from "something is talking gibberish".
 uint32_t bytesSeen();
 
+// THE INVARIANT, MEASURED. poll() must run often enough that the driver's RX
+// ring never fills; these say by how much that held, not merely whether it
+// broke. Compare pollGapMaxMs() against the ring's own slack (rxBufferBytes()
+// at the wire rate) and ringPeakBytes() against rxBufferBytes() — a worst gap
+// of 40 ms out of a few hundred available, with the ring peaking at a fraction
+// of its size, is margin. Peaks, because nobody watches the console at the
+// moment it happens.
+//
+// rxErrorCount() is the definitive one: the UART driver reporting that it lost
+// bytes (ring full or FIFO overrun). Every other counter in this module infers
+// loss from the wreckage downstream; this one comes from the layer that
+// dropped them. Nonzero means at least one frame in the log is built from an
+// incomplete stream — and under ChecksumPolicy::REPORT that frame was
+// published as real temperatures.
+uint32_t pollGapMaxMs();
+uint32_t ringPeakBytes();
+uint32_t rxBufferBytes();
+uint32_t rxErrorCount();
+
+// The boot window, quarantined. begin() opens the port in setup() but loop()
+// does not run until setup() finishes, so the ring overflows before anything
+// has ever drained it — measured on hardware, every boot. These two say how
+// much that cost; the four counters above start from zero once draining
+// begins, so they describe RUNTIME and nothing else. A large
+// bootDiscardedBytes() is normal. A large bootRxErrorCount() is normal too.
+// Either one CHANGING between boots is worth a look — setup() got slower.
+uint32_t bootDiscardedBytes();
+uint32_t bootRxErrorCount();
+
+// THE CANONICAL STATEMENT of what the checksum counters mean — "strict" or
+// "report", the policy the parser is running under, shipped as a word in the
+// stats JSON. Without it `bad_checksum` is uninterpretable: under REPORT it
+// tracks frames_ok one-for-one because this module's checksum CONVENTION is
+// still unknown (roadmap "未解"), so a reader sees thousands of "bad" frames
+// and cannot tell that from a stream that is actually breaking. It also says
+// what frames_ok means — decoded, not verified.
+//
+// Other sites point HERE rather than restate this: the day
+// tools/s3cam/thermal_checksum.py identifies the convention, one paragraph
+// goes stale instead of five.
+const char* checksumPolicyName();
+
 // A COPY, not a live reference: poll() runs on the main task and callers run
 // on the httpd task, so handing out a pointer into mutating state would be a
 // data race dressed as an accessor.
