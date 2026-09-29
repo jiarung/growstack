@@ -58,13 +58,22 @@ class FakeBoard:
                     "1 device(s). Expected for the pan/tilt head: 0x29 + 0x40.\n")
 
     def __init__(self, orientation="wire", thermal_null=False, i2c_text=None,
-                 servo_fails=False):
+                 servo_fails=False, capture_fails=None):
         self.cap = 0
         self.seq = 0
         self.orientation = orientation
         self.thermal_null = thermal_null
         self.i2c_text = i2c_text if i2c_text is not None else FakeBoard.I2C_REAL
         self.servo_fails = servo_fails
+        # The board's own 500 body, or None for a board that captures. It is a
+        # STRING, not a bool, because the firmware distinguishes "capture
+        # failed" (the sensor handed back no fresh frame) from "psram exhausted
+        # — previous observation preserved" (memory), and a fake that could
+        # only say "it broke" would let the client collapse two faults with
+        # different next steps into one message. Which is what it did until
+        # 2026-09-29, when auto-idle left a board answering 500 forever and the
+        # page said only "HTTP Error 500: Internal Server Error".
+        self.capture_fails = capture_fails
         self.px = cold_blob()
         self.servo_log = []
         board = self
@@ -83,10 +92,21 @@ class FakeBoard:
                 self.end_headers()
                 self.wfile.write(raw)
 
+            def _fail(self, why):
+                raw = why.encode()
+                self.send_response(500)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
             def do_GET(self):
                 u = urlparse(self.path)
                 q = parse_qs(u.query)
                 cid = lambda: "cap-fake-%04d" % max(1, board.cap)
+                if (board.capture_fails is not None
+                        and u.path in ("/observation", "/capture")):
+                    return self._fail(board.capture_fails)
                 if u.path == "/observation":
                     board.cap += 1
                     board.seq += 1
@@ -997,6 +1017,56 @@ class TestRefusalVersusLostReply(unittest.TestCase):
         with FakeBoard() as b, ViewerServer(b.url) as v:
             st, _ = v.get("/api/jog?axis=pan&us=typo")
         self.assertEqual(st, 400)
+
+
+class TestBoardRefusesToCapture(unittest.TestCase):
+    """A board that answers 500 must reach the page WITH ITS OWN REASON.
+
+    This is the gap 2026-09-29 fell into. auto-idle put the OV5640 into
+    software power-down (0x3008 bit 6); waking cleared the bit but nothing
+    restarted the ESP32's DVP capture engine, so the driver handed back the
+    same stale buffers forever and every capture 500'd until a power cycle.
+    The board said "capture failed" every time. The page said "HTTP Error 500:
+    Internal Server Error", because urllib throws the body away — and the
+    firmware's OTHER 500 on that route, "psram exhausted", would have rendered
+    identically. Two faults, two next steps, one sentence.
+
+    The FakeBoard could not produce a 500 at all, so none of this was
+    reachable by a test. Now it can, and the reason has to survive the trip.
+    """
+
+    CAPTURE = "capture failed"
+    PSRAM = "psram exhausted — previous observation preserved"
+
+    def test_the_boards_reason_reaches_the_client(self):
+        with FakeBoard(capture_fails=self.CAPTURE) as b, ViewerServer(b.url) as v:
+            code, d = v.json("/api/observe")
+        self.assertEqual(code, 502)         # the viewer's own "the board said no"
+        self.assertIn(self.CAPTURE, d["error"])
+
+    def test_the_two_firmware_500s_do_not_read_the_same(self):
+        # The whole point: a sensor fault and a memory fault must be
+        # distinguishable from the page, not merely both "500".
+        seen = []
+        for why in (self.CAPTURE, self.PSRAM):
+            with FakeBoard(capture_fails=why) as b, ViewerServer(b.url) as v:
+                seen.append(v.json("/api/observe")[1]["error"])
+        self.assertIn(self.CAPTURE, seen[0])
+        self.assertIn("psram exhausted", seen[1])
+        self.assertNotEqual(seen[0], seen[1])
+
+    def test_a_failed_capture_does_not_replace_the_held_bundle(self):
+        # A page showing the previous capture is honest; one showing nothing
+        # because a later attempt failed has destroyed evidence.
+        with FakeBoard() as good, ViewerServer(good.url) as v:
+            code, ok = v.json("/api/observe")
+            self.assertEqual(code, 200)
+            held = viewer.Viewer.last
+        self.assertIsNotNone(held)
+        with FakeBoard(capture_fails=self.CAPTURE) as bad, ViewerServer(bad.url) as v:
+            viewer.Viewer.last = held
+            v.json("/api/observe")
+            self.assertIs(viewer.Viewer.last, held)
 
 
 class TestLazyServoInit(unittest.TestCase):

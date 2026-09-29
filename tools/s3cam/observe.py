@@ -68,8 +68,29 @@ def carried_frame(capture_id, thermal):
 
 
 def _get(url, timeout=TIMEOUT_S):
-    with urllib.request.urlopen(url, timeout=timeout) as r:
-        return r.read()
+    """Fetch, and on an HTTP error KEEP THE BOARD'S OWN REASON.
+
+    urllib turns a 500 into "HTTP Error 500: Internal Server Error" and throws
+    the body away — but the body is the entire diagnosis. This board answers
+    /observation with either "capture failed" (the sensor handed back no fresh
+    frame) or "psram exhausted — previous observation preserved" (memory), and
+    those are different faults with different next steps. Rendered as the same
+    generic sentence they cost an afternoon on 2026-09-29.
+
+    HTTPError subclasses both URLError and OSError, so re-raising it with the
+    body folded into the message keeps every existing `except` clause working.
+    """
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        try:
+            said = e.read().decode("utf-8", "replace").strip()
+        except Exception:                                        # noqa: BLE001
+            said = ""
+        raise urllib.error.HTTPError(
+            e.url, e.code, f"{e.reason} — {said}" if said else str(e.reason),
+            e.headers, None) from None
 
 
 def _get_for(url, capture_id, timeout=TIMEOUT_S):
