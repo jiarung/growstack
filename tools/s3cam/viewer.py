@@ -52,6 +52,7 @@ import urllib.request
 from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import board_http
 import observe
 import scan_stats as S
 from head_datum import Datum
@@ -658,9 +659,8 @@ class Aim:
                 cls.moves += 1
                 cls.moving = True
             try:
-                with urllib.request.urlopen(
-                        f"{board}/servo?ch={CH[axis]}&us={us}", timeout=10) as r:
-                    doc = json.loads(r.read())
+                doc = json.loads(board_http.get(
+                    f"{board}/servo?ch={CH[axis]}&us={us}", timeout=10))
             except Exception as e:                                   # noqa: BLE001
                 # The ANSWER was lost; the command may well have landed. The
                 # width is now one of two values and the next relative step
@@ -970,8 +970,7 @@ class Viewer(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             try:
-                with urllib.request.urlopen(f"{Viewer.board}/thermal", timeout=15) as r:
-                    doc = json.loads(r.read())
+                doc = json.loads(board_http.get(f"{Viewer.board}/thermal", timeout=15))
             except (urllib.error.URLError, OSError, ValueError) as e:
                 return self._json({"error": f"{Viewer.board}: {e}"}, 502)
             finally:

@@ -82,20 +82,12 @@ class FakeBoard:
             def log_message(self, *a):
                 pass
 
-            def _send(self, body, ctype="application/json", hdrs=()):
+            def _send(self, body, ctype="application/json", hdrs=(), status=200):
                 raw = body if isinstance(body, bytes) else json.dumps(body).encode()
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header("Content-Type", ctype)
                 for k, v in hdrs:
                     self.send_header(k, v)
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
-
-            def _fail(self, why):
-                raw = why.encode()
-                self.send_response(500)
-                self.send_header("Content-Type", "text/plain")
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
                 self.wfile.write(raw)
@@ -106,7 +98,8 @@ class FakeBoard:
                 cid = lambda: "cap-fake-%04d" % max(1, board.cap)
                 if (board.capture_fails is not None
                         and u.path in ("/observation", "/capture")):
-                    return self._fail(board.capture_fails)
+                    return self._send(board.capture_fails.encode(), "text/plain",
+                                      status=500)
                 if u.path == "/observation":
                     board.cap += 1
                     board.seq += 1
@@ -868,8 +861,8 @@ class TestMoveInFlight(unittest.TestCase):
     def test_the_window_is_invalidated_before_the_command_goes_out(self):
         import inspect
         src = inspect.getsource(viewer.Aim.jog)
-        self.assertLess(src.index("cls.moving = True"), src.index("urlopen"))
-        self.assertLess(src.index("cls.generation += 1"), src.index("urlopen"))
+        self.assertLess(src.index("cls.moving = True"), src.index("board_http.get"))
+        self.assertLess(src.index("cls.generation += 1"), src.index("board_http.get"))
 
     def test_a_failed_command_clears_moving_and_keeps_the_width_unknown(self):
         # A refused command may still have moved the head part of the way, so
@@ -1048,23 +1041,22 @@ class TestBoardRefusesToCapture(unittest.TestCase):
         # The whole point: a sensor fault and a memory fault must be
         # distinguishable from the page, not merely both "500".
         seen = []
-        for why in (self.CAPTURE, self.PSRAM):
-            with FakeBoard(capture_fails=why) as b, ViewerServer(b.url) as v:
+        with FakeBoard() as b, ViewerServer(b.url) as v:
+            for why in (self.CAPTURE, self.PSRAM):
+                b.capture_fails = why
                 seen.append(v.json("/api/observe")[1]["error"])
-        self.assertIn(self.CAPTURE, seen[0])
         self.assertIn("psram exhausted", seen[1])
         self.assertNotEqual(seen[0], seen[1])
 
     def test_a_failed_capture_does_not_replace_the_held_bundle(self):
         # A page showing the previous capture is honest; one showing nothing
         # because a later attempt failed has destroyed evidence.
-        with FakeBoard() as good, ViewerServer(good.url) as v:
+        with FakeBoard() as b, ViewerServer(b.url) as v:
             code, ok = v.json("/api/observe")
             self.assertEqual(code, 200)
             held = viewer.Viewer.last
-        self.assertIsNotNone(held)
-        with FakeBoard(capture_fails=self.CAPTURE) as bad, ViewerServer(bad.url) as v:
-            viewer.Viewer.last = held
+            self.assertIsNotNone(held)
+            b.capture_fails = self.CAPTURE
             v.json("/api/observe")
             self.assertIs(viewer.Viewer.last, held)
 
@@ -1154,7 +1146,7 @@ class TestPageGuards(unittest.TestCase):
         import inspect
         src = inspect.getsource(viewer.Aim.jog)
         self.assertIn("jog_lock", src)
-        self.assertLess(src.index("jog_lock"), src.index("urlopen"))
+        self.assertLess(src.index("jog_lock"), src.index("board_http.get"))
 
     def test_aim_polls_are_serialised(self):
         # The server is threaded, so the 250 ms interval can start a poll

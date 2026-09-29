@@ -26,7 +26,8 @@ Needs Pillow:  python3 -m pip install pillow
 """
 import io
 import sys
-import urllib.request
+
+import board_http
 
 try:
     from PIL import Image, ImageFilter, ImageStat
@@ -47,9 +48,8 @@ def fetch(url):
     apart "the target left the sensor's narrow cone" (no_distance), "the read
     failed" (driver_err) and "the scene moved across the exposure" (moved:a->b,
     which the board detects by bracketing the frame with two readings)."""
-    with urllib.request.urlopen(url, timeout=30) as r:
-        data = r.read()
-        raw = r.headers.get("X-Range-Mm", "(header missing)")
+    data, headers = board_http.get_with_headers(url, timeout=30)
+    raw = headers.get("X-Range-Mm", "(header missing)")
     try:
         return data, int(raw), ""
     except ValueError:

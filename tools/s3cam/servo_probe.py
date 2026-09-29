@@ -34,9 +34,9 @@ import json
 import signal
 import sys
 import urllib.error
-import urllib.request
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import board_http  # noqa: E402
 from head_datum import Datum
 
 CH = {"pan": 5, "tilt": 6}      # must match servo.h CH_PAN / CH_TILT
@@ -47,8 +47,7 @@ US_CENTER = 1500
 def servo(base, ch, us, timeout=10):
     """One /servo command. Raises on anything the firmware refused."""
     url = f"{base.rstrip('/')}/servo?ch={ch}&us={us}"
-    with urllib.request.urlopen(url, timeout=timeout) as r:
-        doc = json.loads(r.read())
+    doc = json.loads(board_http.get(url, timeout))
     if not doc.get("present"):
         raise RuntimeError("PCA9685 not present — check /i2c/scan for 0x40")
     if doc.get("set") != "ok":

@@ -38,9 +38,9 @@ import io
 import re
 import sys
 import time
-import urllib.request
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import board_http  # noqa: E402
 from focus_score import score_bytes  # noqa: E402
 
 
@@ -49,7 +49,7 @@ class Board:
         self.base = base.rstrip("/")
 
     def get(self, path, timeout=70):
-        return urllib.request.urlopen(self.base + path, timeout=timeout).read()
+        return board_http.get(self.base + path, timeout)
 
     def reg(self, addr):
         t = self.get(f"/cam/reg?from=0x{addr:04X}&to=0x{addr:04X}", 25).decode()

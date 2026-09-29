@@ -43,10 +43,10 @@ import subprocess
 import sys
 import time
 import urllib.error
-import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import board_http                                              # noqa: E402
 import scan_stats as S                                              # noqa: E402
 from head_datum import Datum                                        # noqa: E402
 from thermal_view import (centroid, fetch, orient,                   # noqa: E402
@@ -113,8 +113,7 @@ class Head:
             return
         url = f"{self.base}/servo?ch={CH[axis]}&us={us}"
         try:
-            with urllib.request.urlopen(url, timeout=10) as r:
-                doc = json.loads(r.read())
+            doc = json.loads(board_http.get(url, timeout=10))
         except Exception as e:                                       # noqa: BLE001
             raise ServoAborted(f"{axis} -> {us}us failed: {e}")
         if not doc.get("present"):
@@ -160,9 +159,7 @@ class Head:
               f"(NOT releasing — a released axis holding weight drops)")
         for axis, us in sorted(self.last_good.items()):
             try:
-                with urllib.request.urlopen(
-                        f"{self.base}/servo?ch={CH[axis]}&us={us}", timeout=10) as r:
-                    r.read()
+                board_http.get(f"{self.base}/servo?ch={CH[axis]}&us={us}", timeout=10)
                 print(f"  {axis} -> {us}us")
             except Exception as e:                                   # noqa: BLE001
                 print(f"  !! RETREAT FAILED for {axis}: {e}\n"

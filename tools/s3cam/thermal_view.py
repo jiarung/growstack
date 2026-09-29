@@ -45,7 +45,8 @@ the firmware only once hardware has settled it, not as a guess today.
 import json
 import statistics
 import sys
-import urllib.request
+
+import board_http
 
 # 24-step ramp through the usual thermal look: black -> blue -> red -> yellow
 # -> white. Built as 256-colour ANSI so it works over ssh without truecolor.
@@ -55,8 +56,7 @@ RAMP = [16, 17, 18, 19, 20, 21, 26, 32, 38, 44, 50, 51,
 
 def fetch(src):
     if src.startswith(("http://", "https://")):
-        with urllib.request.urlopen(src, timeout=15) as r:
-            return json.loads(r.read())
+        return json.loads(board_http.get(src, timeout=15))
     with open(src) as f:
         return json.load(f)
 
