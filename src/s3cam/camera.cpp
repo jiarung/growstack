@@ -5,6 +5,8 @@
 
 #include "cam_pins.h"
 
+#include <esp_heap_caps.h>
+
 // The observation dataset wants full stills; QSXGA JPEG at quality 14 runs
 // ~500KB-1MB per frame — two framebuffers need PSRAM, which is why init hard-
 // fails without it instead of silently degrading the dataset to SVGA.
@@ -32,6 +34,7 @@ static constexpr uint32_t FRAMESIZE_SETTLE_MS = 500;
 
 static uint16_t sensorPid = 0;
 static bool camInitOk = false;   // see cameraPresent()
+static esp_err_t lastInitErr = ESP_FAIL;   // what esp_camera_init said, for P0
 static bool camIdle = false;
 static bool raisedForCapture = false;
 
@@ -122,6 +125,7 @@ bool cameraInit() {
     if (!camLock) camLock = xSemaphoreCreateMutex();
     if (!psramFound()) {
         Serial.println("[cam] NO PSRAM — cannot hold 5MP framebuffers, aborting init");
+        lastInitErr = ESP_ERR_NO_MEM;
         return false;
     }
     camera_config_t c = {};
@@ -149,6 +153,7 @@ bool cameraInit() {
 
     camInitOk = false;
     esp_err_t err = esp_camera_init(&c);
+    lastInitErr = err;
     if (err != ESP_OK) {
         Serial.printf("[cam] init failed: 0x%x — wrong pin map? see cam_pins.h alternates\n", err);
         return false;
@@ -337,6 +342,12 @@ camera_fb_t* cameraCapture() {
     // the same lock, so from here until cameraRelease() it cannot put the
     // sensor to sleep underneath this capture.
     camLockTake();
+    // After a failed rebuild there is no driver. The header promises nothing
+    // about esp_camera_fb_get() on a deinitialised driver, so do not ask it.
+    if (!camInitOk) {
+        camLockGive();
+        return nullptr;
+    }
     inUse++;
     cameraNoteActivity();
     wakeIfIdle();                       // may delay; the tick simply skips
@@ -538,7 +549,10 @@ void cameraTickAutoIdle() {
     // Every check and the standby write happen while holding it, so a capture
     // starting on the httpd task blocks at cameraCapture()'s own take() until
     // this has finished deciding.
-    if (autoIdleMs == 0 || camIdle || streaming || inUse > 0 ||
+    // !camInitOk: no driver (a failed /cam/recover). Standby would fail and
+    // the branch below would then switch auto-idle off for the whole boot —
+    // turning a diagnostic's failure into a silent change of setting.
+    if (!camInitOk || autoIdleMs == 0 || camIdle || streaming || inUse > 0 ||
         raisedForCapture || millis() - lastActivityMs < autoIdleMs) {
         // Unsigned subtraction above, so the 49-day millis() wrap is a
         // non-event rather than a day the camera never sleeps again.
@@ -565,8 +579,8 @@ uint32_t cameraIdleInMs() {
     // response still holding a framebuffer blocks standby until
     // cameraRelease(), and a status line that says "3 s" while the answer is
     // "not until this finishes" is a status line that has to be second-guessed.
-    if (autoIdleMs == 0 || camIdle || streaming || raisedForCapture ||
-        inUse > 0) {
+    if (!camInitOk || autoIdleMs == 0 || camIdle || streaming ||
+        raisedForCapture || inUse > 0) {
         return 0;
     }
     const uint32_t since = millis() - lastActivityMs;
@@ -625,4 +639,56 @@ bool cameraRegWrite(int reg, int mask, int value) {
     if (!s || !s->set_reg) return false;
     if (sensorPid != OV5640_PID) return false;   // addresses are part-specific
     return s->set_reg(s, reg, mask, value) >= 0;
+}
+
+CameraRebuildRound cameraRebuildOnceLocked() {
+    CameraRebuildRound r;
+    // Standby FIRST: deinit tears SCCB down with everything else, so after it
+    // there is no way left to reach the sensor's registers. Best-effort — a
+    // stuck driver is exactly the case this is asked to recover.
+    r.standby_ok = setIdleLocked(true);
+    r.deinit_err = esp_camera_deinit();
+    // Nothing below may believe the old driver's state survived — including
+    // which sensor it was. cameraInit() sets these again only on success.
+    camInitOk = false;
+    sensorPid = 0;
+    raisedForCapture = false;
+
+    const int64_t t0 = esp_timer_get_time();
+    cameraInit();
+    r.init_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+    r.init_err = lastInitErr;
+    // Whether init actually woke the sensor is one of the things being asked,
+    // so the flag says "awake" and the fresh frame below is the verdict.
+    camIdle = false;
+
+    if (camInitOk) {
+        r.pid = sensorPid;
+        r.reg_3008 = cameraRegReadLocked(0x3008);
+        // The verify frame is VGA regardless of /power?rest=, so every round
+        // (and every run) times the same thing. Restored either way.
+        sensor_t* vs = esp_camera_sensor_get();
+        const bool switched = restSize != FRAMESIZE_VGA;
+        if (switched) {
+            r.vga_ok = vs && vs->set_framesize(vs, FRAMESIZE_VGA) == 0;
+            if (r.vga_ok) delay(FRAMESIZE_SETTLE_MS);
+        }
+        const int64_t f0 = esp_timer_get_time();
+        camera_fb_t* fb = captureFresh();
+        r.fresh_ms = (uint32_t)((esp_timer_get_time() - f0) / 1000);
+        if (fb) {
+            r.fresh = true;
+            esp_camera_fb_return(fb);
+        }
+        if (switched && r.vga_ok) dropToRest();
+        r.fw_state = cameraRegReadLocked(0x3029);
+        sensor_t* s = esp_camera_sensor_get();
+        // Direct read: cameraXclkHz() takes camLock, which the caller holds.
+        r.xclk_hz = s ? s->xclk_freq_hz : 0;
+    }
+    multi_heap_info_t psram;
+    heap_caps_get_info(&psram, MALLOC_CAP_SPIRAM);
+    r.psram_free = (uint32_t)psram.total_free_bytes;
+    r.psram_largest = (uint32_t)psram.largest_free_block;
+    return r;
 }

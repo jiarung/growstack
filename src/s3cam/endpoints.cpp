@@ -138,6 +138,8 @@ static const char MENU[] =
     "GET /cam/af      lens focus motor; nothing is loaded at boot\n"
     "                 ?load=1[&bytes=N]  upload the AF firmware (volatile)\n"
     "                 ?focus=1 run autofocus   ?cmd=0x03 raw command\n"
+    "GET /cam/recover?n=1..25  P0: standby->deinit->init->fresh frame, n times\n"
+    "                 (diagnostic; resets xclk to 20 and /cam/tune; AF not reloaded)\n"
     "GET /cam/tune    exposure + orientation at runtime; no query = report\n"
     "                 ?ae=-2..2  ?gainceil=2|4|8|16|32|64|128  ?bright=-2..2\n"
     "                 ?hmirror=0|1  ?vflip=0|1\n";
@@ -1230,6 +1232,90 @@ static esp_err_t camAfHandler(httpd_req_t* req) {
     return httpd_resp_send(req, body, m);
 }
 
+// GET /cam/recover?n=1..25 — P0 of docs/mlx90640/auto-idle-redesign.md.
+//
+// The redesign wakes the camera by tearing the driver down and building it
+// again, and the header we link says esp_camera_init "can only be called
+// once". Whether that is still true of this .a is the whole bet, so it is
+// measured here before anything is built on it: 100 rounds (4 x n=25) with
+// every error code, init time, freshness and PSRAM figure reported.
+//
+// Streamed one line per round as it completes. A round takes seconds, the
+// httpd task is blocked meanwhile (as for any capture), and a partial answer
+// that shows WHICH round died is worth more than one that times out whole.
+// It stops at the first round that is not wholly good — standby written,
+// deinit OK, init OK, a fresh frame. Continuing past a bad round would rebuild
+// a driver already known to be unhealthy and blur which step failed first.
+//
+// If a round never answers at all (deinit or init hanging on a stalled DMA),
+// that IS the result: the line for it never arrives, and the TTL log shows
+// where it stopped.
+static esp_err_t camRecoverHandler(httpd_req_t* req) {
+    char q[32];
+    const bool haveQ = httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK;
+    int n = 1;
+    const int got = qArg(q, haveQ, "n", n);
+    if (got < 0 || n < 1 || n > 25) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                   "rejected (n must be 1..25)");
+    }
+    CameraExclusive lk;
+    if (!lk.ok()) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, "text/plain");
+        return httpd_resp_sendstr(req, "camera busy for 15 s (capture or stream) — nothing done");
+    }
+    httpd_resp_set_type(req, "application/json");
+    // The high-water mark is the least ever free on this task since boot, so
+    // the value BEFORE the first round is what tells whether init set a new low.
+    const unsigned stackBefore = (unsigned)uxTaskGetStackHighWaterMark(nullptr);
+    static char head[64];
+    int hm = snprintf(head, sizeof(head),
+                      "{\"stack_min_free_before\": %u,\n\"rounds\": [\n", stackBefore);
+    hm = clampLen(hm, sizeof(head));
+    if (hm < 0 || httpd_resp_send_chunk(req, head, hm) != ESP_OK) return ESP_FAIL;
+    int done = 0, fresh = 0;
+    const char* stopReason = nullptr;
+    for (int i = 1; i <= n && !stopReason; i++) {
+        const CameraRebuildRound r = cameraRebuildOnceLocked();
+        done++;
+        if (r.fresh) fresh++;
+        if      (!r.standby_ok)             stopReason = "standby write failed";
+        else if (r.deinit_err != ESP_OK)    stopReason = "deinit failed";
+        else if (r.init_err != ESP_OK)      stopReason = "init failed — no driver, power-cycle the board";
+        else if (!r.fresh)                  stopReason = "no fresh frame after init";
+        // static: esp_camera_init() used to run only on loopTask's 8 KB stack
+        // and now runs on httpd's 6 KB one. Keeping the buffers off it is
+        // margin; stack_free below is the measurement (and sizes P2's task).
+        // Safe because httpd runs every handler on one task.
+        static char line[384];
+        int m = snprintf(line, sizeof(line),
+            "%s  {\"round\": %d, \"standby_ok\": %s, \"deinit_err\": %d, \"init_err\": %d, "
+            "\"init_ms\": %lu, \"fresh\": %s, \"fresh_ms\": %lu, "
+            "\"pid\": \"0x%04x\", \"reg_3008\": %d, \"fw_state\": %d, "
+            "\"xclk_hz\": %d, \"psram_free\": %lu, \"psram_largest\": %lu, "
+            "\"vga_ok\": %s, \"stack_min_free\": %u}",
+            i > 1 ? ",\n" : "", i, r.standby_ok ? "true" : "false",
+            r.deinit_err, r.init_err,
+            (unsigned long)r.init_ms, r.fresh ? "true" : "false",
+            (unsigned long)r.fresh_ms, (unsigned)r.pid, r.reg_3008, r.fw_state,
+            r.xclk_hz, (unsigned long)r.psram_free, (unsigned long)r.psram_largest,
+            r.vga_ok ? "true" : "false",
+            // high-water mark in bytes on ESP-IDF: the least ever left free
+            (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+        m = clampLen(m, sizeof(line));
+        if (m < 0 || httpd_resp_send_chunk(req, line, m) != ESP_OK) return ESP_FAIL;
+    }
+    static char tail[224];
+    int m = snprintf(tail, sizeof(tail),
+        "\n],\n  \"asked\": %d, \"done\": %d, \"fresh\": %d, \"stop_reason\": %s%s%s}\n",
+        n, done, fresh, stopReason ? "\"" : "", stopReason ? stopReason : "null",
+        stopReason ? "\"" : "");
+    m = clampLen(m, sizeof(tail));
+    if (m < 0 || httpd_resp_send_chunk(req, tail, m) != ESP_OK) return ESP_FAIL;
+    return httpd_resp_send_chunk(req, nullptr, 0);
+}
+
 // GET /cam/tune[?ae=0&gainceil=32&bright=0&hmirror=0&vflip=0] — exposure and
 // orientation, at runtime. No query = report only.
 //
@@ -1312,6 +1398,7 @@ bool endpointsStart() {
         {"/servo",       HTTP_GET, servoHandler,       nullptr, false, false, nullptr},
         {"/cam/af",      HTTP_GET, camAfHandler,       nullptr, false, false, nullptr},
         {"/cam/tune",    HTTP_GET, camTuneHandler,     nullptr, false, false, nullptr},
+        {"/cam/recover", HTTP_GET, camRecoverHandler,  nullptr, false, false, nullptr},
     };
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();

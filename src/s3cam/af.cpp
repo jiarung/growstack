@@ -33,13 +33,15 @@ int32_t verifyFailAt = -1;
 uint16_t sentBytes = 0;
 const char* note = "not loaded";
 
-uint8_t slaveAddr() {
-    sensor_t* s = esp_camera_sensor_get();
-    return s ? s->slv_addr : 0x3C;   // OV5640's SCCB address
-}
-
 bool wr(uint16_t reg, uint8_t val) {
-    return SCCB_Write16(slaveAddr(), reg, val) == 0;
+    // No sensor handle means no driver — and no SCCB bus either, since
+    // esp_camera_deinit() tears that down too (a failed /cam/recover leaves
+    // exactly this). This used to fall back to a hard-coded 0x3C and write
+    // anyway, onto an I2C driver that no longer exists. Every AF write comes
+    // through here, so refusing here covers load, focus and raw commands.
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s) return false;
+    return SCCB_Write16(s->slv_addr, reg, val) == 0;
 }
 
 // Read back what we sent. An I2C ACK only says the sensor heard the byte; it

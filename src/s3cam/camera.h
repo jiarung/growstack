@@ -115,6 +115,37 @@ private:
 };
 bool cameraIsIdle();
 
+// ---- P0: can this driver be torn down and rebuilt in one boot? --------------
+// docs/mlx90640/auto-idle-redesign.md §6 P0. The redesign's only wake path is
+// esp_camera_deinit() -> esp_camera_init(), and the header we build against
+// says init "can only be called once" — so this is a qualification test of
+// the exact .a we link, not a feature. One round:
+//   standby (while SCCB still exists) -> deinit -> cameraInit() -> fresh frame
+// AF is deliberately NOT reloaded, so fw_state reports what init did to it.
+// xclk returns to the compiled 20 MHz and /cam/tune values to driver defaults
+// — the known cost the redesign's CamSettings exists to remove.
+struct CameraRebuildRound {
+    bool     standby_ok = false;  // the 0x3008 write landed — else this round
+                                  // did not test "standby -> deinit -> init"
+    int      deinit_err = -1;     // esp_err_t
+    int      init_err = -1;       // esp_err_t from esp_camera_init; 0 = OK
+    uint32_t init_ms = 0;
+    bool     fresh = false;       // a frame exposed AFTER init returned
+    uint32_t fresh_ms = 0;
+    uint16_t pid = 0;
+    int      reg_3008 = -1;       // bit6 still set after init = init did not wake it
+    int      fw_state = -1;       // 0x3029: 0x70 = AF firmware survived init
+    int      xclk_hz = 0;
+    bool     vga_ok = true;       // the verify frame is VGA whatever rest is —
+                                  // else rounds are not comparable (false = the
+                                  // switch failed; the frame was at rest size)
+    uint32_t psram_free = 0;
+    uint32_t psram_largest = 0;
+};
+// Caller MUST hold CameraExclusive: this frees the framebuffers and the
+// driver state that every other camera path dereferences.
+CameraRebuildRound cameraRebuildOnceLocked();
+
 // ---- raw register access (the instrument, not a knob) -----------------------
 // Before writing a power register on rumour, read one. The heat question has
 // reached claims we cannot check from here — is the MIPI PHY still powered on a
