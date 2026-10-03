@@ -44,6 +44,11 @@ for p,d,a in due: print(f"  {p}  {d:.0f}%  {a:.1f} 天")
 ')"
 NDUE="$(grep -c . <<<"$PANEL" || true)"
 
+# Two tags on one id: a retag half-done, or a new tag bound to the wrong pot.
+# Only the scan history tells which, and it is weekly because that is the
+# cadence a forgotten second half gets noticed at.
+TAGS="$(python3 check-tags.py 2>&1 || true)"
+
 TEXT="🌵 每週 recall：澆水指標
 
 平台期曲線已重新擬合：${NFIT} 盆有自己的 A/τ。
@@ -51,6 +56,9 @@ TEXT="🌵 每週 recall：澆水指標
 
 已過平台期、還沒澆（分母=平台，≥100%）：${NDUE} 盆
 ${PANEL:-  無}
+
+tag 檢查：
+${TAGS}
 
 請做這三件事：
 1. cd ~/monitor-air/broker && ./analyze-et.py --index

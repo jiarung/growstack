@@ -542,7 +542,9 @@ ignored.
 Pots it cannot fit (fewer than 3 cycles, still drying at day 8, or a fit worse
 than half of A) keep the old span — a large denominator is a known error, a
 false A is not. `plateau-review-reminder.sh` (cron, Monday 01:30) refits and
-sends the pots currently past their plateau to Telegram, with the recall steps.
+sends the pots currently past their plateau to Telegram, with the recall steps
+— and the output of `check-tags.py`, which reads the scan history to tell a
+half-finished retag from a tag bound to the wrong pot.
 
 ## Evapotranspiration — is a planted pot drying differently from bare soil?
 

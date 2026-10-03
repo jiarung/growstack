@@ -371,12 +371,13 @@ about forgetting this step, not about the list being too long.
 Bind the new tag with `add-tag.sh <uid> <plant-id>` — the SAME id, not a new
 one; the pot did not change — then remove the old uid's line from
 `tag-map.json` by hand. `add-tag.sh` allows two tags on one id because this
-step needs it, so nothing stops you forgetting the second half: 2026-10-03 a
-new tag was bound to the wrong id and two pots shared `cactus-30` for three
-days before the scan history gave it away (a pot that stops appearing on the
-same day a new uid starts, and never once in the same session). If the first
-scan happened before the binding, the reading sits on `unknown` — move it with
-`mark-weight.sh --set-plant` below.
+step needs it. `check-tags.py` (run weekly by `plateau-review-reminder.sh`,
+or by hand) notices when the second half is forgotten, and tells the two
+failures apart by the scan history: two uids scanned in the SAME session are
+two pots on one id — a new tag bound to the wrong pot (2026-10-03, `cactus-30`
+for three days); two uids that never share a session are a retag whose old
+line is still in the map. If the first scan happened before the binding, the
+reading sits on `unknown` — move it with `mark-weight.sh --set-plant` below.
 
 ### Re-assigning a reading to a different plant
 
