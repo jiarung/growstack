@@ -366,6 +366,18 @@ If that answers with the NEW plant, the entry can come out. Leave the mechanism
 list itself means the next pot that rots needs it rebuilt, and 2026-09-17 was
 about forgetting this step, not about the list being too long.
 
+### Replacing a pot's tag
+
+Bind the new tag with `add-tag.sh <uid> <plant-id>` — the SAME id, not a new
+one; the pot did not change — then remove the old uid's line from
+`tag-map.json` by hand. `add-tag.sh` allows two tags on one id because this
+step needs it, so nothing stops you forgetting the second half: 2026-10-03 a
+new tag was bound to the wrong id and two pots shared `cactus-30` for three
+days before the scan history gave it away (a pot that stops appearing on the
+same day a new uid starts, and never once in the same session). If the first
+scan happened before the binding, the reading sits on `unknown` — move it with
+`mark-weight.sh --set-plant` below.
+
 ### Re-assigning a reading to a different plant
 
 A reading that landed on `unknown` because its tag was not in `tag-map.json` yet:
