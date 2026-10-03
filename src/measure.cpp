@@ -132,7 +132,14 @@ void oledRefLine(float w, bool calibrated) {
         float pct = (r.anchor_g - w) / r.span_g * 100.0f;
         if (pct >  999.0f) pct =  999.0f;       // makes the 21-char budget a proof,
         if (pct < -999.0f) pct = -999.0f;       // not a hope
-        snprintf(line + n, sizeof(line) - n, " %.0f%%", (double)pct);
+        // Two denominators reach here as span_g. A fitted plateau loss makes
+        // 100% mean "this pot has stopped losing water" — the number worth
+        // waiting for. The legacy largest-ever drop is ~1.7x too big, so its
+        // 100% rarely comes and its 60% may already be the plateau; it gets a
+        // "~" so the two are never read as the same scale. Budget: the worst
+        // line is "123.4D -1234g ~-999%", 20 of 21 columns.
+        snprintf(line + n, sizeof(line) - n, r.plateau ? " %.0f%%" : " ~%.0f%%",
+                 (double)pct);
     } else if (r.first_anchor) {
         // The anchor is this pot's FIRST weighing, not a watering: it was not
         // necessarily saturated, so a percentage against it would be fiction.

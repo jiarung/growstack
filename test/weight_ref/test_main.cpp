@@ -52,8 +52,21 @@ int main() {
     CHECK(weightRefGet(UID, &r));
     CHECK(near(r.anchor_g, 432.0f) && near(r.span_g, 187.0f));
     CHECK(r.has_span && r.has_ts && !r.first_anchor);
+    CHECK(!r.plateau);                          // legacy span: the OLED shows "~62%"
     CHECK(r.anchor_ts == 1788094790u);
     CHECK(weightRefPlant(UID) && !strcmp(weightRefPlant(UID), "cactus-03b"));
+
+    // ---- FULL with a fitted plateau denominator: the same tier, but 100% now
+    // means "stopped losing", and the % is shown without the "~".
+    ingest(UID, "{\"plant_id\":\"cactus-10\",\"anchor_g\":272.8,\"span_g\":26.3,"
+                "\"plateau\":true,\"anchor_ts\":1790062875}");
+    CHECK(weightRefGet(UID, &r));
+    CHECK(r.has_span && r.plateau && near(r.span_g, 26.3f));
+    // and a legacy payload after it clears the flag — no stale "plateau" on a
+    // pot whose fit was dropped (fit-plateau.py refuses tau on the grid edge)
+    ingest(UID, "{\"plant_id\":\"cactus-10\",\"anchor_g\":272.8,\"span_g\":87.0,"
+                "\"anchor_ts\":1790062875}");
+    CHECK(weightRefGet(UID, &r) && r.has_span && !r.plateau);
 
     // ---- malformed payloads must PRESERVE the cached full ref, not demote it
     ingest(UID, "{\"plant_id\":\"x\",\"anchor_g\":400.0,\"span_g\":\"oops\"}");

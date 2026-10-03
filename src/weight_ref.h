@@ -25,6 +25,8 @@ struct WeightRef {
     bool     has_ts;        // false = broker had no timestamp; omit the age
     bool     has_span;      // false = provisional; absolute drawdown, NO percentage
     bool     first_anchor;  // the anchor IS the pot's first weighing, not a watering
+    bool     plateau;       // span_g is a fitted plateau loss: 100% = stopped losing.
+                            // false = legacy largest-ever drop, ~1.7x too big; shown "~"
 };
 
 // Ingest one ref message for a tag UID (the topic's last segment). Called from the

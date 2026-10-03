@@ -27,6 +27,7 @@ struct Entry {
     bool     has_span;              // false = provisional or name-only
     bool     has_ts;
     bool     first_anchor;
+    bool     plateau;
     bool     used;
 };
 Entry cache[CAP] = {};
@@ -128,6 +129,9 @@ void weightRefOnMessage(const char* uid, const uint8_t* payload, unsigned int le
     bool hasTs = doc["anchor_ts"].is<uint32_t>();
     uint32_t ts = hasTs ? (uint32_t)doc["anchor_ts"] : 0;
     bool firstAnchor = doc["first_anchor"] | false;
+    // Absent on legacy full payloads by design (keeps them byte-identical), so
+    // `| false` is the contract, not a fallback.
+    bool plateau     = doc["plateau"] | false;
     // the name is best-effort display data, never an ingest gate (see
     // sanitizePlant) — a name-only ref with an unusable name still ingests,
     // because its real job may be DEMOTING a stale full/provisional entry
@@ -147,6 +151,7 @@ void weightRefOnMessage(const char* uid, const uint8_t* payload, unsigned int le
     cache[i].has_span = hasSpan;
     cache[i].has_ts = hasTs;
     cache[i].first_anchor = firstAnchor;
+    cache[i].plateau = plateau;
     strncpy(cache[i].plant, plant, sizeof(cache[i].plant) - 1);
     cache[i].plant[sizeof(cache[i].plant) - 1] = '\0';
     cache[i].used  = true;
@@ -169,6 +174,7 @@ bool weightRefGet(const char* uid, WeightRef* out) {
     out->has_ts       = cache[i].has_ts;
     out->has_span     = cache[i].has_span;
     out->first_anchor = cache[i].first_anchor;
+    out->plateau = cache[i].plateau;
     return true;
 }
 
