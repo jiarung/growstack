@@ -109,7 +109,9 @@ window the lamp *runs* whatever it was doing before (this environment is light-d
 dead sensor shouldn't darken the plants); outside the window it goes OFF. Holding the previous
 state instead was the 2026-08-10 failure: the sensors died after the lamp was already off, so it
 was never started again on any subsequent morning.
-`light-ctl.sh` is the manual path — it publishes `light/cmd`. Live: ✅.
+`light-ctl.sh` is the manual path — it publishes `light/cmd`. `lamp-hold.sh on|off <duration>`
+keeps a command alive by republishing it every 4 min, so "hold off for 30 min" needs
+nothing inside the controller and lapses on its own if the script dies. Live: ✅.
 
 ## C. On-demand measurement — Node-RED
 

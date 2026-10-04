@@ -181,7 +181,22 @@ docker compose up -d --build light            # start it
 docker compose run --rm light python /light.py --selftest   # check decide() logic
 # manual switch (via the MQTT command seam — pauses auto control ~5 min):
 ./light-ctl.sh on        # or: off | status
+# hold it ON or OFF for a while, then hand control back:
+./lamp-hold.sh off 30m          # dim the plants for half an hour
+./lamp-hold.sh on 2h --bg       # force on for two hours, detached
+./lamp-hold.sh status           # what is running, until when
+./lamp-hold.sh cancel           # end it now; the lamp is restored
 ```
+
+A hold is a **heartbeat, not a schedule**: the script republishes the command
+every 4 min so the controller's 5-min manual window never lapses — and if the
+script dies, the host reboots, or you forget, the window lapses anyway and auto
+control takes the lamp back within ~6 min. That expiry is the safety feature.
+Durations are `15m` / `2h` / `1h30m` / seconds, capped at 4 h. When a hold ends
+the lamp goes back to the state it was in when the hold began — an OFF hold
+that started with the lamp off restores nothing (forcing ON at night would be
+worse), an ON hold that started off publishes OFF so a forced lamp never
+lingers past the lamp window.
 
 ## Viewing charts
 
