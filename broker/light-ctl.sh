@@ -8,6 +8,7 @@
 #
 #   ./light-ctl.sh on        # force the plant light on
 #   ./light-ctl.sh off       # force it off
+#   ./light-ctl.sh auto      # hand control back now (clears the manual window)
 #   ./light-ctl.sh status    # show retained state + availability
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,6 +22,7 @@ pub() { docker exec monitor-air-mqtt mosquitto_pub -q 1 -t "$BASE/cmd" -m "{\"st
 case "${1:-}" in
   on|ON)   pub ON;  echo "→ commanded ON   ($BASE/cmd) — auto control paused ~5 min";;
   off|OFF) pub OFF; echo "→ commanded OFF  ($BASE/cmd) — auto control paused ~5 min";;
+  auto|AUTO) pub AUTO; echo "→ commanded AUTO ($BASE/cmd) — controller decides on its next tick (≤60 s)";;
   status)
     echo "retained state / availability ($BASE):"
     rc=0
@@ -29,5 +31,5 @@ case "${1:-}" in
     # 27 = mosquitto_sub's normal -W timeout; anything else is a real failure
     [ "$rc" -eq 0 ] || [ "$rc" -eq 27 ] || { echo "mqtt read failed (exit $rc)" >&2; exit "$rc"; }
     ;;
-  *) echo "usage: $(basename "$0") on|off|status" >&2; exit 1;;
+  *) echo "usage: $(basename "$0") on|off|auto|status" >&2; exit 1;;
 esac

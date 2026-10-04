@@ -210,7 +210,7 @@ Editing the file is rarely enough.
 | `node-red/tag-map.json` | same force-recreate | same inode trap |
 | `node-red/flows.json` | `add-plant.sh` does it: rebuild image + `docker volume rm broker_nodered-data` + up | flows live in the volume, not the mount |
 | `grafana/provisioning/alerting/rules.yaml.tmpl` | `bash start.sh` **then** `docker compose up -d --force-recreate grafana` | rendered to a gitignored file; alerting provisioning is read at startup only (§5) |
-| `control/light.py` | `docker compose build light && docker compose up -d --force-recreate light` | baked into the image (`build: ./control`) |
+| `control/light.py` | `DOCKER_BUILDKIT=0 docker compose build light && docker compose up -d --force-recreate light` | baked into the image (`build: ./control`). `DOCKER_BUILDKIT=0` because `~/.docker/buildx` is root-owned from an old sudo run and BuildKit fails on it; the legacy builder does not care. Without it `up -d --force-recreate` silently restarts the OLD image (2026-10-04) |
 | any `*.sh` / `*.py` in `broker/` | nothing | run from the host |
 | `fit-plateau.py`, `plateau-review-reminder.sh` | nothing — but test with `env -i PATH=/usr/bin:/bin` | cron runs Python **3.8**, the shell 3.11; `fromisoformat` on Influx's 9-digit timestamps crashed only under cron (2026-09-22, same trap as compute-k-models.py) |
 | `src/` (firmware) | flash from the dev host | not this machine |

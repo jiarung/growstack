@@ -23,12 +23,14 @@
 # would have no such floor: a bug there leaves the plant in the dark — or, for
 # an ON hold, under the lamp at 3 a.m. — indefinitely.
 #
-# RESTORING MEANS THE STATE GOING IN, not the opposite of the hold. An OFF hold
-# that started with the lamp off restores nothing (forcing ON at night would be
-# worse than doing nothing); one that started with it on publishes ON so the
-# light is back immediately rather than after the 6-minute lapse. Symmetrically
-# an ON hold that started OFF publishes OFF at the end — a forced lamp must not
-# linger past HARD_OFF for even six minutes.
+# ENDING A HOLD HANDS CONTROL BACK; it does not restore a state. An earlier
+# version republished the state seen going in, which is itself a manual command
+# and buys another 5 minutes of suppression — so an OFF hold that began at 17:00
+# with the lamp on and ended at 21:00 switched the lamp ON past HARD_OFF (codex,
+# 2026-10-04). Now the end publishes AUTO: the controller clears its manual
+# window and decides on its next tick with its own rules — HARD_OFF, lux, DLI.
+# Cost: the lamp may wait up to 60 s for that tick. Benefit: the script never
+# has to know what the right state is, because that is the controller's job.
 #
 # Every command goes through light-ctl.sh rather than being published directly, so
 # exactly one place in the repo knows the command topic and payload shape. Reads
@@ -40,6 +42,7 @@ cd "$DIR"
 HEARTBEAT="${HEARTBEAT:-240}"     # < MANUAL_HOLD (300 s) in light.py
 MAX_HOLD="${MAX_HOLD:-14400}"     # 4 h: longer than any deliberate hold, shorter than a forgotten one
 PIDFILE="${PIDFILE:-/tmp/lamp-hold.pid}"
+LOCK="${LOCK:-/tmp/lamp-hold.lock}"      # flock: two holds started together must not both win
 MQTT="${MQTT:-monitor-air-mqtt}"
 CONTAINER="${CONTAINER:-monitor-air-influxdb}"
 ORG="${ORG:-monitor-air}"
@@ -99,10 +102,15 @@ to_secs() {
   local d="$1" total=0 n
   case "$d" in ''|*[!0-9hms]*) return 1;; esac
   [[ "$d" =~ ^[0-9]+$ ]] && { echo "$d"; return 0; }
+  # units in descending order, each at most once: "1h30m" yes, "1h1h" and
+  # "30m1h" no — those are typos, and a typo here is a lamp in the wrong state
+  local rank=0 r
   while [ -n "$d" ]; do
     [[ "$d" =~ ^([0-9]+)([hms])(.*)$ ]] || return 1
     n="${BASH_REMATCH[1]}"
-    case "${BASH_REMATCH[2]}" in h) total=$((total + n*3600));; m) total=$((total + n*60));; s) total=$((total + n));; esac
+    case "${BASH_REMATCH[2]}" in h) r=1; total=$((total + n*3600));; m) r=2; total=$((total + n*60));; s) r=3; total=$((total + n));; esac
+    [ "$r" -gt "$rank" ] || return 1
+    rank=$r
     d="${BASH_REMATCH[3]}"
   done
   echo "$total"
@@ -111,7 +119,10 @@ to_secs() {
 hold_running() {  # -> pid, or empty
   [ -f "$PIDFILE" ] || return 0
   local pid; pid="$(cat "$PIDFILE" 2>/dev/null || true)"
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && echo "$pid"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 0
+  # a live pid is not enough: after a crash the number can belong to anything,
+  # and `cancel` would TERM it. It has to be running THIS script.
+  tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -q "lamp-hold" && echo "$pid"
 }
 
 # ---- main ----
@@ -158,9 +169,15 @@ if [ "${1:-}" = "--bg" ]; then
   exit 0
 fi
 
+# Check-then-write under a lock, or two invocations in the same instant both
+# see "nothing running", both write the pidfile, and two heartbeats — one ON,
+# one OFF — fight over the plug while `cancel` only knows about one of them.
+exec 9>"$LOCK"
+flock -n 9 || { echo "another lamp-hold is starting right now — try again" >&2; exit 1; }
 pid="$(hold_running)"; [ -z "$pid" ] || { echo "a hold is already running (pid $pid) — cancel it first" >&2; exit 1; }
 echo $$ >"$PIDFILE"
 echo "$HOLD until $(date -d "@$(( $(date +%s) + SECS ))" '+%H:%M') (${SECS}s)" >"$PIDFILE.info"
+flock -u 9
 
 PRIOR="$(lamp_state)"
 AVAIL_BAD=0
@@ -171,17 +188,9 @@ restore() {
   # Kill the sleep we may be parked on, or it outlives us holding the terminal.
   [ -n "$NAP_PID" ] && kill "$NAP_PID" 2>/dev/null || true
   rm -f "$PIDFILE" "$PIDFILE.info"
-  if [ "$PRIOR" = "ON" ] || [ "$PRIOR" = "OFF" ]; then
-    if [ "$PRIOR" != "$HOLD" ]; then
-      echo "lamp-hold: restoring $PRIOR (it was $PRIOR when we started)"
-      ./light-ctl.sh "$(tr A-Z a-z <<<"$PRIOR")" >/dev/null 2>&1 \
-        || echo "lamp-hold: restore FAILED — auto control resumes within ~6 min" >&2
-    else
-      echo "lamp-hold: it was already $PRIOR going in, leaving it — auto resumes within ~6 min"
-    fi
-  else
-    echo "lamp-hold: state going in was $PRIOR, leaving it — auto resumes within ~6 min"
-  fi
+  echo "lamp-hold: handing control back (was $PRIOR going in; the controller decides on its next tick)"
+  ./light-ctl.sh auto >/dev/null 2>&1 \
+    || echo "lamp-hold: AUTO publish FAILED — the manual window lapses on its own within ~6 min" >&2
 }
 # Only EXIT restores, and INT/TERM merely exit so it runs exactly once. Trapping
 # restore on TERM directly does NOT end the script: bash runs the handler and then

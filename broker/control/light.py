@@ -398,6 +398,16 @@ async def run():
                     if tgt in ("ON", "OFF"):
                         st["manual_until"] = time.time() + MANUAL_HOLD
                         await drive(tgt, "manual", client)
+                    elif tgt == "AUTO":
+                        # "Hand control back now." lamp-hold.sh sends this when
+                        # a hold ends instead of restoring the state it saw going
+                        # in: restoring ON at 21:00 would be a fresh manual
+                        # command and keep the lamp on 5 min past HARD_OFF
+                        # (codex, 2026-10-04). Clearing the window lets the next
+                        # tick decide with the controller's own rules — HARD_OFF,
+                        # lux, DLI — which is what "automatic" means.
+                        st["manual_until"] = 0.0
+                        print("manual: → AUTO (window cleared)", flush=True)
 
         async def tick():
             ext = {"on": False, "day": None}   # evening top-up, re-evaluated each tick

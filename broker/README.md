@@ -169,7 +169,7 @@ come from `.env`.
 
 | Topic | Payload | Notes |
 |-------|---------|-------|
-| `monitor-air/<loc>/light/cmd` | `{"state":"ON"\|"OFF"}` | **external override seam** — publish here to drive the plug manually / from an AI agent (holds off auto for `MANUAL_HOLD`). Not retained. |
+| `monitor-air/<loc>/light/cmd` | `{"state":"ON"\|"OFF"\|"AUTO"}` | **external override seam** — `ON`/`OFF` drive the plug and hold off auto for `MANUAL_HOLD`; `AUTO` clears that hold so the next tick decides. Not retained. |
 | `monitor-air/<loc>/light/state` | `{"state":"ON","on":1,"source":"auto"}` | retained; `on` is charted in Grafana (measurement `light`). |
 | `monitor-air/<loc>/light/availability` | `online`/`offline` | retained + MQTT LWT. |
 
@@ -193,10 +193,10 @@ every 4 min so the controller's 5-min manual window never lapses — and if the
 script dies, the host reboots, or you forget, the window lapses anyway and auto
 control takes the lamp back within ~6 min. That expiry is the safety feature.
 Durations are `15m` / `2h` / `1h30m` / seconds, capped at 4 h. When a hold ends
-the lamp goes back to the state it was in when the hold began — an OFF hold
-that started with the lamp off restores nothing (forcing ON at night would be
-worse), an ON hold that started off publishes OFF so a forced lamp never
-lingers past the lamp window.
+the script publishes `AUTO` — "hand control back now" — and the controller
+decides on its next tick (≤60 s) with its own rules. It does not restore the
+state it saw going in: that would be a fresh manual command, and an OFF hold
+ending at 21:00 would switch the lamp ON for five minutes past the window.
 
 ## Viewing charts
 
