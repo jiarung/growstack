@@ -134,10 +134,15 @@ with open(os.path.join(tmp, "rewrite.lp"), "w") as f:
         # a second schema for that pot. `topic` was dropped here until
         # 2026-10-04; a pot whose rewritten rows interleaved with native ones
         # then made difference() panic and took the whole dashboard to a 500.
-        # A tag value with no spaces/commas needs no escaping; `/` is fine.
+        # Line-protocol tag values escape space, comma and equals; `/` is fine.
+        # Node-RED rebuilds the topic from whatever device id arrives on MQTT
+        # without the firmware's [A-Za-z0-9_-] check, so a stray publisher
+        # could put any of the three in here — and an unescaped one would
+        # either fail the write or land as a different tag (codex, 2026-10-05).
+        esc = lambda v: v.replace("\\", "\\\\").replace(",", "\\,").replace(" ", "\\ ").replace("=", "\\=")
         topic = r.get("topic", "")
-        tags = (f'device={r["device"]},plant_id={setplant or r["plant_id"]},quality={quality}'
-                + (f',topic={topic}' if topic else ""))
+        tags = (f'device={esc(r["device"])},plant_id={esc(setplant or r["plant_id"])},quality={quality}'
+                + (f',topic={esc(topic)}' if topic else ""))
         f.write(f'plant_weight,{tags} {fields} {ns(r["_time"])}\n')
 PY
 

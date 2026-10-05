@@ -180,8 +180,10 @@ group that mixes them does not return an error; it panics inside InfluxDB
 when the two schemas interleave in time, so a query can run for weeks and then
 die on the first rewritten row that lands mid-series. Every `plant_weight`
 query that differences should start with
-`keep(columns: ["_time", "_value", "plant_id"])`; panel 10 did and survived,
-panels 9 and 11 did not. [`2026-09.md#1004-topic-panic`](../docs/incidents/2026-09.md#1004-topic-panic).
+`keep(columns: ["_time", "_value", "plant_id"])` — BEFORE the `difference()`, not
+somewhere later in the pipeline. Panel 10 did and survived; 9 and 11 did not;
+2 and 7 had a `keep()` twenty lines after the `difference()` and were one
+interleaved rewrite away from the same 500. [`2026-09.md#1004-topic-panic`](../docs/incidents/2026-09.md#1004-topic-panic).
 
 ## Related
 
