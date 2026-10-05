@@ -366,6 +366,16 @@ If that answers with the NEW plant, the entry can come out. Leave the mechanism
 list itself means the next pot that rots needs it rebuilt, and 2026-09-17 was
 about forgetting this step, not about the list being too long.
 
+### A tag goes quiet and a new one appears — which is it?
+
+A retag, or a pot that ended and a new one that arrived, look IDENTICAL in the
+scan history: the old uid stops, the new uid starts, they never share a session.
+Weight continuity does not separate them either — pots are weighed in bands and
+a new 210 g pot follows a dead 206 g pot perfectly well. On 2026-10-03 the
+history was read as a retag and five readings went onto cactus-17 for two days;
+it was a new plant, and 17 had rotted. **Ask the gardener before binding.** The
+data can shortlist; it cannot pick.
+
 ### Replacing a pot's tag
 
 Bind the new tag with `add-tag.sh <uid> <plant-id>` — the SAME id, not a new

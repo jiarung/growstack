@@ -88,7 +88,7 @@ from(bucket: "$BUCKET")
   |> filter(fn: (r) => r._measurement == "plant_weight")
   $( [ -n "$PLANT" ] && echo "|> filter(fn: (r) => r.plant_id == \"$PLANT\")" )
   |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
-  |> keep(columns: ["_time", "device", "plant_id", "quality", "weight_g", "uid"])
+  |> keep(columns: ["_time", "device", "plant_id", "quality", "topic", "weight_g", "uid"])
 EOF
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -130,9 +130,15 @@ with open(os.path.join(tmp, "rewrite.lp"), "w") as f:
     for r in rows:
         uid = r.get("uid", "")
         fields = f'weight_g={float(r["weight_g"])}' + (f',uid="{uid}"' if uid else "")
-        f.write(f'plant_weight,device={r["device"]},'
-                f'plant_id={setplant or r["plant_id"]},quality={quality} '
-                f'{fields} {ns(r["_time"])}\n')
+        # Every tag the original row had must come back, or the rewritten row is
+        # a second schema for that pot. `topic` was dropped here until
+        # 2026-10-04; a pot whose rewritten rows interleaved with native ones
+        # then made difference() panic and took the whole dashboard to a 500.
+        # A tag value with no spaces/commas needs no escaping; `/` is fine.
+        topic = r.get("topic", "")
+        tags = (f'device={r["device"]},plant_id={setplant or r["plant_id"]},quality={quality}'
+                + (f',topic={topic}' if topic else ""))
+        f.write(f'plant_weight,{tags} {fields} {ns(r["_time"])}\n')
 PY
 
 [ "$DRY" = "1" ] && exit 0

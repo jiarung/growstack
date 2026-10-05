@@ -94,9 +94,9 @@ option location = timezone.location(name: "Asia/Taipei")
   |> aggregateWindow(every: 1d, fn: count, createEmpty: true)
 ```
 
-## Seven traps
+## Eight traps
 
-Each of these has already produced a wrong conclusion in this project.
+Each of these has already produced a wrong conclusion — or a dead dashboard — in this project.
 
 **1. Timestamps are UTC, and `option location` does not change that.** The import
 only affects functions that reason about calendar time — `aggregateWindow`'s day
@@ -171,6 +171,17 @@ The scatter turned out to track time of day (`corr(ln k, hour) = −0.665`), whi
 the moving railing shadow `PPFD-CAL-ROUTINE-PLAN.md` had already measured at 2.9x —
 a siting problem no model shape can fix. Full working in
 [`2026-09.md#0912-ratio-corr`](../docs/incidents/2026-09.md#0912-ratio-corr).
+
+**8. `keep()` before `group(...) |> difference()` — or it panics, not errors.** A
+pot's rows can carry two column sets (one with the `topic` tag, one without —
+`mark-weight.sh` dropped it on rewrite until 2026-10-04). `difference()` over a
+group that mixes them does not return an error; it panics inside InfluxDB
+(`arrow/array: index out of range`) and the whole dashboard answers 500. Only
+when the two schemas interleave in time, so a query can run for weeks and then
+die on the first rewritten row that lands mid-series. Every `plant_weight`
+query that differences should start with
+`keep(columns: ["_time", "_value", "plant_id"])`; panel 10 did and survived,
+panels 9 and 11 did not. [`2026-09.md#1004-topic-panic`](../docs/incidents/2026-09.md#1004-topic-panic).
 
 ## Related
 
