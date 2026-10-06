@@ -71,7 +71,8 @@ stores nothing, `{"ok":true}` stores nothing — because the consumer is
 configured with no string fields and no tag keys. `null` drops only that key;
 the other keys in the message still land. A nested object or array is
 flattened with underscores (`{"pm":{"25":7.0}}` becomes field `pm_25`,
-`[3.0,4.0]` becomes `x_0`,`x_1`), which is a field name you did not choose.
+`{"x":[3.0,4.0]}` becomes `x_0` and `x_1`), which is a field name you did
+not choose.
 Keep the object flat so the names are yours. A sensor that failed to read
 **omits its key**: `0` and `-1` are numbers and will be charted.
 
@@ -108,7 +109,8 @@ fires is an alert nobody reads, and that kills the deadman for everyone.
 on every reconnect and writes a stale reading with a fresh timestamp — the
 chart shows a sensor that is alive when it is not. QoS 0 because a lost
 telemetry sample is replaced by the next one 15 s later and nothing downstream
-needs every sample; QoS 1 costs a round-trip per message and buys nothing here.
+needs every sample; QoS 1 buys at-least-once delivery, which this path does
+not need, at a PUBACK round-trip per message.
 
 **6. `telemetry` is the only topic you publish to.** The others under
 `monitor-air/` are control surfaces: `light/cmd` drives a mains plug,
