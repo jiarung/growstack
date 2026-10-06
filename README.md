@@ -63,6 +63,7 @@ shouts when something goes quiet.
 | [`broker/MEASUREMENT-STATION.md`](broker/MEASUREMENT-STATION.md) | weigh-station contract: MQTT topics, ack/dedup rules, tag→plant map |
 | [`broker/WATERING-INDEX.md`](broker/WATERING-INDEX.md) | which number best says "this pot wants water" — a running analysis, with the ideas that failed and why |
 | [`broker/QUERYING.md`](broker/QUERYING.md) | asking InfluxDB directly — query shapes, schema discovery, and the eight traps that have each caused a wrong conclusion here |
+| [`broker/INTEGRATING.md`](broker/INTEGRATING.md) | **publishing from another project** — the one topic, the six rules with their reasons, a copy-paste verification; self-contained for an agent that has never seen this repo |
 | [`broker/MAINTENANCE.md`](broker/MAINTENANCE.md) | keeping it running: the failure classes that recur here, what a change needs redeployed, routine checks, and the repot/retire procedure |
 
 **Calibration and analysis** — these form one chain, in order:

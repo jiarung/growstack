@@ -127,6 +127,10 @@ until a deliberate migration says otherwise.
 Telegraf maps this to measurement `air`, tag `device` (2nd topic segment), and
 one float field per key.
 
+Another project that wants its readings here publishes to the same topic
+with its own device id and changes nothing in this repo —
+[`INTEGRATING.md`](INTEGRATING.md) is the self-contained contract for that.
+
 `telemetry` is not the only topic — `spectrum`, `reflect/*` and `measure/*` have
 their own contracts. [`FLOWS.md`](FLOWS.md) lists every one with its measurement
 and tags; [`MEASUREMENT-STATION.md`](MEASUREMENT-STATION.md) has the weigh-station
