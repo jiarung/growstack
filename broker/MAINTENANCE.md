@@ -206,6 +206,7 @@ Editing the file is rarely enough.
 | you changed | required | why |
 |---|---|---|
 | `grafana/provisioning/dashboards/*.json` | nothing (~10 s auto-reload) | verify by fetching `/api/dashboards/uid/...`, not by eye |
+| …any `plant_weight` query with `difference()` | run `test/broker/test_panel_keep_order.py` | `keep()` must precede `difference()` or a mixed-schema pot panics the whole dashboard (QUERYING trap 8). The test scans every dashboard. |
 | `telegraf/telegraf.conf` | `docker compose up -d --force-recreate telegraf` | single-file bind mount, attached by **inode** |
 | `node-red/tag-map.json` | same force-recreate | same inode trap |
 | `node-red/flows.json` | `add-plant.sh` does it: rebuild image + `docker volume rm broker_nodered-data` + up | flows live in the volume, not the mount |
