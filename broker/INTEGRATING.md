@@ -5,7 +5,9 @@
 written against version 1 keeps working until an entry there says otherwise.
 
 This is the whole integration. If you are an agent working on a project that
-wants its readings to land in this stack, you need this file and nothing else.
+wants its readings to land in this stack, this file is the contract. Two things
+it cannot give you: the broker's LAN address (ask the operator), and the live
+list of field names already in use (the command to fetch it is under rule 3).
 
 ## The 30-second version
 
@@ -36,7 +38,9 @@ docker exec monitor-air-mqtt mosquitto_pub -t 'monitor-air/shed-01/telemetry' \
   |> filter(fn:(r)=> r._measurement=="air" and r.device=="shed-01")'
 ```
 
-Four rows, one per field, `device=shed-01`. If you see them, you are done.
+Four rows, one per field, each tagged `device=shed-01` and
+`topic=monitor-air/shed-01/telemetry` (Telegraf adds the topic tag by
+default). If you see them, you are done.
 
 ## The six rules, and why each one exists
 
@@ -50,15 +54,26 @@ readings from everyone else's in the `air` measurement — there is no other
 namespace. Reusing an existing id (`livingroom`, `s3cam-01`, `staging-01`,
 `sim`) would interleave your series with theirs and the dashboards would show
 both as one. Lowercase with a hyphen and a number (`shed-01`) matches the
-convention; the character set is what the firmware here validates, so staying
-inside it means your id survives any tooling written against that rule.
+convention. Nothing on the broker side enforces either limit — Telegraf will
+ingest any single topic segment — but this repo's firmware refuses ids outside
+`[A-Za-z0-9_-]{1,30}`, and tooling here is written to that rule, so an id that
+breaks it works today and fails the first time something assumes it. An id
+containing `/` does not match `monitor-air/+/telemetry` at all and is silently
+never stored.
 
-**2. Every value is a float. No ints, no strings, no nulls, no nesting.**
-InfluxDB fixes a field's type on the first write. If your first `soil_temp` is the
-integer `21` and the next is `21.5`, the second write fails — silently, for
-that field, forever, until someone notices the series stopped. `21.0` every
-time. A sensor that failed to read **omits its key**; `null` is not a float
-and the whole message is dropped.
+**2. Every value is a JSON number. Strings and booleans vanish; `null` drops
+that key; nesting flattens.** Measured against this Telegraf (2026-10-06):
+`21` and `21.5` both land as float — the JSON parser converts every number,
+so you do not have to write `21.0` (this repo's firmware does, and the
+firmware's README says why; it is good discipline, not a requirement of this
+path). A string or boolean value is dropped without error — `{"status":"ok"}`
+stores nothing, `{"ok":true}` stores nothing — because the consumer is
+configured with no string fields and no tag keys. `null` drops only that key;
+the other keys in the message still land. A nested object or array is
+flattened with underscores (`{"pm":{"25":7.0}}` becomes field `pm_25`,
+`[3.0,4.0]` becomes `x_0`,`x_1`), which is a field name you did not choose.
+Keep the object flat so the names are yours. A sensor that failed to read
+**omits its key**: `0` and `-1` are numbers and will be charted.
 
 **3. Field names are lowercase `snake_case`, carry no unit, and never change.**
 A renamed field is a new series: the old one goes silent, the deadman alert
@@ -78,9 +93,12 @@ paragraph is a copy:
 
 **4. Publish at a steady cadence between 15 and 60 seconds, or tell us it is
 intermittent.** The deadman alert pages the owner on Telegram when any
-`(device, field)` has been silent for 15 minutes. That rule covers new devices
-automatically — which is exactly what you want for a sensor that is supposed
-to be always on, and exactly what you do not want for one that is not. A
+`(device, field)` has been silent for more than 15 minutes and stayed that way
+through a 2-minute confirmation (so about 17 minutes after the last sample).
+The rule is a query over whatever is in `air`, so it covers a device from its
+first sample on — it cannot watch a device that has never reported. That is
+exactly what you want for a sensor that is supposed to be always on, and
+exactly what you do not want for one that is not. A
 bench board that runs only while someone is developing on it is on the
 exclusion list for that reason (`grafana/provisioning/alerting/rules.yaml.tmpl`);
 if yours is like that, say so and it goes on the list. An alert that always
@@ -89,8 +107,8 @@ fires is an alert nobody reads, and that kills the deadman for everyone.
 **5. Not retained, QoS 0.** Telegraf consumes live. A retained message replays
 on every reconnect and writes a stale reading with a fresh timestamp — the
 chart shows a sensor that is alive when it is not. QoS 0 because a lost
-telemetry sample is replaced by the next one 15 s later; QoS 1 only adds a
-duplicate on reconnect.
+telemetry sample is replaced by the next one 15 s later and nothing downstream
+needs every sample; QoS 1 costs a round-trip per message and buys nothing here.
 
 **6. `telemetry` is the only topic you publish to.** The others under
 `monitor-air/` are control surfaces: `light/cmd` drives a mains plug,
@@ -127,9 +145,11 @@ is a service of its own, not a change to a publisher.
   `s3cam-01` does publish them; just know that each one is a field the deadman
   watches, and that `uptime_s` resetting to zero is how a reboot shows up.
 - **Batching several readings into one message** (`{"samples": [...]}`).
-  Nested. Rule 2. One message per sample.
+  It is not rejected — it is flattened into fields named `samples_0_temp`,
+  `samples_1_temp`, … all stamped with one arrival time. One message per sample.
 - **Sending a timestamp in the payload.** Telegraf stamps arrival time. A
-  payload timestamp becomes a float field named `timestamp`.
+  numeric timestamp becomes a float field named `timestamp` (measured); a
+  string one is dropped. Neither sets the row's time.
 - **Using the hostname as the device id.** Hostnames change and often contain
   dots. Pick an id that names the unit's role.
 
@@ -149,4 +169,7 @@ address and nothing else.
 
 The stack wins, and this document is wrong — file an incident. The contract
 is what Telegraf does (`telegraf/telegraf.conf`, the `[[inputs.mqtt_consumer]]`
-block for `telemetry`), not what this page says it does.
+block for `telemetry`), not what this page says it does. The behaviours in
+rule 2 were measured by publishing each case to a throwaway device and reading
+back what landed; do that again before trusting this page after a Telegraf
+upgrade.

@@ -106,8 +106,12 @@ docker compose exec -T influxdb influx delete --bucket sensors \
   {"temp":24.8,"hum":51.2,"pressure":1009.3,"gas":12.4,"lux":350.0,"lux_ref":8.1,
    "temp_sht":24.3,"hum_sht":53.9}
   ```
-  Keep every field a float (`lux:350.0`, not `350`) — InfluxDB fixes a field's
-  type on first write, and int/float drift causes partial write failures.
+  Keep every field a float (`lux:350.0`, not `350`). Telegraf's JSON parser
+  converts every number to float, so on THIS path the int/float type lock
+  cannot bite (measured 2026-10-06, see `INTEGRATING.md` rule 2); it does
+  bite for anything written with line protocol — `mark-weight.sh`,
+  `kadopt.py` — where the first write fixes the type. The firmware keeps the
+  discipline anyway so its payloads read the same as what lands.
   A sensor that fails to read omits its field rather than sending null.
 
 `lux` is the BH1750 at the plant (sees the grow lamp); `lux_ref` is a second
