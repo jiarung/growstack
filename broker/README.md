@@ -209,7 +209,7 @@ ending at 21:00 would switch the lamp ON for five minutes past the window.
 ## Viewing charts
 
 Open `http://<host>:3001`, log in (`admin` / your `GF_SECURITY_ADMIN_PASSWORD`).
-The InfluxDB datasource and both dashboards are auto-provisioned (datasource uid
+The InfluxDB datasource and the dashboards are auto-provisioned (datasource uid
 `influxdb-monitor-air`); the provider watches the whole
 `grafana/provisioning/dashboards/` directory, so adding a `.json` there is all it
 takes to add a dashboard — no config change, no restart.
@@ -218,6 +218,7 @@ takes to add a dashboard — no config change, no restart.
 |---|---|---|
 | **monitor-air** | live, `now-24h` | is it working right now — sensor freshness, temp/hum/pressure/gas/light, spectrum, PPFD, reflectance, plant weight |
 | **monitor-air — daily** | one point per local day, `now-30d` | what happened each day — weight per plant and its day-over-day change, DLI, outdoor context, when the lamp switched off, and per-pipeline ingest completeness |
+| *(your own)* | — | your own deployment: `local-*.json` in the same directory, gitignored. See `INTEGRATING.md` |
 
 ⚠️ Every `aggregateWindow(every: 1d)` must carry `import "timezone"` +
 `option location = timezone.location(name: "Asia/Taipei")`. Without it the day

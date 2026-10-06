@@ -104,7 +104,7 @@ Known gaps, each with the evidence behind it, live at the bottom of
 # server side
 cd broker && cp .env.example .env    # then edit: passwords + a strong influx token
 docker compose up -d
-#   Grafana -> http://<host>:3001   (two dashboards: overview, and daily)
+#   Grafana -> http://<host>:3001   (two dashboards: overview, and daily; your own go beside them, gitignored)
 #   no hardware yet? docker compose --profile sim up -d sim   # synthetic data
 
 # firmware

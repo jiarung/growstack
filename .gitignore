@@ -25,6 +25,12 @@ tasks/
 # Rendered from rules.yaml.tmpl by broker/start.sh (bakes LIGHT_WINDOW_* from .env)
 broker/grafana/provisioning/alerting/rules.yaml
 
+# Operator-local dashboards. Grafana loads everything in the provisioning
+# directory (a bind mount), so a file here is live whether or not git tracks
+# it; `local-*.json` is for dashboards the operator keeps for their own
+# deployment, and they stay out of the repo.
+broker/grafana/provisioning/dashboards/local-*.json
+
 # Photone CAL recording audit log (runtime data, per-host). Glob, not a literal
 # path: record-photone.sh rotates a file whose header has aged out to
 # photone-log.pre-<stamp>.csv, and those rotations are runtime data too.

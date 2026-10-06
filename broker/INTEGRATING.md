@@ -25,8 +25,9 @@ That is it. Nothing in this repository has to change: Telegraf already
 subscribes to `monitor-air/+/telemetry`, writes every message to the InfluxDB
 measurement `air`, turns the topic's second segment into a `device` tag, and
 stores each JSON key as one float field. The deadman alert covers your device
-the moment it first reports. Queries and dashboards select on `device`, so
-your readings sit beside the existing sensors without touching their panels.
+the moment it first reports. The balcony dashboard's panels are pinned to the
+balcony device, so your readings sit beside them in the database without
+drawing on them.
 
 Verify it landed (from the host running the stack):
 
@@ -120,16 +121,22 @@ every topic with what reads it; read that before touching any of them.
 
 ## What you get, and what you do not
 
-You get: storage in `air` under your `device` tag, the deadman alert, and the
-ability to query with `./influx-q.sh` or in Grafana's Explore view. The
+You get: storage in `air` under your `device` tag, the deadman alert, a row
+per field in the **Sensor freshness** table on the overview dashboard (that
+table is deliberately per-device — it is where a silent sensor shows), and
+the ability to query with `./influx-q.sh` or in Grafana's Explore view. The
 `temp`/`hum` fields line up with the existing sensors' by name, so a panel
 comparing two spots is one `group(columns: ["device"])` away.
 
-You do not get a dashboard. The existing panels filter on their own device
-ids; yours will not appear on them. Add a `.json` to
-`grafana/provisioning/dashboards/` — the provider watches the directory, no
-restart — and read [`QUERYING.md`](QUERYING.md) first: it lists eight ways a
-Flux query here has returned a confident wrong answer.
+You do not get a chart on the plant dashboards. The overview's temperature,
+humidity, pressure, gas and light panels are the balcony's and filter
+`device == "livingroom"`. A device you keep off the project's dashboards gets its own
+file in `grafana/provisioning/dashboards/` — the provider watches the
+directory, no restart — named `local-*.json`, **which the repo ignores**: a
+dashboard for your own deployment is yours, not this project's, and stays
+out of a public repository. One section per device,
+every panel filtered to its own `device`; read [`QUERYING.md`](QUERYING.md)
+first.
 
 You do not get any control loop. The plant-light controller reads one named
 device's `lux`; nothing reacts to `soil_vwc`. If something should, that
