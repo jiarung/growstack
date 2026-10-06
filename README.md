@@ -115,6 +115,11 @@ pio run -t upload --upload-port /dev/cu.usbmodem2101
 Details in [`broker/README.md`](broker/README.md) and
 [`docs/FIRMWARE.md`](docs/FIRMWARE.md).
 
+## Contributing
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) — commit, review, then push, in that order; what a
+commit message is for; where things get written down.
+
 ## Security
 
 This targets a **trusted LAN**: the MQTT broker is anonymous-open, Grafana is
