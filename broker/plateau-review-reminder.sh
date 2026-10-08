@@ -48,6 +48,9 @@ NDUE="$(grep -c . <<<"$PANEL" || true)"
 # Only the scan history tells which, and it is weekly because that is the
 # cadence a forgotten second half gets noticed at.
 TAGS="$(python3 check-tags.py 2>&1 || true)"
+# Did the scale's gain move? A flagged session is either a gain error (the
+# next session reverses it) or a watering of the big pots (it does not).
+GAIN="$(python3 check-session-gain.py --days 8 2>&1 | tail -n +2 || true)"
 
 TEXT="🌵 每週 recall：澆水指標
 
@@ -59,6 +62,9 @@ ${PANEL:-  無}
 
 tag 檢查：
 ${TAGS}
+
+秤的增益（場次 vs 前一場，Δ 對盆重的斜率）：
+${GAIN}
 
 請做這三件事：
 1. cd ~/monitor-air/broker && ./analyze-et.py --index
