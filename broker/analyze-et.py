@@ -40,6 +40,19 @@ import argparse, collections, datetime, json, os, random, re, statistics, subpro
 HERE = os.path.dirname(os.path.abspath(__file__))
 SESSION_GAP_S = 3600      # weighings closer than this are one trip to the shelf
 JUMP_G = 10.0             # a rise this big is a watering, not a failure to evaporate
+WATER_WINDOW_S = 90 * 60  # ...if the two readings are this close. Panel 10's WINDOW_NS.
+
+
+def watered(t0, v0, t1, v1):
+    """A watering is weigh → water → weigh: a rise over JUMP_G between two
+    readings in the same session. A rise across sessions is not one — on
+    2026-10-07 the scale's gain moved 5 % and five big pots "were watered"
+    overnight. Of 443 historical rises over 10 g, 75 % sit inside 90 min with
+    a median 12–15 % of pot weight; the rest have a median 5 %, the drift's
+    size. The price: a pot watered without a weighing just before is not
+    recorded. The dashboard applies the same window (daily.json WINDOW_NS);
+    if one changes, change both."""
+    return v1 - v0 > JUMP_G and (t1 - t0).total_seconds() <= WATER_WINDOW_S
 MAX_STEP_G = 60.0         # beyond this a "drying interval" is some other event
 MIN_COHORT = 5            # a session median needs a cohort to be a median of
 
@@ -215,7 +228,7 @@ def triples(by, reg, span, sat, cohort):
         if span.get(p, 0) <= 5:
             continue
         s = sorted(by[p])
-        wet = [t for (t0, v0), (t, v) in zip(s, s[1:]) if v - v0 > JUMP_G]
+        wet = [t for (t0, v0), (t, v) in zip(s, s[1:]) if watered(t0, v0, t, v)]
         anchors = []
         for t in wet:
             after = [(tt, vv) for tt, vv in s if tt >= t]
@@ -340,7 +353,7 @@ def control_clock(by, ctrl, cr):
     None when there are too few intervals to say.
     """
     cs = sorted(by[ctrl])
-    cwet = [t for (t0, v0), (t, v) in zip(cs, cs[1:]) if v - v0 > JUMP_G]
+    cwet = [t for (t0, v0), (t, v) in zip(cs, cs[1:]) if watered(t0, v0, t, v)]
     pairs = []
     for t0, t1, r in cr:
         prev = [t for t in cwet if t <= t1]
@@ -528,7 +541,7 @@ def index_report(by, reg, cohort, ctrl, args):
     # independent clock, which for any plant is noise. Both facts are needed:
     # the first says the correction is wrong, the second says how.
     cs = sorted(by[ctrl])
-    cwet = [t for (t0, v0), (t, v) in zip(cs, cs[1:]) if v - v0 > JUMP_G]
+    cwet = [t for (t0, v0), (t, v) in zip(cs, cs[1:]) if watered(t0, v0, t, v)]
     ages = []
     for x in W:
         prev = [t for t in cwet if t <= x["t2"]]
@@ -673,7 +686,7 @@ def main():
     # stages cancels two opposite signs, which is what "indistinguishable from
     # the planted pots" meant the first three times it was concluded.
     s = sorted(by[ctrl])
-    wet = [t for (t0, v0), (t, v) in zip(s, s[1:]) if v - v0 > JUMP_G]
+    wet = [t for (t0, v0), (t, v) in zip(s, s[1:]) if watered(t0, v0, t, v)]
     print(f"\nbare soil, by days since it was last watered:")
     got = False
     for t0, t1, dt, r, m in intervals(S, cohort):

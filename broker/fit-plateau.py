@@ -47,7 +47,7 @@ def cycles(series):
     """[(days since watering, grams lost)] per drying run, first reading after
     each watering as the origin — the same anchor the OLED and panel 10 use."""
     s = sorted(series)
-    wet = [i for i, ((t0, v0), (t, v)) in enumerate(zip(s, s[1:])) if v - v0 > et.JUMP_G]
+    wet = [i for i, ((t0, v0), (t, v)) in enumerate(zip(s, s[1:])) if et.watered(t0, v0, t, v)]
     out = []
     for k, a in enumerate(wet):
         b = wet[k + 1] if k + 1 < len(wet) else len(s) - 1

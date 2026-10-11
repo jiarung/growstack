@@ -24,10 +24,14 @@ def synth(A, tau, cycles=5, days=4, step=0.5, noise=0.0, seed=1):
     """A pot that loses A*(1-exp(-t/tau)) after each watering, rewatered
     every `days` days back to 300 g."""
     rnd = random.Random(seed)
-    out, t = [(at(-0.5), 270.0)], 0.0           # a watering is a RISE: give the first one a floor
+    out, t = [], 0.0
     for _ in range(cycles):
-        t += 0.01                                  # the watering reading
-        out.append((at(t), 300.0))
+        # a watering is weigh -> water -> weigh, minutes apart: the dry reading
+        # just before, then the wet one. A rise across a day is not a watering
+        # (that is what the scale's gain drift looks like) and is not detected.
+        t += 0.01
+        out.append((at(t - 0.005), 270.0))         # just before watering
+        out.append((at(t), 300.0))                 # just after
         for k in range(1, int(days / step) + 1):
             tt = k * step
             out.append((at(t + tt), 300.0 - A * (1 - math.exp(-tt / tau))

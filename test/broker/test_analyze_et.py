@@ -248,14 +248,28 @@ class WateringIndex(unittest.TestCase):
         # watered day 0 and day 4; fast right after, slow later — the exact
         # shape that made every ET correction subtract the control's stage
         # from the plants'. This is the diagnostic that would have caught it.
-        # a watering is a RISE, so the first one needs a reading before it
-        w = [(at(-1), 150.0),
-             (at(0), 200.0), (at(1), 180.0), (at(2), 175.0), (at(3), 173.0),
-             (at(4), 220.0), (at(5), 198.0), (at(6), 193.0), (at(7), 191.0)]
+        # a watering is weigh -> water -> weigh within the same session, so each
+        # one is a dry reading followed minutes later by the wet one
+        m = lambda d, mins: at(d) + datetime.timedelta(minutes=mins)
+        w = [(m(0, -5), 150.0), (at(0), 200.0),            # watered day 0
+             (at(1), 180.0), (at(2), 175.0), (at(3), 173.0),
+             (m(4, -5), 172.0), (at(4), 220.0),            # watered day 4
+             (at(5), 198.0), (at(6), 193.0), (at(7), 191.0)]
         by = {"c": w}
         r = et.control_clock(by, "c", et.control_rates(by, "c"))
         self.assertIsNotNone(r)
         self.assertLess(r, -0.5)
+
+    def test_a_rise_across_sessions_is_not_a_watering(self):
+        # the 2026-10-07 shape: +65 g on a 1.4 kg pot between yesterday noon
+        # and today afternoon, from a 5 % gain error. Same rise minutes apart
+        # IS a watering.
+        t0 = at(0)
+        self.assertTrue(et.watered(t0, 1461.0, t0 + datetime.timedelta(minutes=3), 1526.0))
+        self.assertFalse(et.watered(t0, 1461.0, t0 + datetime.timedelta(hours=26), 1526.0))
+        self.assertTrue(et.watered(t0, 100.0, t0 + datetime.timedelta(minutes=90), 111.0))
+        self.assertFalse(et.watered(t0, 100.0, t0 + datetime.timedelta(minutes=91), 111.0))
+        self.assertFalse(et.watered(t0, 100.0, t0 + datetime.timedelta(minutes=1), 109.0))  # under JUMP_G
 
     def test_a_control_at_constant_moisture_is_not_a_clock(self):
         # re-wetted every session to the same weight: its loss is weather

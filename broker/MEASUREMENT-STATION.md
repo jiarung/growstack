@@ -121,6 +121,21 @@ tag** (spectrum consumer already tags `plant`) so weight and spectrum join on on
 - v1: `weight_g` over time per `plant_id` (time series or a latest-per-plant table).
 - Phase 4 (dry/wet): a `measure_type` tag (dry|wet) → **water uptake = wet − dry** per plant + a trend.
 
+## What counts as a watering
+
+**Weigh → water → weigh, within 90 minutes.** A rise of more than 10 g between
+two readings of the same pot taken at most 90 min apart (`JUMP` and `WINDOW_NS`
+in panel 10; `watered()` in `analyze-et.py`). A rise across sessions — last
+night to this noon — is not one, however large. It was, until 2026-10-11, and
+on 10-07 a 5 % gain error in the scale put five big pots on the "watered" list
+overnight. Of 443 historical rises over 10 g, 75 % sat inside 90 min at a
+median 12–15 % of pot weight; the rest had a median 5 %, which is what drift
+looks like.
+
+The cost is a rule for the gardener: **weigh before you water, not only
+after.** A pot watered without the dry reading just before is, to this system,
+a pot that was never watered — its anchor stays where it was.
+
 ## Notes / gotchas
 - **Dedup is mandatory** — the ESP is at-least-once (up to 5 copies). Without it you write ~5 points/measurement.
 - **Dedup cache is ephemeral** — flow-context dedup is lost on a Node-RED restart; a restart DURING the ESP's
