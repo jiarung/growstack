@@ -14,10 +14,16 @@ its own had never been weighed. This is the after-the-fact check; weighing
 the reference every session is the one that catches it before it is a chart.
 
 Per session: for every pot weighed in it AND in the previous session, Δ =
-this − previous, regressed on this session's W. Drying subtracts a few grams
-from every pot and produces no slope. A gain error produces one. So does
-watering only the big pots — which this gardener does — and on one session's
-numbers the two are indistinguishable. What tells them apart is the NEXT
+this − previous, regressed on this session's W. Drying is NOT slope-free —
+big pots lose more grams a day than small ones — but measured over 31
+clean one-day transitions it is −0.46 %/day at a median r of −0.09: a small
+slope, barely correlated, because pots dry at very different rates. The
+script subtracts that baseline times the gap in days before comparing to
+GAIN_FLAG, and the |r| gate is what actually separates the two: a gain
+error moves every pot in lock-step (|r| > 0.9 on 10-07); drying does not.
+A positive slope beyond the flag is never drying. Watering only the big
+pots — which this gardener does — produces the same signature as a gain
+error, and on one session's numbers the two are indistinguishable. What tells them apart is the NEXT
 session: water stays, a gain error reverses. A flagged session followed by
 one with the opposite slope is a gain error; a flagged session whose small
 pots then dry normally was a watering. The script prints both sessions'
@@ -32,6 +38,7 @@ spec.loader.exec_module(et)
 
 GAIN_FLAG = 0.02      # 2 % — the 10-07 event was 5 %; scale noise is well under 1 %
 R_FLAG = 0.80         # the slope must EXPLAIN the spread, not just exist
+DRY_PER_DAY = -0.0046 # measured normal-drying slope (31 one-day transitions, |slope|<2 %)
 MIN_POTS = 8
 
 
@@ -44,7 +51,11 @@ def sessions(rows, gap_s=3600):
         else:
             cur.append(r)
     out.append(cur)
-    return [(s[0][0], {p: v for _, p, v, *_ in s}) for s in out]   # last reading per pot wins
+    # Last reading per pot wins. A pot weighed dry, watered, and weighed wet in
+    # one session contributes the WET value — the session's end state. That is
+    # the right input for "did the scale move", and it is also exactly how a
+    # batch watering of the big pots acquires a gain-like slope (see docstring).
+    return [(s[0][0], {p: v for _, p, v, *_ in s}) for s in out]
 
 
 def gain(prev, cur):
@@ -73,17 +84,19 @@ def main():
         print("no readings"); return 0
     S = sessions(rows)
     tz = datetime.timezone(datetime.timedelta(hours=8))
-    print(f"{'session (local)':17s} {'pots':>4s} {'gain':>7s} {'r':>6s}")
+    print(f"{'session (local)':17s} {'pots':>4s} {'gap':>5s} {'slope':>7s} {'-dry':>7s} {'r':>6s}")
     bad = 0
     for (t0, prev), (t1, cur) in zip(S, S[1:]):
         g = gain(prev, cur)
+        days = (t1 - t0).total_seconds() / 86400
         if not g:
-            print(f"{t1.astimezone(tz):%m-%d %H:%M}       {len(cur):4d}   (too few shared pots)"); continue
+            print(f"{t1.astimezone(tz):%m-%d %H:%M}       {len(cur):4d} {days:4.1f}d   (too few shared pots)"); continue
         slope, r, n = g
-        flag = abs(slope) > GAIN_FLAG and abs(r) > R_FLAG
+        adj = slope - DRY_PER_DAY * days          # what is left after normal drying
+        flag = abs(adj) > GAIN_FLAG and abs(r) > R_FLAG
         bad += flag
-        print(f"{t1.astimezone(tz):%m-%d %H:%M}       {n:4d} {100*slope:+6.1f}% {r:+6.2f}"
-              + ("   <- slope: gain error OR big pots watered" if flag else ""))
+        print(f"{t1.astimezone(tz):%m-%d %H:%M}       {n:4d} {days:4.1f}d {100*slope:+6.1f}% {100*adj:+6.1f}% {r:+6.2f}"
+              + ("   <- gain error OR big pots watered" if flag else ""))
     if bad:
         print(f"\n{bad} flagged. A slope that REVERSES in the next session (+5 % then −5 %)\n"
               "is a gain error — water does not un-happen — and that session should be\n"

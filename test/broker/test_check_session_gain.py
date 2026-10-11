@@ -55,6 +55,19 @@ class Gain(unittest.TestCase):
         slope, r, n = cg.gain(prev, cur)
         self.assertGreater(abs(slope), cg.GAIN_FLAG)
 
+    def test_size_correlated_drying_over_days_is_absorbed_by_the_baseline(self):
+        # codex, 2026-10-11: big pots lose more grams a day, so pure drying has
+        # a negative slope and over a multi-day gap can cross GAIN_FLAG on its
+        # own. Measured: -0.46 %/day. Three days of it must not look like gain.
+        prev = dict(POTS)
+        cur = {p: w * (1 + 3 * cg.DRY_PER_DAY) for p, w in POTS.items()}   # 3 days, exactly baseline
+        slope, r, n = cg.gain(prev, cur)
+        self.assertLess(slope, -cg.GAIN_FLAG * 0.5)        # raw slope is clearly negative...
+        # ...and the adjustment removes it. Not to 1e-9: x is THIS session's W,
+        # already scaled by (1+3d), so the fitted slope is 3d/(1+3d), ~2e-4 off.
+        self.assertLess(abs(slope - cg.DRY_PER_DAY * 3), 1e-3)
+        self.assertLess(abs(slope - cg.DRY_PER_DAY * 3), cg.GAIN_FLAG)   # the point: not flagged
+
     def test_too_few_shared_pots_is_none(self):
         self.assertIsNone(cg.gain({"a": 1.0, "b": 2.0}, {"a": 1.1, "b": 2.2}))
 
