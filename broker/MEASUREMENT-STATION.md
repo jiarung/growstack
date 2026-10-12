@@ -123,9 +123,16 @@ tag** (spectrum consumer already tags `plant`) so weight and spectrum join on on
 
 ## What counts as a watering
 
-**Weigh → water → weigh, within 90 minutes.** A rise of more than 10 g between
-two readings of the same pot taken at most 90 min apart (`JUMP` and `WINDOW_NS`
-in panel 10; `watered()` in `analyze-et.py`). A rise across sessions — last
+**Weigh → water → weigh, within 90 minutes.** A rise of more than 10 g — or
+10 % of the pot's weight, whichever is smaller — between two readings of the
+same pot taken at most 90 min apart (`jumpOf()` and `WINDOW_NS` in panel 10;
+`jump_g()` / `watered()` in `analyze-et.py`). The threshold shrinks for pots
+under 100 g and never grows: a pure ratio would miss big pots, whose waterings
+are only 1–5 % of their weight (median 4.6 % above 800 g, 334 waterings,
+2026-10-12), while the smallest real watering on a pot under 120 g was 12.8 %
+and same-session noise is 4.3 g at P95. As of 2026-10-12 the only pot near the
+line is cactus-31 (99 g), and all three of its waterings were 15–23 g — the
+ratio has not yet changed a verdict, it is there for the next smaller pot. A rise across sessions — last
 night to this noon — is not one, however large. It was, until 2026-10-11, and
 on 10-07 a 5 % gain error in the scale put five big pots on the "watered" list
 overnight. Of 443 historical rises over 10 g, 75 % sat inside 90 min at a

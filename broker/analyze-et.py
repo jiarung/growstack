@@ -40,19 +40,31 @@ import argparse, collections, datetime, json, os, random, re, statistics, subpro
 HERE = os.path.dirname(os.path.abspath(__file__))
 SESSION_GAP_S = 3600      # weighings closer than this are one trip to the shelf
 JUMP_G = 10.0             # a rise this big is a watering, not a failure to evaporate
+JUMP_FRAC = 0.10          # ...or this share of the pot, for pots under JUMP_G / JUMP_FRAC
 WATER_WINDOW_S = 90 * 60  # ...if the two readings are this close. Panel 10's WINDOW_NS.
 
 
+def jump_g(w):
+    """The rise that counts as a watering for a pot weighing w: min(JUMP_G,
+    JUMP_FRAC·w). 10 g at 100 g and above, proportional below — a 60 g pot
+    is watered at 6 g. The threshold shrinks but never grows: a pure ratio
+    would miss most big pots (334 same-session waterings, 2026-10-12: pots
+    over 800 g gain a median 4.6 % of their weight, minimum 1.0 %). Under
+    120 g the smallest real watering was 12.8 %, and same-session noise is
+    4.3 g at P95, so 10 % sits between them. Dashboard: daily.json jumpOf."""
+    return min(JUMP_G, JUMP_FRAC * w)
+
+
 def watered(t0, v0, t1, v1):
-    """A watering is weigh → water → weigh: a rise over JUMP_G between two
-    readings in the same session. A rise across sessions is not one — on
+    """A watering is weigh → water → weigh: a rise over jump_g(v0) between
+    two readings in the same session. A rise across sessions is not one — on
     2026-10-07 the scale's gain moved 5 % and five big pots "were watered"
     overnight. Of 443 historical rises over 10 g, 75 % sit inside 90 min with
     a median 12–15 % of pot weight; the rest have a median 5 %, the drift's
     size. The price: a pot watered without a weighing just before is not
     recorded. The dashboard applies the same window (daily.json WINDOW_NS);
     if one changes, change both."""
-    return v1 - v0 > JUMP_G and (t1 - t0).total_seconds() <= WATER_WINDOW_S
+    return v1 - v0 > jump_g(v0) and (t1 - t0).total_seconds() <= WATER_WINDOW_S
 MAX_STEP_G = 60.0         # beyond this a "drying interval" is some other event
 MIN_COHORT = 5            # a session median needs a cohort to be a median of
 
@@ -193,7 +205,7 @@ def intervals(S, cohort):
         if not 0.25 <= dt <= 8.0:
             continue
         r = {p: (a[p] - b[p]) / dt for p in a.keys() & b.keys() & cohort
-             if b[p] - a[p] <= JUMP_G and abs(b[p] - a[p]) <= MAX_STEP_G}
+             if b[p] - a[p] <= jump_g(a[p]) and abs(b[p] - a[p]) <= MAX_STEP_G}
         if len(r) >= MIN_COHORT:
             yield t0, t1, dt, r, statistics.median(r.values())
 
@@ -239,7 +251,7 @@ def triples(by, reg, span, sat, cohort):
             d2 = (t2 - t1).total_seconds() / 86400
             if not (MIN_RATE_D <= d1 <= MAX_RATE_D and MIN_RATE_D <= d2 <= MAX_RATE_D):
                 continue
-            if v1 - v0 > JUMP_G or v2 - v1 > JUMP_G:
+            if v1 - v0 > jump_g(v0) or v2 - v1 > jump_g(v1):
                 continue
             if abs(v1 - v0) > MAX_STEP_G or abs(v2 - v1) > MAX_STEP_G:
                 continue
@@ -324,7 +336,7 @@ def control_rates(by, ctrl):
     out = []
     for (t0, v0), (t1, v1) in zip(s, s[1:]):
         dt = (t1 - t0).total_seconds() / 86400
-        if dt < 0.25 or v1 - v0 > JUMP_G or abs(v1 - v0) > MAX_STEP_G:
+        if dt < 0.25 or v1 - v0 > jump_g(v0) or abs(v1 - v0) > MAX_STEP_G:
             continue
         out.append((t0, t1, (v0 - v1) / dt))
     return out

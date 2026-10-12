@@ -270,6 +270,13 @@ class WateringIndex(unittest.TestCase):
         self.assertTrue(et.watered(t0, 100.0, t0 + datetime.timedelta(minutes=90), 111.0))
         self.assertFalse(et.watered(t0, 100.0, t0 + datetime.timedelta(minutes=91), 111.0))
         self.assertFalse(et.watered(t0, 100.0, t0 + datetime.timedelta(minutes=1), 109.0))  # under JUMP_G
+        # under JUMP_G / JUMP_FRAC the threshold is a share of the pot, so a 60 g
+        # pot is watered at 6 g; it never rises above JUMP_G for a big pot.
+        self.assertEqual(et.jump_g(60.0), 6.0)
+        self.assertEqual(et.jump_g(100.0), 10.0)
+        self.assertEqual(et.jump_g(3000.0), 10.0)
+        self.assertTrue(et.watered(t0, 60.0, t0 + datetime.timedelta(minutes=1), 66.5))
+        self.assertFalse(et.watered(t0, 60.0, t0 + datetime.timedelta(minutes=1), 65.5))
 
     def test_a_control_at_constant_moisture_is_not_a_clock(self):
         # re-wetted every session to the same weight: its loss is weather

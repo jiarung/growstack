@@ -185,7 +185,7 @@ for r in sorted(rows, key=lambda r: r["plant_id"]):
     if basis not in ("平台", "循環", "暫用 p10"):
         print(f"bad basis for {plant}: {basis!r} — panel schema changed?", file=sys.stderr)
         sys.exit(1)
-    # `not first` is unreachable by construction (a completed cycle REQUIRES a >10 g
+    # `not first` is unreachable by construction (a completed cycle REQUIRES a watering-sized
     # jump, which is exactly a watering anchor) — one token, and it makes the
     # invariant explicit instead of implied.
     full = (not first) and basis in ("平台", "循環") and math.isfinite(span) and round(span, 1) > 5.0
@@ -243,7 +243,7 @@ for r in sorted(rows, key=lambda r: r["plant_id"]):
 # NAME-ONLY tier: every mapped uid whose plant produced no panel row (no
 # watering anchor yet — brand-new pot) still gets a ref carrying just the
 # name, so the OLED greets the plant instead of showing a raw UID. Upgrades
-# happen in place: the plant's first scale-witnessed watering (>10g jump)
+# happen in place: the plant's first scale-witnessed watering (a jump over panel 10's jumpOf, 10 g or 10 % of the pot)
 # creates its anchor and the next round overwrites this topic.
 name_only = sorted(p for p in plant_to_uids if p not in published)
 for plant in name_only:
