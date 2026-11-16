@@ -147,7 +147,7 @@ groups:
           severity: critical
         annotations:
           summary: '通知送不出去（{{ $labels.integration }}）'
-          description: '過去 1 小時有 {{ printf "%.0f" $values.B.Value }} 則通知投遞失敗。這段期間觸發的警報沒有任何人收到 — 回頭查那段時間的 alert 歷史。原因通常是對外網路路徑，不是 token。'
+          description: '過去 1 小時有 {{ printf "%.0f" $values.B.Value }} 則通知投遞失敗。這段期間觸發的警報沒有任何人收到 — 回頭查那段時間的 alert 歷史。原因通常是對外網路路徑，不是 token；或是某條規則的 annotation 渲染出 Telegram 拒收的字元（11-15：NoData 的 %!f(<nil>)）— docker logs monitor-air-grafana | grep "failed to send telegram"。'
         data:
           - refId: A
             relativeTimeRange:

@@ -45,6 +45,13 @@ api() { # method path  (body on stdin)
 #
 # GeneratorURL comes from GF_SERVER_ROOT_URL (broker/.env). Unset, it is
 # http://localhost:3000/ — wrong port, and "localhost" on a phone is the phone.
+#
+# parse_mode "None" — the template is plain text, but Grafana's default is HTML
+# and Telegram then parses the body for tags. On 2026-11-08 and again 11-15 a
+# rule in NoData rendered `{{ printf "%.2f" $values.B.Value }}` as `%!f(<nil>)`,
+# Telegram answered 400 "Unsupported start tag "nil"", and that group's
+# notifications were dropped for days. Plain text cannot be rejected; URLs are
+# still auto-linked.
 read -r -d '' MSG <<'EOF' || true
 {{ range .Alerts.Firing }}{{ if eq .Labels.severity "critical" }}🔴{{ else }}🟡{{ end }} {{ .Annotations.summary }}
 {{ .Annotations.description }}
@@ -56,7 +63,7 @@ read -r -d '' MSG <<'EOF' || true
 EOF
 
 cp_body=$(jq -n --arg uid "$UID_CP" --arg token "$TOKEN" --arg chatid "$CHATID" --arg msg "$MSG" \
-  '{uid:$uid, name:"telegram", type:"telegram", settings:{bottoken:$token, chatid:$chatid, message:$msg}, disableResolveMessage:false}')
+  '{uid:$uid, name:"telegram", type:"telegram", settings:{bottoken:$token, chatid:$chatid, message:$msg, parse_mode:"None"}, disableResolveMessage:false}')
 
 code=$(printf '%s' "$cp_body" | api PUT "/api/v1/provisioning/contact-points/$UID_CP")
 if [ "$code" = "404" ]; then

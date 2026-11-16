@@ -61,6 +61,8 @@
 | 2026-10-03 | 新 tag 綁錯成 cactus-30；掃描歷史「找出是 17 換 tag」—— **錯**，17 果凍了、那是新盆 34。資料分不開這兩種情況 | 秤重 | ✅ 10-05 更正 | [2026-09](2026-09.md#1003-retag-mislabeled) |
 | 2026-10-04 | Dashboard 500：`mark-weight.sh` 改寫的列少 `topic` tag，和原生列交錯後 `difference()` panic | 面板 | ✅ keep + 根因 | [2026-09](2026-09.md#1004-topic-panic) |
 | 2026-10-07 | 五個大盆被判成澆水 —— 秤的增益高了 5%（和盆重成正比，隔天反轉），不是零點 | 秤重 | ✅ 整場 suspect + 增益檢查 | [2026-09](2026-09.md#1007-scale-gain) |
+| 2026-11-16 | Open-Meteo 斷五小時 —— 上游節點，主機層重現，自行恢復；重試預算照設計運作 | weather | ✅ 不改 | [2026-11](2026-11.md#1116-open-meteo) |
+| 2026-11-16 | Telegram 400 退了 968 則通知：NoData 把 `$values` 渲染成 `%!f(<nil>)`，parse_mode 預設 HTML 把它當 tag | 告警 | ✅ parse_mode None | [2026-11](2026-11.md#1116-telegram-400) |
 
 ## 讀出來的東西
 

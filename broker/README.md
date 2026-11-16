@@ -420,8 +420,12 @@ dumped as `- k = v`, plus `Value: B=22, C=1` where `C` is the threshold
 expression's own boolean, and the Silence link as 400 characters of URL-encoded
 matchers. The first 100 characters — all Telegram shows in a push preview — were
 metadata, and the actionable line came last. The template also emits **plain
-text**, which sidesteps `parse_mode` entirely (the default is HTML, so the
-`**Firing**` in Grafana's stock template arrives as literal asterisks).
+text** and sets `parse_mode: None`, so Telegram parses nothing. The default
+is HTML, and plain text does not sidestep it: a rule in NoData renders
+`{{ printf "%.2f" $values.B.Value }}` as `%!f(<nil>)`, Telegram reads `<nil>`
+as a tag and answers 400, and that group's notifications are dropped until the
+rule leaves NoData — 968 of them on 2026-11-08..10 and 11-15..16
+([incident](../docs/incidents/2026-11.md#1116-telegram-400)).
 
 Notifications group by `(alertname, device)`: one message listing every dead
 field on a board, rather than six messages for one unplugged sensor.
